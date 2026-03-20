@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v1.5.0 (2026-03-20)
+
+### Features
+
+- Transcode WAV to FLAC for universal player support
+  ([`d0ecd44`](https://github.com/teh-hippo/ha-suno/commit/d0ecd4486d6cd7379ffddca10f867e20e17f65eb))
+
+- Use HA ffmpeg integration for FLAC transcode
+  ([`625c82a`](https://github.com/teh-hippo/ha-suno/commit/625c82aac13a61453d6477a2ed43003984c04a9b))
+
+
 ## v1.4.2 (2026-03-20)
 
 ### Bug Fixes
