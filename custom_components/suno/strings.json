@@ -70,11 +70,5 @@
     "update_failed": {
       "message": "Error fetching Suno data: {error}"
     }
-  },
-  "issues": {
-    "auth_expired": {
-      "title": "Suno authentication expired",
-      "description": "Your Suno session cookie has expired.  Open the integration settings to re-authenticate."
-    }
   }
 }

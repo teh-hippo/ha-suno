@@ -101,6 +101,30 @@ async def test_coordinator_credits_failure_graceful(hass: HomeAssistant, mock_su
     assert coordinator.data.credits is None
 
 
+async def test_coordinator_liked_songs_failure_graceful(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Liked songs fetch failure is swallowed; clips and playlists still available."""
+    mock_suno_client.get_liked_songs.side_effect = Exception("Liked error")
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert len(coordinator.data.clips) == 2
+    assert coordinator.data.liked_clips == []
+
+
+async def test_coordinator_playlists_failure_graceful(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Playlists fetch failure is swallowed; clips still available."""
+    mock_suno_client.get_playlists.side_effect = Exception("Playlists error")
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert len(coordinator.data.clips) == 2
+    assert coordinator.data.playlists == []
+
+
 async def test_coordinator_uses_cache_ttl_from_options(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Coordinator update_interval comes from options cache_ttl."""
     entry = make_entry(

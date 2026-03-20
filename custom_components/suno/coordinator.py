@@ -96,6 +96,13 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             )
 
         except SunoAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="auth_failed",
+            ) from err
         except Exception as err:
-            raise UpdateFailed(f"Error fetching Suno data: {err}") from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="update_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err

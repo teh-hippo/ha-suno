@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import aiohttp
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -81,6 +82,40 @@ async def test_user_flow_invalid_cookie(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"]["base"] == "invalid_cookie"
+
+
+async def test_user_flow_cannot_connect(hass: HomeAssistant) -> None:
+    """Test config flow with connection error."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+
+    mock_client = AsyncMock()
+    mock_client.authenticate = AsyncMock(side_effect=aiohttp.ClientError("Connection refused"))
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: "some-cookie"},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"
+
+
+async def test_user_flow_cannot_connect_timeout(hass: HomeAssistant) -> None:
+    """Test config flow with timeout error."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+
+    mock_client = AsyncMock()
+    mock_client.authenticate = AsyncMock(side_effect=TimeoutError("Timed out"))
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: "some-cookie"},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"
 
 
 async def test_user_flow_unknown_error(hass: HomeAssistant) -> None:
@@ -169,6 +204,27 @@ async def test_reauth_flow_invalid_cookie(hass: HomeAssistant, mock_suno_client:
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"]["base"] == "invalid_cookie"
+
+
+async def test_reauth_flow_cannot_connect(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Reauth flow with connection error shows cannot_connect."""
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await entry.start_reauth_flow(hass)
+
+    mock_client = AsyncMock()
+    mock_client.authenticate = AsyncMock(side_effect=aiohttp.ClientError("Connection refused"))
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: "some-cookie"},
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"
 
 
 async def test_reauth_flow_unknown_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

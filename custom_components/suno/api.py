@@ -21,6 +21,7 @@ from .const import (
     CLERK_BASE_URL,
     CLERK_JS_VERSION,
     CLERK_TOKEN_JS_VERSION,
+    EXCLUDED_TASKS,
     JWT_REFRESH_BUFFER,
     MAX_PAGES,
     SUNO_API_BASE_URL,
@@ -223,7 +224,9 @@ class SunoClient:
         clips = [
             _sanitise_clip(clip)
             for clip in raw_clips
-            if clip.get("status") == "complete" and clip.get("metadata", {}).get("type") == "gen"
+            if clip.get("status") == "complete"
+            and clip.get("metadata", {}).get("type") == "gen"
+            and clip.get("metadata", {}).get("task") not in EXCLUDED_TASKS
         ]
         return clips, has_more
 
@@ -255,7 +258,13 @@ class SunoClient:
             if not self._handle and raw_clips:
                 self._handle = raw_clips[0].get("handle")
 
-            clips = [_sanitise_clip(clip) for clip in raw_clips if clip.get("metadata", {}).get("type") == "gen"]
+            clips = [
+                _sanitise_clip(clip)
+                for clip in raw_clips
+                if clip.get("status") == "complete"
+                and clip.get("metadata", {}).get("type") == "gen"
+                and clip.get("metadata", {}).get("task") not in EXCLUDED_TASKS
+            ]
             all_clips.extend(clips)
             if not has_more:
                 break

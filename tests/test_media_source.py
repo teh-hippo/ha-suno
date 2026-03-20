@@ -377,3 +377,80 @@ async def test_resolve_media_empty_identifier(hass: HomeAssistant, mock_suno_cli
 
     with pytest.raises(BrowseError, match="Unknown media identifier"):
         await source.async_resolve_media(item)
+
+
+async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Resolving a clip found only in liked_clips succeeds."""
+    # Return empty main clips so it must be found in liked_clips
+    mock_suno_client.get_all_songs.return_value = []
+
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
+    result = await source.async_resolve_media(item)
+
+    assert result.url == "https://cdn1.suno.ai/clip-aaa-111.mp3"
+    assert result.mime_type == "audio/mpeg"
+
+
+async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Browsing playlists shows playlist folders."""
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    item = MediaSourceItem(hass, "suno", "playlists", None)
+    result = await source.async_browse_media(item)
+
+    assert "Playlists" in result.title
+    assert len(result.children) == 1
+    assert result.children[0].identifier == "playlist/pl-001"
+
+
+async def test_browse_playlist_detail(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Browsing a specific playlist shows its clips."""
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    item = MediaSourceItem(hass, "suno", "playlist/pl-001", None)
+    result = await source.async_browse_media(item)
+
+    assert result.title == "My Favourites (1)"
+    assert len(result.children) == 1
+
+
+async def test_browse_playlist_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Browsing a playlist that fails returns empty children."""
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    mock_suno_client.get_playlist_clips.side_effect = Exception("Network error")
+
+    source = SunoMediaSource(hass)
+    item = MediaSourceItem(hass, "suno", "playlist/pl-001", None)
+    result = await source.async_browse_media(item)
+
+    assert "My Favourites" in result.title
+    assert len(result.children) == 0
+
+
+async def test_browse_playlist_unknown_id(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Browsing a playlist with unknown ID uses generic name."""
+    entry = make_entry()
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    mock_suno_client.get_playlist_clips.return_value = []
+
+    source = SunoMediaSource(hass)
+    item = MediaSourceItem(hass, "suno", "playlist/unknown-id", None)
+    result = await source.async_browse_media(item)
+
+    assert result.title == "Playlist (0)"

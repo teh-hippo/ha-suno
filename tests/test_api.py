@@ -504,6 +504,70 @@ async def test_get_feed_extracts_handle() -> None:
     assert client._handle == "my-handle"
 
 
+async def test_get_feed_excludes_infill_tasks() -> None:
+    """get_feed excludes clips with infill or fixed_infill task metadata."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    raw_clips = [
+        {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {"type": "gen"}},
+        {
+            "id": "c2",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c2.mp3",
+            "metadata": {"type": "gen", "task": "infill"},
+        },
+        {
+            "id": "c3",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c3.mp3",
+            "metadata": {"type": "gen", "task": "fixed_infill"},
+        },
+        {
+            "id": "c4",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c4.mp3",
+            "metadata": {"type": "gen", "task": "generate"},
+        },
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    clips, _ = await client.get_feed(0)
+    ids = [c.id for c in clips]
+    assert "c1" in ids
+    assert "c2" not in ids
+    assert "c3" not in ids
+    assert "c4" in ids
+
+
+async def test_get_liked_songs_excludes_infill_tasks() -> None:
+    """get_liked_songs excludes clips with infill/fixed_infill task metadata."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    raw_clips = [
+        {
+            "id": "c1",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+            "metadata": {"type": "gen"},
+            "is_liked": True,
+        },
+        {
+            "id": "c2",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c2.mp3",
+            "metadata": {"type": "gen", "task": "infill"},
+            "is_liked": True,
+        },
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    clips = await client.get_liked_songs()
+    assert len(clips) == 1
+    assert clips[0].id == "c1"
+
+
 # ── SunoClient.get_all_songs ────────────────────────────────────────
 
 
@@ -847,6 +911,42 @@ async def test_get_liked_songs_pagination() -> None:
     assert call_count == 2
 
 
+async def test_get_liked_songs_non_dict_response() -> None:
+    """get_liked_songs breaks on non-dict response."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(200, []))
+
+    clips = await client.get_liked_songs()
+    assert clips == []
+
+
+async def test_get_liked_songs_filters_incomplete() -> None:
+    """get_liked_songs excludes non-complete clips."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    raw_clips = [
+        {
+            "id": "c1",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+            "metadata": {"type": "gen"},
+        },
+        {
+            "id": "c2",
+            "status": "processing",
+            "audio_url": "",
+            "metadata": {"type": "gen"},
+        },
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    clips = await client.get_liked_songs()
+    assert len(clips) == 1
+    assert clips[0].id == "c1"
+
+
 # ── SunoClient.get_credits ──────────────────────────────────────────
 
 
@@ -912,6 +1012,16 @@ async def test_api_get_500_raises_api_error() -> None:
     session.get = MagicMock(return_value=_mock_response(500, text="Internal Server Error"))
 
     with pytest.raises(SunoApiError, match="returned 500"):
+        await client._api_get("/api/test")
+
+
+async def test_api_get_429_raises_api_error() -> None:
+    """429 rate limit from Suno API raises SunoApiError."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(429))
+
+    with pytest.raises(SunoApiError, match="Rate limited"):
         await client._api_get("/api/test")
 
 

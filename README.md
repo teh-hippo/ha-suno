@@ -74,6 +74,13 @@ Available under the integration's options menu:
 | Show Playlists | On | Display playlists |
 | Cache refresh | 30 min | How often the library is refreshed from Suno |
 
+## Removal
+
+1. Go to **Settings > Devices & Services**
+2. Click the three-dot menu on the Suno integration card
+3. Select **Delete**
+4. Restart Home Assistant
+
 ## Privacy
 
 This integration only reads library metadata needed for playback: song titles, audio URLs, cover art, tags, and duration.  It does not store or expose your email, username, or other personal information.  The session token is stored within Home Assistant's config entry system.
@@ -83,6 +90,50 @@ This integration only reads library metadata needed for playback: song titles, a
 - Suno does not have an official public API.  This integration uses internal endpoints that could change without notice.
 - Song generation is not supported.  This is a playback-only integration.
 - The session token must be manually copied from your browser's Developer Tools.
+
+## How data is updated
+
+The integration polls the Suno API at a configurable interval (default 30 minutes).  During each refresh, it fetches your complete library, liked songs, playlists, and credit balance.  The "Recent" folder fetches live data each time you browse it.
+
+## Entities
+
+- `sensor.suno_credits` (diagnostic) -- remaining Suno credits.  Attributes: `monthly_limit`, `monthly_usage`, `period`.
+
+## Media source
+
+The Suno media source provides these folders in the media browser:
+
+- **Liked Songs** -- songs you have liked on Suno
+- **Recent** -- your most recently created songs (live data)
+- **Playlists** -- your Suno playlists and their songs
+- **All Songs** -- your complete library (paginated into groups of 50)
+
+## Troubleshooting
+
+- **"Could not authenticate"** -- your session token may be expired.  Get a fresh one from your browser.
+- **Songs not appearing** -- the library refreshes every 30 minutes.  Change the refresh interval in integration options or wait for the next update.
+- **"Incompatible with selected player"** -- make sure you are using v1.2.0 or later which uses the correct audio content type.
+- **Rate limiting (429 errors)** -- the integration includes delays between API requests.  If you see these in logs, try increasing the cache refresh interval.
+
+## Examples
+
+Play a random liked song on the kitchen speaker:
+
+```yaml
+service: media_player.play_media
+target:
+  entity_id: media_player.kitchen
+data:
+  media_content_id: media-source://suno/liked
+  media_content_type: music
+```
+
+## Use cases
+
+- Browse your Suno music library from any media player card
+- Play generated songs on Sonos, Chromecast, or Apple TV
+- Monitor your Suno credit usage via the credits sensor
+- Create automations that play specific songs at certain times
 
 ## Licence
 

@@ -38,3 +38,6 @@ MEDIA_SOURCE_PREFIX = f"media-source://{DOMAIN}"
 
 # JWT refresh buffer (seconds before expiry to trigger refresh)
 JWT_REFRESH_BUFFER = 60
+
+# Metadata task values that indicate edit fragments (not standalone songs)
+EXCLUDED_TASKS = frozenset({"infill", "fixed_infill"})

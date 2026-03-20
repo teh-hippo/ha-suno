@@ -1,7 +1,19 @@
 rules:
-  config-flow:
-    status: done
-  runtime-data:
-    status: done
-  unique-config-entry:
-    status: done
+  # Bronze
+  config-flow: done
+  runtime-data: done
+  unique-config-entry: done
+  has-entity-name: done
+  config-entry-unloading: done
+  diagnostics: done
+  test-coverage: done
+  docs-removal-instructions: done
+
+  # Silver
+  parallel-updates: done
+  reauthentication-flow: done
+  reconfiguration-flow: done
+
+  # Gold
+  entity-category: done
+  exception-translations: done
