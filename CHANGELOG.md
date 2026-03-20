@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.3.4 (2026-03-20)
+
+### Bug Fixes
+
+- Improve media browser and sensor quality
+  ([`eb0a37d`](https://github.com/teh-hippo/ha-suno/commit/eb0a37d40955c35302f6afef2b85cb8bdb6987d1))
+
+
 ## v1.3.3 (2026-03-20)
 
 ### Bug Fixes
