@@ -327,7 +327,7 @@ async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: Asyn
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url == "https://cdn1.suno.ai/clip-aaa-111.mp3"
+    assert result.url == "/api/suno/media/clip-aaa-111"
     assert result.mime_type == "audio/mpeg"
 
 
@@ -392,7 +392,7 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url == "https://cdn1.suno.ai/clip-aaa-111.mp3"
+    assert result.url == "/api/suno/media/clip-aaa-111"
     assert result.mime_type == "audio/mpeg"
 
 

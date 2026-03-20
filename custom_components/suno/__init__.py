@@ -14,6 +14,7 @@ from .api import SunoClient
 from .const import CONF_COOKIE
 from .coordinator import SunoCoordinator
 from .exceptions import SunoAuthError
+from .proxy import SunoMediaProxyView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+
+    hass.http.register_view(SunoMediaProxyView(hass))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

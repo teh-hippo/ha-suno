@@ -106,10 +106,16 @@ class SunoMediaSource(MediaSource):
         # Search all clips and liked clips
         for clip in data.clips:
             if clip.id == clip_id:
-                return PlayMedia(url=clip.audio_url, mime_type="audio/mpeg")
+                return PlayMedia(
+                    url=f"/api/suno/media/{clip_id}",
+                    mime_type="audio/mpeg",
+                )
         for clip in data.liked_clips:
             if clip.id == clip_id:
-                return PlayMedia(url=clip.audio_url, mime_type="audio/mpeg")
+                return PlayMedia(
+                    url=f"/api/suno/media/{clip_id}",
+                    mime_type="audio/mpeg",
+                )
 
         raise BrowseError(f"Clip {clip_id} not found in library")
 
