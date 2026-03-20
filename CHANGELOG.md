@@ -1,6 +1,6 @@
 # CHANGELOG
 
-<!--
-Managed by python-semantic-release.
-Do not edit manually.
--->
+
+## v1.0.0 (2026-03-20)
+
+- Initial Release
