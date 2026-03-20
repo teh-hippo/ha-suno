@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_COOKIE
 from .coordinator import SunoCoordinator
+
+REDACT_KEYS = {"cookie"}
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
@@ -20,8 +22,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "config_entry": {
             "unique_id": entry.unique_id,
             "options": dict(entry.options),
-            # Cookie is redacted
-            "data": {k: "***REDACTED***" if k == CONF_COOKIE else v for k, v in entry.data.items()},
+            "data": async_redact_data(dict(entry.data), REDACT_KEYS),
         },
         "library": {
             "total_clips": len(data.clips),

@@ -6,6 +6,7 @@ Cookie is sent only to clerk.suno.com.  The Suno API receives short-lived JWTs.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -157,6 +158,7 @@ class SunoClient:
         self._cookie = cookie
         self._jwt: str | None = None
         self._jwt_exp: int = 0
+        self._jwt_lock = asyncio.Lock()
         self._session_id: str | None = None
         self._user_id: str | None = None
 
@@ -308,13 +310,14 @@ class SunoClient:
 
     async def _ensure_jwt(self) -> str:
         """Return a valid JWT, refreshing if needed."""
-        now = int(time.time())
-        if not self._jwt or now >= (self._jwt_exp - JWT_REFRESH_BUFFER):
-            await self._refresh_jwt()
-        if not self._jwt:
-            msg = "Failed to obtain JWT"
-            raise SunoAuthError(msg)
-        return self._jwt
+        async with self._jwt_lock:
+            now = int(time.time())
+            if not self._jwt or now >= (self._jwt_exp - JWT_REFRESH_BUFFER):
+                await self._refresh_jwt()
+            if not self._jwt:
+                msg = "Failed to obtain JWT"
+                raise SunoAuthError(msg)
+            return self._jwt
 
     async def _api_get(self, path: str) -> Any:
         """Make an authenticated GET request to the Suno API."""

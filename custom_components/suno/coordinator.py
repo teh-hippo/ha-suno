@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import cached_property
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import SunoClient, SunoClip, SunoCredits, SunoPlaylist
@@ -43,6 +45,18 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
         self.client = client
 
+    @cached_property
+    def device_info(self) -> DeviceInfo:
+        """Return shared device info for all Suno entities."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.config_entry.unique_id or self.config_entry.entry_id)},
+            name="Suno",
+            manufacturer="Suno",
+            model="Music Library",
+            entry_type=DeviceEntryType.SERVICE,
+            configuration_url="https://suno.com",
+        )
+
     async def _async_update_data(self) -> SunoData:
         """Fetch library, playlists, and credits from Suno."""
         try:
@@ -54,13 +68,13 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 playlists = await self.client.get_playlists()
                 _LOGGER.debug("Fetched %d playlists", len(playlists))
             except Exception:
-                _LOGGER.warning("Could not fetch playlists, skipping")
+                _LOGGER.warning("Could not fetch playlists, skipping", exc_info=True)
 
             credits: SunoCredits | None = None
             try:
                 credits = await self.client.get_credits()
             except Exception:
-                _LOGGER.warning("Could not fetch credits, skipping")
+                _LOGGER.warning("Could not fetch credits, skipping", exc_info=True)
 
             return SunoData(clips=clips, playlists=playlists, credits=credits)
 

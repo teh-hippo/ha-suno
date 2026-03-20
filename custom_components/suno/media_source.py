@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.media_player import MediaClass, MediaType  # type: ignore[attr-defined]
+from homeassistant.components.media_player import BrowseError, MediaClass, MediaType  # type: ignore[attr-defined]
 from homeassistant.components.media_source import (
     BrowseMediaSource,
     MediaSource,
@@ -92,25 +92,21 @@ class SunoMediaSource(MediaSource):
         identifier = item.identifier or ""
 
         if not identifier.startswith("clip/"):
-            msg = f"Unknown media identifier: {identifier}"
-            raise ValueError(msg)
+            raise BrowseError(f"Unknown media identifier: {identifier}")
 
         clip_id = identifier.removeprefix("clip/")
         result = self._get_entry_and_coordinator()
         if not result:
-            msg = "Suno integration not configured"
-            raise ValueError(msg)
+            raise BrowseError("Suno integration not configured")
 
         _, coordinator = result
         data: SunoData = coordinator.data
 
-        # Find the clip in cached data
         for clip in data.clips:
             if clip.id == clip_id:
                 return PlayMedia(url=clip.audio_url, mime_type="audio/mpeg")
 
-        msg = f"Clip {clip_id} not found in library"
-        raise ValueError(msg)
+        raise BrowseError(f"Clip {clip_id} not found in library")
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the Suno library."""

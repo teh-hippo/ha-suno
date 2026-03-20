@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -60,10 +61,11 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 user_id = await client.authenticate()
-                # Verify we can fetch songs
                 await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
+            except aiohttp.ClientError, TimeoutError:
+                errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno authentication")
                 errors["base"] = "unknown"
@@ -112,6 +114,8 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
+            except aiohttp.ClientError, TimeoutError:
+                errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno re-authentication")
                 errors["base"] = "unknown"
@@ -119,6 +123,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
                 if entry:
                     self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_COOKIE: cookie})
+                    await self.hass.config_entries.async_reload(entry.entry_id)
                 return self.async_abort(reason="reauth_successful")
 
         return self.async_show_form(
@@ -175,16 +180,13 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlowWithReload:
         """Return the options flow handler."""
-        return SunoOptionsFlow(config_entry)
+        return SunoOptionsFlow()
 
 
-class SunoOptionsFlow(OptionsFlow):
+class SunoOptionsFlow(OptionsFlowWithReload):
     """Handle Suno options."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self._config_entry = config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage display options."""
@@ -197,23 +199,23 @@ class SunoOptionsFlow(OptionsFlow):
                 {
                     vol.Required(
                         CONF_SHOW_LIKED,
-                        default=self._config_entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
+                        default=self.config_entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_SHOW_RECENT,
-                        default=self._config_entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
+                        default=self.config_entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_RECENT_COUNT,
-                        default=self._config_entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
+                        default=self.config_entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
                     ): NumberSelector(NumberSelectorConfig(min=5, max=50, step=5, mode=NumberSelectorMode.SLIDER)),
                     vol.Required(
                         CONF_SHOW_PLAYLISTS,
-                        default=self._config_entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
+                        default=self.config_entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_CACHE_TTL,
-                        default=self._config_entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
+                        default=self.config_entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
                     ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
                 }
             ),

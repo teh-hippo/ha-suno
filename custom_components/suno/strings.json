@@ -6,6 +6,9 @@
         "description": "Enter your Suno session cookie.  To get it:\n\n1. Open https://suno.com and log in\n2. Open DevTools (F12) then the Network tab\n3. Click any request to suno.com\n4. Copy the full Cookie header value from the request headers",
         "data": {
           "cookie": "Session cookie"
+        },
+        "data_description": {
+          "cookie": "The full Cookie header value from your browser.  This is stored securely and only sent to Suno's auth service."
         }
       },
       "reauth_confirm": {
@@ -13,6 +16,9 @@
         "description": "Your Suno session has expired.  Please paste a fresh cookie from your browser.",
         "data": {
           "cookie": "Session cookie"
+        },
+        "data_description": {
+          "cookie": "The full Cookie header value from your browser."
         }
       },
       "reconfigure": {
@@ -34,6 +40,35 @@
     "abort": {
       "already_configured": "This Suno account is already configured.",
       "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Suno settings",
+        "data": {
+          "show_liked": "Show Liked Songs folder",
+          "show_recent": "Show Recent folder",
+          "recent_count": "Number of recent songs",
+          "show_playlists": "Show Playlists folder",
+          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "credits": {
+        "name": "Credits"
+      }
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "Authentication failed.  Check your Suno cookie is valid and not expired."
+    },
+    "update_failed": {
+      "message": "Error fetching Suno data: {error}"
     }
   },
   "issues": {

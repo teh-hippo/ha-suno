@@ -7,11 +7,13 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SunoClient
-from .const import CONF_COOKIE, DOMAIN  # noqa: F401 - DOMAIN used by HA discovery
+from .const import CONF_COOKIE
 from .coordinator import SunoCoordinator
+from .exceptions import SunoAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,8 +27,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
     session = async_get_clientsession(hass)
     client = SunoClient(session, entry.data[CONF_COOKIE])
 
-    # Validate auth on startup
-    await client.authenticate()
+    try:
+        await client.authenticate()
+    except SunoAuthError as err:
+        raise ConfigEntryAuthFailed(str(err)) from err
+    except Exception as err:
+        raise ConfigEntryNotReady(f"Could not connect to Suno: {err}") from err
 
     coordinator = SunoCoordinator(hass, client, entry)
     await coordinator.async_config_entry_first_refresh()
