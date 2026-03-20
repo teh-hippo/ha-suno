@@ -150,12 +150,32 @@ def _decode_jwt_exp(token: str) -> int:
         return 0
 
 
+def _normalise_token(token: str) -> str:
+    """Accept a raw JWT or full cookie string and return a valid __client cookie.
+
+    Accepts:
+    - Raw JWT value (starts with eyJ...)
+    - __client=eyJ... (cookie assignment)
+    - Full cookie header with __client somewhere in it
+    """
+    token = token.strip()
+    if token.startswith("eyJ"):
+        return f"__client={token}"
+    if "__client=" in token:
+        # Extract just the __client value from a full cookie string
+        for part in token.split(";"):
+            part = part.strip()
+            if part.startswith("__client="):
+                return part
+    return f"__client={token}"
+
+
 class SunoClient:
     """Async client for the Suno internal API."""
 
-    def __init__(self, session: ClientSession, cookie: str) -> None:
+    def __init__(self, session: ClientSession, token: str) -> None:
         self._session = session
-        self._cookie = cookie
+        self._cookie = _normalise_token(token)
         self._jwt: str | None = None
         self._jwt_exp: int = 0
         self._jwt_lock = asyncio.Lock()

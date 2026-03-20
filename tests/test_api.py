@@ -13,6 +13,7 @@ from custom_components.suno.api import (
     SunoClient,
     _decode_jwt_exp,
     _fix_cdn_url,
+    _normalise_token,
     _redact_headers,
     _sanitise_clip,
 )
@@ -174,6 +175,34 @@ def test_redact_headers_no_sensitive() -> None:
     """Headers without sensitive keys are unchanged."""
     headers = {"Content-Type": "text/html"}
     assert _redact_headers(headers) == {"Content-Type": "text/html"}
+
+
+# ── Token normalisation tests ────────────────────────────────────────
+
+
+def test_normalise_raw_jwt() -> None:
+    """Raw JWT value should be wrapped as __client cookie."""
+    result = _normalise_token("eyJhbGciOiJSUzI1NiJ9.payload.sig")
+    assert result == "__client=eyJhbGciOiJSUzI1NiJ9.payload.sig"
+
+
+def test_normalise_with_prefix() -> None:
+    """Already-prefixed __client= should be returned as-is."""
+    result = _normalise_token("__client=eyJhbGciOiJSUzI1NiJ9.payload.sig")
+    assert result == "__client=eyJhbGciOiJSUzI1NiJ9.payload.sig"
+
+
+def test_normalise_full_cookie_string() -> None:
+    """Full cookie header should extract just the __client part."""
+    full = "_ga=123; __client=eyJhbGciOiJSUzI1NiJ9.payload.sig; _sp=456"
+    result = _normalise_token(full)
+    assert result == "__client=eyJhbGciOiJSUzI1NiJ9.payload.sig"
+
+
+def test_normalise_strips_whitespace() -> None:
+    """Leading/trailing whitespace should be stripped."""
+    result = _normalise_token("  eyJhbGciOiJSUzI1NiJ9.payload.sig  ")
+    assert result == "__client=eyJhbGciOiJSUzI1NiJ9.payload.sig"
 
 
 def test_all_audio_urls_are_https() -> None:

@@ -3,22 +3,22 @@
     "step": {
       "user": {
         "title": "Connect to Suno",
-        "description": "Enter your Suno session cookie.  To get it:\n\n1. Open suno.com in your browser and log in\n2. Open DevTools (F12) then the Network tab\n3. Click any request to suno.com\n4. Copy the full Cookie header value from the request headers",
+        "description": "Enter your Suno session token.  To get it:\n\n1. Open suno.com and log in\n2. Press F12 to open DevTools\n3. Go to Application > Cookies > suno.com\n4. Find __client and copy its value (starts with eyJ...)",
         "data": {
-          "cookie": "Session cookie"
+          "cookie": "Session token"
         },
         "data_description": {
-          "cookie": "The full Cookie header value from your browser.  This is stored securely and only sent to Suno's auth service."
+          "cookie": "The __client cookie value from suno.com.  Starts with eyJ.  Valid for approximately 2 years."
         }
       },
       "reauth_confirm": {
         "title": "Re-authenticate with Suno",
-        "description": "Your Suno session has expired.  Please paste a fresh cookie from your browser.",
+        "description": "Your Suno session has expired.  Follow the same steps to get a fresh token from suno.com.",
         "data": {
-          "cookie": "Session cookie"
+          "cookie": "Session token"
         },
         "data_description": {
-          "cookie": "The full Cookie header value from your browser."
+          "cookie": "The __client cookie value from suno.com.  Starts with eyJ."
         }
       },
       "reconfigure": {
