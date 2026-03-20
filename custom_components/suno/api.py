@@ -240,7 +240,7 @@ class SunoClient:
             if not has_more:
                 break
             page += 1
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.25)
         return all_clips
 
     async def get_liked_songs(self) -> list[SunoClip]:
@@ -269,7 +269,7 @@ class SunoClient:
             if not has_more:
                 break
             page += 1
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.25)
         return all_clips
 
     async def get_playlists(self) -> list[SunoPlaylist]:
@@ -312,7 +312,7 @@ class SunoClient:
             if not added_new:
                 break
             page += 1
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.25)
         return playlists
 
     async def get_playlist_clips(self, playlist_id: str) -> list[SunoClip]:
