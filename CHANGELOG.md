@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.2.0 (2026-03-20)
+
+### Features
+
+- Switch to v2 API with proper liked songs and playlists
+  ([`f2d3400`](https://github.com/teh-hippo/ha-suno/commit/f2d3400f88369feb093e7eb00e08520a24d7280a))
+
+
 ## v1.1.7 (2026-03-20)
 
 ### Bug Fixes
