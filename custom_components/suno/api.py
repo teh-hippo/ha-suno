@@ -330,3 +330,34 @@ class SunoClient:
 
         msg = "Suno API request failed after retries"
         raise SunoApiError(msg)
+
+    async def _api_post(self, path: str) -> int:
+        """Make an authenticated POST request and return the status code."""
+        jwt = await self._ensure_jwt()
+        url = f"{SUNO_API_BASE_URL}{path}"
+        headers = {"Authorization": f"Bearer {jwt}"}
+        _LOGGER.debug("POST %s", path)
+        try:
+            async with self._session.post(url, headers=headers) as resp:
+                if resp.status in (401, 403):
+                    msg = f"Suno API auth failed with status {resp.status}"
+                    raise SunoAuthError(msg)
+                return resp.status
+        except SunoApiError, SunoAuthError:
+            raise
+        except Exception as err:
+            msg = f"Suno API POST failed: {err}"
+            raise SunoApiError(msg) from err
+
+    async def request_wav(self, clip_id: str) -> None:
+        """Trigger server-side WAV generation for a clip."""
+        status = await self._api_post(f"/api/gen/{clip_id}/convert_wav/")
+        _LOGGER.debug("convert_wav returned %d for %s", status, clip_id)
+        if status < 200 or status >= 300:
+            msg = f"WAV conversion request failed with status {status}"
+            raise SunoApiError(msg)
+
+    async def get_wav_url(self, clip_id: str) -> str | None:
+        """Return the WAV download URL if available, or None."""
+        data = await self._api_get(f"/api/gen/{clip_id}/wav_file/")
+        return data.get("wav_file_url") if isinstance(data, dict) else None

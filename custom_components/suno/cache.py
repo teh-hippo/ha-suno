@@ -1,6 +1,6 @@
 """Local audio file cache for the Suno integration.
 
-Caches downloaded audio files (MP3/WAV) on disk with LRU eviction.
+Caches downloaded audio files (MP3/FLAC) on disk with LRU eviction.
 Uses homeassistant.helpers.storage.Store for a persistent index so we
 don't rely on filesystem atime (unreliable on many platforms).
 """
@@ -23,7 +23,7 @@ STORE_KEY = "suno_cache_index"
 # Magic bytes used to validate cached files
 _MP3_ID3_MAGIC = b"ID3"
 _MP3_SYNC_BYTE = 0xFF
-_WAV_MAGIC = b"RIFF"
+_FLAC_MAGIC = b"fLaC"
 
 
 class SunoCache:
@@ -155,8 +155,8 @@ class SunoCache:
                 header = fh.read(4)
             if fmt == "mp3":
                 return header[:3] == _MP3_ID3_MAGIC or (len(header) >= 1 and header[0] == _MP3_SYNC_BYTE)
-            if fmt == "wav":
-                return header[:4] == _WAV_MAGIC
+            if fmt == "flac":
+                return header[:4] == _FLAC_MAGIC
             return True
         except OSError:
             return False

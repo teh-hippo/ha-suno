@@ -15,10 +15,9 @@ def _mp3_bytes(size: int = 256) -> bytes:
     return b"ID3" + b"\x00" * (size - 3)
 
 
-def _wav_bytes(size: int = 256) -> bytes:
-    """Return fake WAV data with valid RIFF magic."""
-    data_size = size - 12
-    return b"RIFF" + (data_size + 4).to_bytes(4, "little") + b"WAVE" + b"\x00" * data_size
+def _flac_bytes(size: int = 256) -> bytes:
+    """Return fake FLAC data with valid fLaC magic."""
+    return b"fLaC" + b"\x00" * (size - 4)
 
 
 async def test_cache_init_creates_dir(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -106,21 +105,21 @@ async def test_cache_corrupt_file_rejects(hass: HomeAssistant, tmp_path: Path) -
     assert result is None
 
 
-async def test_cache_wav_validation(hass: HomeAssistant, tmp_path: Path) -> None:
-    """WAV files should be validated against RIFF magic."""
+async def test_cache_flac_validation(hass: HomeAssistant, tmp_path: Path) -> None:
+    """FLAC files should be validated against fLaC magic."""
     cache_dir = str(tmp_path / "suno_cache")
     with patch.object(hass.config, "path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
-    data = _wav_bytes(512)
-    await cache.async_put("clip-wav", "wav", data)
-    got = await cache.async_get("clip-wav", "wav")
+    data = _flac_bytes(512)
+    await cache.async_put("clip-flac", "flac", data)
+    got = await cache.async_get("clip-flac", "flac")
     assert got is not None
 
     # Corrupt it
-    (cache.cache_dir / "clip-wav.wav").write_bytes(b"NOT_RIFF")
-    got = await cache.async_get("clip-wav", "wav")
+    (cache.cache_dir / "clip-flac.flac").write_bytes(b"NOT_FLAC")
+    got = await cache.async_get("clip-flac", "flac")
     assert got is None
 
 

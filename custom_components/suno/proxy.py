@@ -10,6 +10,7 @@ WAV from the CDN and transcodes to FLAC via ffmpeg with embedded metadata.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -75,6 +76,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
+        self._wav_locks: dict[str, asyncio.Lock] = {}
 
     def _find_clip(self, clip_id: str) -> SunoClip | None:
         """Look up a clip across all active coordinators."""
@@ -103,6 +105,15 @@ class SunoMediaProxyView(HomeAssistantView):
         """Return the shared SunoCache instance if available."""
         return self.hass.data.get(_SUNO_CACHE_KEY)
 
+    def _get_client(self) -> Any:
+        """Return the SunoClient from the first loaded coordinator."""
+        entries = self.hass.config_entries.async_entries(DOMAIN)
+        for entry in entries:
+            coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
+            if coordinator is not None:
+                return coordinator.client
+        return None
+
     async def get(self, request: web.Request, clip_id: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
         clip = self._find_clip(clip_id)
@@ -113,26 +124,32 @@ class SunoMediaProxyView(HomeAssistantView):
         quality = opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
         cache_enabled = opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED)
         is_hq = quality == QUALITY_HIGH
-        fmt = "wav" if is_hq else "mp3"
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
         cache = self._get_cache() if cache_enabled else None
 
-        # Try cache first
+        # Try cache first (HQ cached as FLAC, standard as MP3)
         if cache is not None:
-            cached_path = await cache.async_get(clip_id, fmt)
+            cache_fmt = "flac" if is_hq else "mp3"
+            cached_path = await cache.async_get(clip_id, cache_fmt)
             if cached_path is not None:
                 return web.FileResponse(
                     cached_path,
                     headers={"Content-Type": content_type},
                 )
 
-        # Build upstream URL
-        if clip and not is_hq:
-            audio_url = clip.audio_url
-        else:
-            audio_url = f"{CDN_BASE_URL}/{clip_id}.{fmt}"
+        if is_hq:
+            return await self._handle_hq(
+                request,
+                clip_id,
+                title,
+                artist,
+                content_type,
+                cache,
+            )
 
+        # Standard quality: stream MP3 from CDN
+        audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
         try:
             upstream: ClientResponse = await session.get(audio_url)
@@ -147,16 +164,6 @@ class SunoMediaProxyView(HomeAssistantView):
                 text=f"Upstream returned {upstream.status}",
             )
 
-        if is_hq:
-            return await self._handle_hq(
-                request,
-                upstream,
-                clip_id,
-                title,
-                artist,
-                content_type,
-                cache,
-            )
         return await self._handle_mp3(
             request,
             upstream,
@@ -218,19 +225,55 @@ class SunoMediaProxyView(HomeAssistantView):
     async def _handle_hq(
         self,
         request: web.Request,
-        upstream: ClientResponse,
         clip_id: str,
         title: str,
         artist: str,
         content_type: str,
         cache: SunoCache | None,
     ) -> web.Response:
-        """Download WAV, transcode to FLAC with metadata, return buffered."""
+        """Get WAV via Suno API, transcode to FLAC with metadata, return buffered."""
+        client = self._get_client()
+        if client is None:
+            return web.Response(status=502, text="Suno client not available")
+
+        # Serialise WAV generation per clip to avoid duplicate API calls
+        if clip_id not in self._wav_locks:
+            self._wav_locks[clip_id] = asyncio.Lock()
+
+        async with self._wav_locks[clip_id]:
+            wav_url = await client.get_wav_url(clip_id)
+            if not wav_url:
+                try:
+                    await client.request_wav(clip_id)
+                except Exception:
+                    _LOGGER.exception("WAV conversion request failed for %s", clip_id)
+                    return web.Response(status=502, text="WAV conversion failed")
+                for _ in range(24):
+                    await asyncio.sleep(5)
+                    wav_url = await client.get_wav_url(clip_id)
+                    if wav_url:
+                        break
+
+        if not wav_url:
+            return web.Response(status=502, text="WAV generation timed out")
+
+        # Fetch WAV from CDN
+        session = async_get_clientsession(self.hass)
+        try:
+            upstream = await session.get(wav_url)
+        except Exception:
+            _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
+            return web.Response(status=502, text="WAV fetch failed")
+
+        if upstream.status != 200:
+            upstream.close()
+            return web.Response(status=502, text=f"WAV upstream returned {upstream.status}")
+
         try:
             wav_data = await upstream.read()
         except Exception:
-            _LOGGER.exception("Failed to read upstream WAV for %s", clip_id)
-            return web.Response(status=502, text="Upstream read failed")
+            _LOGGER.exception("Failed to read WAV for %s", clip_id)
+            return web.Response(status=502, text="WAV read failed")
         finally:
             upstream.close()
 
@@ -249,8 +292,6 @@ class SunoMediaProxyView(HomeAssistantView):
 
     async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
         """Transcode WAV bytes to FLAC with metadata using ffmpeg."""
-        import asyncio
-
         ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
         try:
             proc = await asyncio.create_subprocess_exec(

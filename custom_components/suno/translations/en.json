@@ -34,7 +34,7 @@
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
-          "audio_quality": "Standard streams MP3.  High quality streams lossless WAV (larger files, works best with caching enabled).",
+          "audio_quality": "Standard streams MP3.  High quality transcodes to lossless FLAC (larger files, first play triggers server-side conversion).",
           "cache_enabled": "Cache audio files locally for faster playback.",
           "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
@@ -65,7 +65,7 @@
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
-          "audio_quality": "Standard streams MP3.  High quality streams lossless WAV (larger files, works best with caching enabled).",
+          "audio_quality": "Standard streams MP3.  High quality transcodes to lossless FLAC (larger files, first play triggers server-side conversion).",
           "cache_enabled": "Cache audio files locally for faster playback.",
           "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }

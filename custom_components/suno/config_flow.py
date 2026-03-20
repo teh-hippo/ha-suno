@@ -196,7 +196,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         SelectSelectorConfig(
                             options=[
                                 SelectOptionDict(value="standard", label="Standard (MP3)"),
-                                SelectOptionDict(value="high", label="High Quality (WAV)"),
+                                SelectOptionDict(value="high", label="High Quality (FLAC)"),
                             ],
                             mode=SelectSelectorMode.DROPDOWN,
                         )
@@ -267,7 +267,7 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                         SelectSelectorConfig(
                             options=[
                                 SelectOptionDict(value="standard", label="Standard (MP3)"),
-                                SelectOptionDict(value="high", label="High Quality (WAV)"),
+                                SelectOptionDict(value="high", label="High Quality (FLAC)"),
                             ],
                             mode=SelectSelectorMode.DROPDOWN,
                         )

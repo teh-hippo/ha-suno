@@ -679,3 +679,79 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
         resp = await client.get("/api/suno/media/clip-aaa-111")
 
     assert resp.status == 502
+
+
+async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """HQ mode should use the API to get/generate WAV URL then transcode."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    # Mock the WAV API: get_wav_url returns URL immediately
+    mock_suno_client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-aaa-111.wav")
+    mock_suno_client.request_wav = AsyncMock()
+
+    wav_data = _make_test_wav()
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.read = AsyncMock(return_value=wav_data)
+    mock_response.close = MagicMock()
+
+    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111")
+
+    assert resp.status == 200
+    body = await resp.read()
+    assert body[:4] == b"fLaC"
+    # Should NOT have called request_wav since get_wav_url returned immediately
+    mock_suno_client.request_wav.assert_not_awaited()
+
+
+async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """HQ mode should trigger convert_wav then poll when WAV not ready."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    # First call returns None, second returns URL
+    mock_suno_client.get_wav_url = AsyncMock(side_effect=[None, "https://cdn1.suno.ai/clip-aaa-111.wav"])
+    mock_suno_client.request_wav = AsyncMock()
+
+    wav_data = _make_test_wav()
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.read = AsyncMock(return_value=wav_data)
+    mock_response.close = MagicMock()
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111")
+
+    assert resp.status == 200
+    mock_suno_client.request_wav.assert_awaited_once()
+
+
+async def test_hq_returns_502_when_no_client(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """HQ mode should return 502 if no SunoClient is available."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    # Remove runtime_data to simulate no client
+    entry.runtime_data = None
+
+    client = await hass_client()
+    resp = await client.get("/api/suno/media/clip-aaa-111")
+    assert resp.status == 502
