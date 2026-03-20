@@ -19,15 +19,18 @@ from homeassistant.core import HomeAssistant
 
 from .api import SunoClip
 from .const import (
+    CONF_AUDIO_QUALITY,
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
+    DEFAULT_AUDIO_QUALITY,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_PLAYLISTS,
     DEFAULT_SHOW_RECENT,
     DOMAIN,
+    QUALITY_HIGH,
 )
 from .coordinator import SunoCoordinator, SunoData
 
@@ -42,13 +45,13 @@ async def async_get_media_source(hass: HomeAssistant) -> SunoMediaSource:
     return SunoMediaSource(hass)
 
 
-def _clip_to_media(clip: SunoClip) -> BrowseMediaSource:
+def _clip_to_media(clip: SunoClip, content_type: str = "audio/mpeg") -> BrowseMediaSource:
     """Convert a SunoClip to a browsable media item."""
     return BrowseMediaSource(
         domain=DOMAIN,
         identifier=f"clip/{clip.id}",
         media_class=MediaClass.MUSIC,
-        media_content_type="audio/mpeg",
+        media_content_type=content_type,
         title=clip.title,
         can_play=bool(clip.audio_url),
         can_expand=False,
@@ -88,6 +91,11 @@ class SunoMediaSource(MediaSource):
                 return entry, entry.runtime_data
         return None
 
+    def _get_mime_type(self, entry: ConfigEntry) -> str:
+        """Return the MIME type based on the audio quality setting."""
+        quality = entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
+        return "audio/wav" if quality == QUALITY_HIGH else "audio/mpeg"
+
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
         identifier = item.identifier or ""
@@ -100,11 +108,13 @@ class SunoMediaSource(MediaSource):
         if not result:
             raise BrowseError("Suno integration not configured")
 
+        entry, _ = result
+
         # Always resolve via the proxy.  Playlist clips may not be in the
         # coordinator cache, but the proxy can still stream them from CDN.
         return PlayMedia(
             url=f"/api/suno/media/{clip_id}",
-            mime_type="audio/mpeg",
+            mime_type=self._get_mime_type(entry),
         )
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
@@ -115,27 +125,28 @@ class SunoMediaSource(MediaSource):
 
         entry, coordinator = result
         identifier = item.identifier or ""
+        ct = self._get_mime_type(entry)
 
         if not identifier:
-            return await self._browse_root(entry, coordinator)
+            return await self._browse_root(entry, coordinator, ct)
         if identifier == "liked":
-            return self._browse_liked(coordinator)
+            return self._browse_liked(coordinator, ct)
         if identifier == "recent":
-            return await self._browse_recent(entry, coordinator)
+            return await self._browse_recent(entry, coordinator, ct)
         if identifier == "playlists":
             return self._browse_playlists(coordinator)
         if identifier.startswith("playlist/"):
             playlist_id = identifier.removeprefix("playlist/")
-            return await self._browse_playlist(coordinator, playlist_id)
+            return await self._browse_playlist(coordinator, playlist_id, ct)
         if identifier == "all":
-            return self._browse_all(coordinator)
+            return self._browse_all(coordinator, ct)
         if identifier.startswith("all/page/"):
             page_str = identifier.removeprefix("all/page/")
-            return self._browse_all_page(coordinator, int(page_str))
+            return self._browse_all_page(coordinator, int(page_str), ct)
 
         return _folder("", "Suno", [])
 
-    async def _browse_root(self, entry: ConfigEntry, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    async def _browse_root(self, entry: ConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Build the root media browser view."""
         children: list[BrowseMediaSource] = []
         data: SunoData = coordinator.data
@@ -154,14 +165,14 @@ class SunoMediaSource(MediaSource):
 
         return _folder("", "Suno", children)
 
-    def _browse_liked(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    def _browse_liked(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Show liked songs."""
         data: SunoData = coordinator.data
         liked = data.liked_clips
-        children = [_clip_to_media(clip) for clip in liked]
+        children = [_clip_to_media(clip, ct) for clip in liked]
         return _folder("liked", f"Liked Songs ({len(liked)})", children)
 
-    async def _browse_recent(self, entry: ConfigEntry, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    async def _browse_recent(self, entry: ConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Show recent songs, fetched live from page 0."""
         count = entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT)
         try:
@@ -171,7 +182,7 @@ class SunoMediaSource(MediaSource):
             _LOGGER.warning("Could not fetch recent songs live, falling back to cache")
             clips = coordinator.data.clips[:count]
 
-        children = [_clip_to_media(clip) for clip in clips]
+        children = [_clip_to_media(clip, ct) for clip in clips]
         return _folder("recent", f"Recent ({len(children)})", children)
 
     def _browse_playlists(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
@@ -180,7 +191,7 @@ class SunoMediaSource(MediaSource):
         children = [_folder(f"playlist/{pl.id}", f"{pl.name} ({pl.num_clips})") for pl in data.playlists]
         return _folder("playlists", f"Playlists ({len(data.playlists)})", children)
 
-    async def _browse_playlist(self, coordinator: SunoCoordinator, playlist_id: str) -> BrowseMediaSource:
+    async def _browse_playlist(self, coordinator: SunoCoordinator, playlist_id: str, ct: str) -> BrowseMediaSource:
         """Show songs in a specific playlist."""
         try:
             clips = await coordinator.client.get_playlist_clips(playlist_id)
@@ -188,38 +199,36 @@ class SunoMediaSource(MediaSource):
             _LOGGER.warning("Could not fetch playlist %s", playlist_id)
             clips = []
 
-        # Find playlist name
         name = "Playlist"
         for pl in coordinator.data.playlists:
             if pl.id == playlist_id:
                 name = pl.name
                 break
 
-        children = [_clip_to_media(clip) for clip in clips]
+        children = [_clip_to_media(clip, ct) for clip in clips]
         return _folder(f"playlist/{playlist_id}", f"{name} ({len(children)})", children)
 
-    def _browse_all(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    def _browse_all(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Show all songs, chunked into virtual folders if large."""
         data: SunoData = coordinator.data
         total = len(data.clips)
 
         if total <= _CHUNK_SIZE:
-            items = [_clip_to_media(clip) for clip in data.clips]
+            items = [_clip_to_media(clip, ct) for clip in data.clips]
             return _folder("all", f"All Songs ({total})", items)
 
-        # Chunk into virtual folders
         folders: list[BrowseMediaSource] = []
         for i in range(0, total, _CHUNK_SIZE):
             end = min(i + _CHUNK_SIZE, total)
             folders.append(_folder(f"all/page/{i // _CHUNK_SIZE}", f"Songs {i + 1}-{end}"))
         return _folder("all", f"All Songs ({total})", folders)
 
-    def _browse_all_page(self, coordinator: SunoCoordinator, page: int) -> BrowseMediaSource:
+    def _browse_all_page(self, coordinator: SunoCoordinator, page: int, ct: str) -> BrowseMediaSource:
         """Show a chunk of all songs."""
         data: SunoData = coordinator.data
         start = page * _CHUNK_SIZE
         end = min(start + _CHUNK_SIZE, len(data.clips))
         chunk = data.clips[start:end]
 
-        children = [_clip_to_media(clip) for clip in chunk]
+        children = [_clip_to_media(clip, ct) for clip in chunk]
         return _folder(f"all/page/{page}", f"Songs {start + 1}-{end}", children)
