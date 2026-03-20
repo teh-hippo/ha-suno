@@ -66,36 +66,6 @@ def _skip_existing_id3(chunk: bytes) -> bytes:
     return chunk[skip:]
 
 
-def _build_riff_info(title: str, artist: str) -> bytes:
-    """Build a RIFF LIST/INFO chunk with INAM and IART sub-chunks."""
-    chunks = b""
-    for chunk_id, text in [("INAM", title), ("IART", artist)]:
-        text_bytes = text.encode("utf-8") + b"\x00"  # null-terminated
-        if len(text_bytes) % 2:
-            text_bytes += b"\x00"  # pad to even length
-        chunks += chunk_id.encode("ascii") + len(text_bytes).to_bytes(4, "little") + text_bytes
-    info_data = b"INFO" + chunks
-    return b"LIST" + len(info_data).to_bytes(4, "little") + info_data
-
-
-def _inject_riff_info(wav_data: bytes, title: str, artist: str) -> bytes:
-    """Insert a LIST/INFO chunk into a WAV file's RIFF container.
-
-    The INFO chunk is placed immediately after the initial 12-byte RIFF
-    header (before the fmt chunk).  The outer RIFF size field is updated
-    to account for the extra bytes.  Most players will read INFO from
-    anywhere in the RIFF container.
-    """
-    if len(wav_data) < 12 or wav_data[:4] != b"RIFF":
-        return wav_data
-
-    info_chunk = _build_riff_info(title, artist)
-    original_riff_size = int.from_bytes(wav_data[4:8], "little")
-    new_riff_size = original_riff_size + len(info_chunk)
-
-    return wav_data[:4] + new_riff_size.to_bytes(4, "little") + wav_data[8:12] + info_chunk + wav_data[12:]
-
-
 class SunoMediaProxyView(HomeAssistantView):
     """Proxy Suno CDN audio with injected metadata."""
 
@@ -142,9 +112,9 @@ class SunoMediaProxyView(HomeAssistantView):
         opts = self._get_entry_options()
         quality = opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
         cache_enabled = opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED)
-        is_wav = quality == QUALITY_HIGH
-        fmt = "wav" if is_wav else "mp3"
-        content_type = "audio/wav" if is_wav else "audio/mpeg"
+        is_hq = quality == QUALITY_HIGH
+        fmt = "wav" if is_hq else "mp3"
+        content_type = "audio/flac" if is_hq else "audio/mpeg"
 
         cache = self._get_cache() if cache_enabled else None
 
@@ -158,7 +128,7 @@ class SunoMediaProxyView(HomeAssistantView):
                 )
 
         # Build upstream URL
-        if clip and not is_wav:
+        if clip and not is_hq:
             audio_url = clip.audio_url
         else:
             audio_url = f"{CDN_BASE_URL}/{clip_id}.{fmt}"
@@ -177,8 +147,8 @@ class SunoMediaProxyView(HomeAssistantView):
                 text=f"Upstream returned {upstream.status}",
             )
 
-        if is_wav:
-            return await self._handle_wav(
+        if is_hq:
+            return await self._handle_hq(
                 request,
                 upstream,
                 clip_id,
@@ -245,7 +215,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
         return response
 
-    async def _handle_wav(
+    async def _handle_hq(
         self,
         request: web.Request,
         upstream: ClientResponse,
@@ -255,25 +225,61 @@ class SunoMediaProxyView(HomeAssistantView):
         content_type: str,
         cache: SunoCache | None,
     ) -> web.Response:
-        """Buffer WAV and return with Content-Length (browsers need it for WAV)."""
+        """Download WAV, transcode to FLAC with metadata, return buffered."""
         try:
-            raw = await upstream.read()
+            wav_data = await upstream.read()
         except Exception:
             _LOGGER.exception("Failed to read upstream WAV for %s", clip_id)
             return web.Response(status=502, text="Upstream read failed")
         finally:
             upstream.close()
 
-        # Inject RIFF INFO metadata
-        tagged = _inject_riff_info(raw, title, artist)
+        # Transcode WAV to FLAC with metadata via ffmpeg
+        flac_data = await self._wav_to_flac(wav_data, title, artist)
+        if flac_data is None:
+            return web.Response(status=502, text="FLAC transcode failed")
 
         if cache is not None:
-            await self._save_to_cache_bytes(cache, clip_id, "wav", tagged)
+            await self._save_to_cache_bytes(cache, clip_id, "flac", flac_data)
 
         return web.Response(
-            body=tagged,
-            content_type=content_type,
+            body=flac_data,
+            content_type="audio/flac",
         )
+
+    async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
+        """Transcode WAV bytes to FLAC with metadata using ffmpeg."""
+        import asyncio
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-i",
+                "pipe:0",
+                "-metadata",
+                f"title={title}",
+                "-metadata",
+                f"artist={artist}",
+                "-f",
+                "flac",
+                "-compression_level",
+                "5",
+                "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=wav_data)
+            if proc.returncode != 0:
+                _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
+                return None
+            return stdout
+        except FileNotFoundError:
+            _LOGGER.error("ffmpeg not found.  Install ffmpeg for high quality audio.")
+            return None
+        except Exception:
+            _LOGGER.exception("FLAC transcode error")
+            return None
 
     @staticmethod
     async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, chunks: list[bytes]) -> None:

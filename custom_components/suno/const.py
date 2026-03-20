@@ -36,7 +36,6 @@ DEFAULT_CACHE_ENABLED = False
 DEFAULT_CACHE_MAX_SIZE = 500
 
 # Audio quality options
-QUALITY_STANDARD = "standard"
 QUALITY_HIGH = "high"
 
 # JWT refresh buffer (seconds before expiry to trigger refresh)

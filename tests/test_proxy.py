@@ -9,8 +9,6 @@ from homeassistant.core import HomeAssistant
 from custom_components.suno.proxy import (
     SunoMediaProxyView,
     _build_id3_header,
-    _build_riff_info,
-    _inject_riff_info,
     _skip_existing_id3,
 )
 
@@ -186,84 +184,6 @@ async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_
 # ── RIFF INFO builder ───────────────────────────────────────────────
 
 
-class TestBuildRiffInfo:
-    """Tests for the RIFF LIST/INFO chunk builder."""
-
-    def test_starts_with_list_magic(self) -> None:
-        result = _build_riff_info("Title", "Artist")
-        assert result[:4] == b"LIST"
-
-    def test_contains_info_type(self) -> None:
-        result = _build_riff_info("Title", "Artist")
-        # After LIST + 4 byte size comes "INFO"
-        assert result[8:12] == b"INFO"
-
-    def test_contains_inam_chunk(self) -> None:
-        result = _build_riff_info("My Song", "Genre")
-        assert b"INAM" in result
-        assert b"My Song" in result
-
-    def test_contains_iart_chunk(self) -> None:
-        result = _build_riff_info("Title", "pop, upbeat")
-        assert b"IART" in result
-        assert b"pop, upbeat" in result
-
-    def test_list_size_is_correct(self) -> None:
-        result = _build_riff_info("A", "B")
-        list_size = int.from_bytes(result[4:8], "little")
-        # LIST payload starts after the 8-byte LIST header
-        assert list_size == len(result) - 8
-
-    def test_text_is_null_terminated(self) -> None:
-        result = _build_riff_info("Test", "Art")
-        # Find INAM data: chunk_id(4) + size(4) + data
-        inam_pos = result.index(b"INAM")
-        size = int.from_bytes(result[inam_pos + 4 : inam_pos + 8], "little")
-        text_data = result[inam_pos + 8 : inam_pos + 8 + size]
-        assert text_data[-1] == 0 or text_data[-2] == 0  # null terminated (possibly padded)
-
-
-class TestInjectRiffInfo:
-    """Tests for injecting LIST/INFO into WAV data."""
-
-    def _make_wav(self, body: bytes = b"\x00" * 100) -> bytes:
-        """Build a minimal WAV-like RIFF container."""
-        riff_size = 4 + len(body)  # "WAVE" + body
-        return b"RIFF" + riff_size.to_bytes(4, "little") + b"WAVE" + body
-
-    def test_injects_info_after_header(self) -> None:
-        wav = self._make_wav()
-        result = _inject_riff_info(wav, "Song", "Artist")
-        # INFO should appear right after the 12-byte RIFF header
-        assert b"LIST" in result
-        assert b"INFO" in result
-
-    def test_updates_riff_size(self) -> None:
-        wav = self._make_wav()
-        result = _inject_riff_info(wav, "Song", "Artist")
-        new_riff_size = int.from_bytes(result[4:8], "little")
-        old_riff_size = int.from_bytes(wav[4:8], "little")
-        info_chunk = _build_riff_info("Song", "Artist")
-        assert new_riff_size == old_riff_size + len(info_chunk)
-
-    def test_preserves_original_data(self) -> None:
-        body = b"\xff\xfb\x90\x00" + b"\xab" * 50
-        wav = self._make_wav(body)
-        result = _inject_riff_info(wav, "T", "A")
-        # The original body should still be present at the end
-        assert result.endswith(body)
-
-    def test_non_riff_passthrough(self) -> None:
-        data = b"NOT_A_WAV_FILE"
-        assert _inject_riff_info(data, "T", "A") == data
-
-    def test_short_data_passthrough(self) -> None:
-        assert _inject_riff_info(b"RIFF", "T", "A") == b"RIFF"
-
-
-# ── WAV streaming tests ─────────────────────────────────────────────
-
-
 async def test_view_wav_url_construction(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """When quality is high, the proxy should build a .wav CDN URL."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY
@@ -437,8 +357,8 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
     assert real_audio in body
 
 
-async def test_stream_wav_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
-    """WAV streaming should work and inject RIFF INFO on cache write (lines 259-287)."""
+async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """High quality should transcode WAV to FLAC and write to cache."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY, CONF_CACHE_ENABLED
     from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
@@ -457,13 +377,10 @@ async def test_stream_wav_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     mock_cache.async_put = AsyncMock()
     hass.data[_SUNO_CACHE_KEY] = mock_cache
 
-    body_data = b"\x00" * 100
-    riff_size = (4 + len(body_data)).to_bytes(4, "little")
-    wav_data = b"RIFF" + riff_size + b"WAVE" + body_data
-
+    wav_data = _make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
+    mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
     mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
@@ -474,27 +391,52 @@ async def test_stream_wav_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
 
     assert resp.status == 200
     body = await resp.read()
-    assert body[:4] == b"RIFF"
-    # Cache should have been written with RIFF INFO injected
+    assert body[:4] == b"fLaC"
     mock_cache.async_put.assert_awaited_once()
-    cached_data = mock_cache.async_put.call_args[0][2]
-    assert b"INFO" in cached_data
 
 
-async def test_stream_wav_without_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
-    """WAV streaming without cache should buffer and return with RIFF INFO."""
+def _make_test_wav() -> bytes:
+    """Build a minimal valid WAV file for testing."""
+    import struct
+
+    sample_rate, channels, bits = 48000, 2, 16
+    num_samples = 480  # 10ms
+    data_size = num_samples * channels * (bits // 8)
+    wav = bytearray()
+    wav.extend(b"RIFF")
+    wav.extend(struct.pack("<I", 36 + data_size))
+    wav.extend(b"WAVE")
+    wav.extend(b"fmt ")
+    wav.extend(
+        struct.pack(
+            "<IHHIIHH",
+            16,
+            1,
+            channels,
+            sample_rate,
+            sample_rate * channels * bits // 8,
+            channels * bits // 8,
+            bits,
+        )
+    )
+    wav.extend(b"data")
+    wav.extend(struct.pack("<I", data_size))
+    wav.extend(b"\x00" * data_size)
+    return bytes(wav)
+
+
+async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """High quality without cache should transcode WAV to FLAC."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
 
-    body_data = b"\x00" * 100
-    riff_size = (4 + len(body_data)).to_bytes(4, "little")
-    wav_data = b"RIFF" + riff_size + b"WAVE" + body_data
-
+    wav_data = _make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
+    mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
     mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
@@ -505,9 +447,7 @@ async def test_stream_wav_without_cache(hass: HomeAssistant, mock_suno_client: A
 
     assert resp.status == 200
     body = await resp.read()
-    assert body[:4] == b"RIFF"
-    assert b"INFO" in body
-    assert b"INAM" in body
+    assert body[:4] == b"fLaC"
 
 
 async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
@@ -531,18 +471,18 @@ async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_clien
 
 
 async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
-    """Upstream 200 with WAV quality should route to _handle_wav (lines 180-189)."""
+    """Upstream 200 with high quality should transcode WAV to FLAC."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = b"RIFF" + b"\x00" * 50
+    wav_data = _make_test_wav()
     mock_response = AsyncMock()
-    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
+    mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
+    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -551,6 +491,8 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
         resp = await client.get("/api/suno/media/clip-aaa-111")
 
     assert resp.status == 200
+    body = await resp.read()
+    assert body[:4] == b"fLaC"
 
 
 async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
@@ -628,9 +570,10 @@ async def test_save_to_cache_bytes_failure_is_silent(
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
     hass.data[_SUNO_CACHE_KEY] = mock_cache
 
-    wav_data = b"RIFF" + b"\x68\x00\x00\x00" + b"WAVE" + b"\x00" * 100
+    wav_data = _make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
+    mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
     mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 

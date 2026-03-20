@@ -94,7 +94,7 @@ class SunoMediaSource(MediaSource):
     def _get_mime_type(self, entry: ConfigEntry) -> str:
         """Return the MIME type based on the audio quality setting."""
         quality = entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
-        return "audio/wav" if quality == QUALITY_HIGH else "audio/mpeg"
+        return "audio/flac" if quality == QUALITY_HIGH else "audio/mpeg"
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
