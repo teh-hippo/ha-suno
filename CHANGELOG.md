@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.2.1 (2026-03-20)
+
+### Bug Fixes
+
+- Add pagination safety limits and liked_songs error handling
+  ([`f353720`](https://github.com/teh-hippo/ha-suno/commit/f35372018fe71620261326efce916884374a7563))
+
+
 ## v1.2.0 (2026-03-20)
 
 ### Features
