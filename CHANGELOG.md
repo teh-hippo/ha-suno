@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.1.3 (2026-03-20)
+
+### Bug Fixes
+
+- Improved brand icon with cleaner waveform design
+  ([`c9431a5`](https://github.com/teh-hippo/ha-suno/commit/c9431a5185ffe2d9ecab6467d684c447f8e1b4c9))
+
+
 ## v1.1.2 (2026-03-20)
 
 ### Bug Fixes
