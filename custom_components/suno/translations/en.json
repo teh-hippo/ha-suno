@@ -1,0 +1,80 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Suno",
+        "description": "**Step 1:** Open [{suno_url}]({suno_url}) and make sure you are logged in.\n\n**Step 2:** Open Developer Tools (**F12** on Windows/Linux, **Cmd+Option+I** on Mac).\n\n**Step 3:** Go to **Application** tab > **Cookies** > **suno.com** in the sidebar.  Find the row named `__client` and copy its value (starts with `eyJ`).",
+        "data": {
+          "cookie": "Session token"
+        },
+        "data_description": {
+          "cookie": "The __client cookie value from suno.com.  Starts with eyJ.  Valid for approximately 2 years."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with Suno",
+        "description": "Your Suno session has expired.  Open [{suno_url}]({suno_url}), then repeat the steps above to get a fresh token.",
+        "data": {
+          "cookie": "Session token"
+        },
+        "data_description": {
+          "cookie": "The __client cookie value from suno.com.  Starts with eyJ."
+        }
+      },
+      "reconfigure": {
+        "title": "Suno settings",
+        "data": {
+          "show_liked": "Show Liked Songs folder",
+          "show_recent": "Show Recent folder",
+          "recent_count": "Number of recent songs",
+          "show_playlists": "Show Playlists folder",
+          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "invalid_cookie": "Could not authenticate.  Check your cookie is correct and not expired.",
+      "cannot_connect": "Could not connect to Suno.  Check your network connection.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Suno account is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Suno settings",
+        "data": {
+          "show_liked": "Show Liked Songs folder",
+          "show_recent": "Show Recent folder",
+          "recent_count": "Number of recent songs",
+          "show_playlists": "Show Playlists folder",
+          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "credits": {
+        "name": "Credits"
+      }
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "Authentication failed.  Check your Suno cookie is valid and not expired."
+    },
+    "update_failed": {
+      "message": "Error fetching Suno data: {error}"
+    }
+  },
+  "issues": {
+    "auth_expired": {
+      "title": "Suno authentication expired",
+      "description": "Your Suno session cookie has expired.  Open the integration settings to re-authenticate."
+    }
+  }
+}
