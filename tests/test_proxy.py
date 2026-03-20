@@ -464,6 +464,7 @@ async def test_stream_wav_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
+    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -481,17 +482,20 @@ async def test_stream_wav_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
 
 
 async def test_stream_wav_without_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
-    """WAV streaming without cache should stream raw data."""
+    """WAV streaming without cache should buffer and return with RIFF INFO."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = b"RIFF" + b"\x00" * 100
+    body_data = b"\x00" * 100
+    riff_size = (4 + len(body_data)).to_bytes(4, "little")
+    wav_data = b"RIFF" + riff_size + b"WAVE" + body_data
+
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
+    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -501,7 +505,9 @@ async def test_stream_wav_without_cache(hass: HomeAssistant, mock_suno_client: A
 
     assert resp.status == 200
     body = await resp.read()
-    assert wav_data in body
+    assert body[:4] == b"RIFF"
+    assert b"INFO" in body
+    assert b"INAM" in body
 
 
 async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
@@ -534,6 +540,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
 
     wav_data = b"RIFF" + b"\x00" * 50
     mock_response = AsyncMock()
+    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.status = 200
     mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
     mock_response.close = MagicMock()
@@ -624,7 +631,7 @@ async def test_save_to_cache_bytes_failure_is_silent(
     wav_data = b"RIFF" + b"\x68\x00\x00\x00" + b"WAVE" + b"\x00" * 100
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([wav_data])
+    mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:

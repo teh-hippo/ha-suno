@@ -254,37 +254,26 @@ class SunoMediaProxyView(HomeAssistantView):
         artist: str,
         content_type: str,
         cache: SunoCache | None,
-    ) -> web.StreamResponse:
-        """Stream WAV, injecting RIFF INFO only when caching."""
-        collected: list[bytes] = []
-
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": content_type,
-                "Accept-Ranges": "none",
-                "Cache-Control": "no-cache",
-            },
-        )
-        await response.prepare(request)
-
+    ) -> web.Response:
+        """Buffer WAV and return with Content-Length (browsers need it for WAV)."""
         try:
-            async for chunk in upstream.content.iter_chunked(64 * 1024):
-                await response.write(chunk)
-                if cache is not None:
-                    collected.append(chunk)
-        except ConnectionResetError:
-            _LOGGER.debug("Client disconnected while streaming %s", clip_id)
-            collected.clear()
+            raw = await upstream.read()
+        except Exception:
+            _LOGGER.exception("Failed to read upstream WAV for %s", clip_id)
+            return web.Response(status=502, text="Upstream read failed")
         finally:
             upstream.close()
 
-        if cache is not None and collected:
-            raw = b"".join(collected)
-            tagged = _inject_riff_info(raw, title, artist)
+        # Inject RIFF INFO metadata
+        tagged = _inject_riff_info(raw, title, artist)
+
+        if cache is not None:
             await self._save_to_cache_bytes(cache, clip_id, "wav", tagged)
 
-        return response
+        return web.Response(
+            body=tagged,
+            content_type=content_type,
+        )
 
     @staticmethod
     async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, chunks: list[bytes]) -> None:
