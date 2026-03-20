@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v1.4.0 (2026-03-20)
+
+### Bug Fixes
+
+- Parenthesise except clauses and register proxy view once
+  ([`897e801`](https://github.com/teh-hippo/ha-suno/commit/897e801a42b9b2f9f8adbe23fea5097b72065de2))
+
+- Resolve playlist clips and uncached songs via proxy fallback
+  ([`4f835a9`](https://github.com/teh-hippo/ha-suno/commit/4f835a9eddb751839ac729ba00ee5e84cd3b7e1f))
+
+### Features
+
+- Add local audio cache and WAV quality support
+  ([`121ffef`](https://github.com/teh-hippo/ha-suno/commit/121ffef7b6dae52be4e5904bc173dc6c91364f72))
+
+- Inject ID3 metadata via local proxy for Sonos display
+  ([`1870945`](https://github.com/teh-hippo/ha-suno/commit/187094578737bb673bcb912500656b5e7767da21))
+
+### Testing
+
+- Fill coverage gaps to 97% for cache and proxy
+  ([`0612055`](https://github.com/teh-hippo/ha-suno/commit/0612055ee3e64c4fe910af67d06bdbaeefd6ad40))
+
+
 ## v1.3.4 (2026-03-20)
 
 ### Bug Fixes
