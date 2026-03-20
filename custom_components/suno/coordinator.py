@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -65,6 +66,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
 
             playlists: list[SunoPlaylist] = []
             try:
+                await asyncio.sleep(1.0)
                 playlists = await self.client.get_playlists()
                 _LOGGER.debug("Fetched %d playlists", len(playlists))
             except Exception:
@@ -72,6 +74,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
 
             credits: SunoCredits | None = None
             try:
+                await asyncio.sleep(1.0)
                 credits = await self.client.get_credits()
             except Exception:
                 _LOGGER.warning("Could not fetch credits, skipping", exc_info=True)

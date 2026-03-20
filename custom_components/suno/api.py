@@ -218,6 +218,8 @@ class SunoClient:
             if len(clips) < FEED_PAGE_SIZE:
                 break
             page += 1
+            # Rate limit: avoid hammering the API
+            await asyncio.sleep(1.0)
         return all_clips
 
     async def get_playlists(self) -> list[SunoPlaylist]:
@@ -351,6 +353,10 @@ class SunoClient:
                 if resp.status == 401 or resp.status == 403:
                     msg = f"Suno API auth failed with status {resp.status}"
                     raise SunoAuthError(msg)
+                if resp.status == 429:
+                    _LOGGER.warning("Rate limited by Suno API, backing off")
+                    msg = "Rate limited by Suno API.  Try again later."
+                    raise SunoApiError(msg)
                 if resp.status != 200:
                     text = await resp.text()
                     msg = f"Suno API returned {resp.status}: {text[:200]}"
