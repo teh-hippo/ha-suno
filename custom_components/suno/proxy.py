@@ -15,7 +15,7 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN
+from .const import CDN_BASE_URL, DOMAIN
 from .coordinator import SunoCoordinator
 from .models import SunoClip
 
@@ -77,17 +77,17 @@ class SunoMediaProxyView(HomeAssistantView):
     async def get(self, request: web.Request, clip_id: str) -> web.StreamResponse:
         """Stream the MP3 with injected ID3 tags."""
         clip = self._find_clip(clip_id)
-        if clip is None:
-            return web.Response(status=404, text="Clip not found")
 
-        id3_header = _build_id3_header(
-            title=clip.title,
-            artist=clip.tags or "Suno",
-        )
+        # Build ID3 header from cached metadata, or use defaults
+        title = clip.title if clip else "Suno"
+        artist = (clip.tags if clip else None) or "Suno"
+        audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
+
+        id3_header = _build_id3_header(title=title, artist=artist)
 
         session = async_get_clientsession(self.hass)
         try:
-            upstream = await session.get(clip.audio_url)
+            upstream = await session.get(audio_url)
         except Exception:
             _LOGGER.exception("Failed to fetch upstream MP3 for %s", clip_id)
             return web.Response(status=502, text="Upstream fetch failed")

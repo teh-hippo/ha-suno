@@ -331,8 +331,8 @@ async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: Asyn
     assert result.mime_type == "audio/mpeg"
 
 
-async def test_resolve_media_not_found(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Resolving a nonexistent clip raises BrowseError."""
+async def test_resolve_media_unknown_clip(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Resolving a clip not in cache still returns a proxy URL."""
     entry = make_entry()
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
@@ -340,8 +340,9 @@ async def test_resolve_media_not_found(hass: HomeAssistant, mock_suno_client: As
     source = SunoMediaSource(hass)
     item = MediaSourceItem(hass, "suno", "clip/nonexistent", None)
 
-    with pytest.raises(BrowseError, match="not found"):
-        await source.async_resolve_media(item)
+    result = await source.async_resolve_media(item)
+    assert result.url == "/api/suno/media/nonexistent"
+    assert result.mime_type == "audio/mpeg"
 
 
 async def test_resolve_media_bad_identifier(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

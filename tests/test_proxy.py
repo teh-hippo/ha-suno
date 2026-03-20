@@ -169,12 +169,15 @@ async def test_view_finds_clip_in_liked(hass: HomeAssistant, mock_suno_client: A
     assert clip.title == "Test Song Alpha"
 
 
-async def test_view_returns_404_for_missing_clip(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
-    """GET request for a missing clip returns HTTP 404."""
+async def test_view_falls_back_for_uncached_clip(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """GET for a clip not in cache attempts CDN fetch (returns 502 if CDN fails)."""
     entry = make_entry()
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/nonexistent-clip")
-    assert resp.status == 404
+    # Proxy tries CDN but it fails for a fake ID
+    assert resp.status == 502

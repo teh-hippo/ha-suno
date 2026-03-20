@@ -100,24 +100,12 @@ class SunoMediaSource(MediaSource):
         if not result:
             raise BrowseError("Suno integration not configured")
 
-        _, coordinator = result
-        data: SunoData = coordinator.data
-
-        # Search all clips and liked clips
-        for clip in data.clips:
-            if clip.id == clip_id:
-                return PlayMedia(
-                    url=f"/api/suno/media/{clip_id}",
-                    mime_type="audio/mpeg",
-                )
-        for clip in data.liked_clips:
-            if clip.id == clip_id:
-                return PlayMedia(
-                    url=f"/api/suno/media/{clip_id}",
-                    mime_type="audio/mpeg",
-                )
-
-        raise BrowseError(f"Clip {clip_id} not found in library")
+        # Always resolve via the proxy.  Playlist clips may not be in the
+        # coordinator cache, but the proxy can still stream them from CDN.
+        return PlayMedia(
+            url=f"/api/suno/media/{clip_id}",
+            mime_type="audio/mpeg",
+        )
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the Suno library."""
