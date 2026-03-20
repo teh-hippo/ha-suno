@@ -33,11 +33,10 @@ async def test_coordinator_successful_update(hass: HomeAssistant, mock_suno_clie
     data = coordinator.data
 
     assert len(data.clips) == 2
-    assert len(data.playlists) == 1
+    assert len(data.playlists) == 0
     assert data.credits is not None
     assert data.credits.credits_left == 1500
     mock_suno_client.get_all_songs.assert_awaited()
-    mock_suno_client.get_playlists.assert_awaited()
     mock_suno_client.get_credits.assert_awaited()
 
 
@@ -72,7 +71,7 @@ async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistan
 async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Coordinator handles empty library gracefully."""
     mock_suno_client.get_all_songs.return_value = []
-    mock_suno_client.get_playlists.return_value = []
+    # playlists endpoint not available yet
     mock_suno_client.get_credits.return_value = sample_credits()
 
     entry = make_entry()
@@ -82,19 +81,6 @@ async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: 
     coordinator: SunoCoordinator = entry.runtime_data
     assert coordinator.data.clips == []
     assert coordinator.data.playlists == []
-
-
-async def test_coordinator_playlist_failure_graceful(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Playlist fetch failure is swallowed; clips and credits still available."""
-    mock_suno_client.get_playlists.side_effect = Exception("Playlist error")
-    entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
-        await setup_entry(hass, entry)
-
-    coordinator: SunoCoordinator = entry.runtime_data
-    assert len(coordinator.data.clips) == 2
-    assert coordinator.data.playlists == []
-    assert coordinator.data.credits is not None
 
 
 async def test_coordinator_credits_failure_graceful(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

@@ -64,14 +64,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             clips = await self.client.get_all_songs()
             _LOGGER.debug("Fetched %d clips from Suno library", len(clips))
 
-            playlists: list[SunoPlaylist] = []
-            try:
-                await asyncio.sleep(1.0)
-                playlists = await self.client.get_playlists()
-                _LOGGER.debug("Fetched %d playlists", len(playlists))
-            except Exception:
-                _LOGGER.warning("Could not fetch playlists, skipping", exc_info=True)
-
             credits: SunoCredits | None = None
             try:
                 await asyncio.sleep(1.0)
@@ -79,7 +71,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             except Exception:
                 _LOGGER.warning("Could not fetch credits, skipping", exc_info=True)
 
-            return SunoData(clips=clips, playlists=playlists, credits=credits)
+            return SunoData(clips=clips, credits=credits)
 
         except SunoAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err

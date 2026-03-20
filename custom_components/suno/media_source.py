@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.media_player import BrowseError, MediaClass, MediaType  # type: ignore[attr-defined]
+from homeassistant.components.media_player import BrowseError, MediaClass  # type: ignore[attr-defined]
 from homeassistant.components.media_source import (
     BrowseMediaSource,
     MediaSource,
@@ -21,11 +21,9 @@ from .api import SunoClip
 from .const import (
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
-    CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
-    DEFAULT_SHOW_PLAYLISTS,
     DEFAULT_SHOW_RECENT,
     DOMAIN,
 )
@@ -48,7 +46,7 @@ def _clip_to_media(clip: SunoClip, identifier_prefix: str = "") -> BrowseMediaSo
         domain=DOMAIN,
         identifier=f"clip/{clip.id}",
         media_class=MediaClass.MUSIC,
-        media_content_type=MediaType.MUSIC,
+        media_content_type="audio/mpeg",
         title=clip.title,
         can_play=bool(clip.audio_url),
         can_expand=False,
@@ -62,7 +60,7 @@ def _folder(identifier: str, title: str, children: list[BrowseMediaSource] | Non
         domain=DOMAIN,
         identifier=identifier,
         media_class=MediaClass.DIRECTORY,
-        media_content_type=MediaType.MUSIC,
+        media_content_type="",
         title=title,
         can_play=False,
         can_expand=True,
@@ -123,11 +121,6 @@ class SunoMediaSource(MediaSource):
             return self._browse_liked(coordinator)
         if identifier == "recent":
             return await self._browse_recent(entry, coordinator)
-        if identifier == "playlists":
-            return self._browse_playlists(coordinator)
-        if identifier.startswith("playlist/"):
-            playlist_id = identifier.removeprefix("playlist/")
-            return await self._browse_playlist(coordinator, playlist_id)
         if identifier == "all":
             return self._browse_all(coordinator)
         if identifier.startswith("all/page/"):
@@ -147,9 +140,6 @@ class SunoMediaSource(MediaSource):
 
         if entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT):
             children.append(_folder("recent", "Recent"))
-
-        if entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS) and data.playlists:
-            children.append(_folder("playlists", f"Playlists ({len(data.playlists)})"))
 
         children.append(_folder("all", f"All Songs ({len(data.clips)})"))
 

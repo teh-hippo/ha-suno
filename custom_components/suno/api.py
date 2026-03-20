@@ -204,7 +204,11 @@ class SunoClient:
         data = await self._api_get(f"/api/feed/?page={page}")
         if not isinstance(data, list):
             return []
-        return [_sanitise_clip(clip) for clip in data if clip.get("status") == "complete"]
+        return [
+            _sanitise_clip(clip)
+            for clip in data
+            if clip.get("status") == "complete" and clip.get("metadata", {}).get("type") == "gen"
+        ]
 
     async def get_all_songs(self) -> list[SunoClip]:
         """Fetch all songs by paginating through the feed."""

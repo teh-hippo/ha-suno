@@ -98,7 +98,7 @@ def test_sanitise_clip_allowlist() -> None:
 
 def test_sanitise_clip_missing_fields() -> None:
     """Missing fields get safe defaults."""
-    raw: dict = {"metadata": {}}
+    raw: dict = {"metadata": {"type": "gen"}}
     clip = _sanitise_clip(raw)
     assert clip.id == ""
     assert clip.title == "Untitled"
@@ -122,7 +122,7 @@ def test_sanitise_clip_rewrites_audiopipe_url() -> None:
     raw = {
         "id": "abc-123",
         "audio_url": "https://audiopipe.suno.ai/?item_id=abc-123",
-        "metadata": {},
+        "metadata": {"type": "gen"},
     }
     clip = _sanitise_clip(raw)
     assert clip.audio_url == "https://cdn1.suno.ai/abc-123.mp3"
@@ -133,7 +133,7 @@ def test_sanitise_clip_keeps_non_audiopipe() -> None:
     raw = {
         "id": "abc-123",
         "audio_url": "https://cdn1.suno.ai/abc-123.mp3",
-        "metadata": {},
+        "metadata": {"type": "gen"},
     }
     clip = _sanitise_clip(raw)
     assert clip.audio_url == "https://cdn1.suno.ai/abc-123.mp3"
@@ -212,7 +212,7 @@ def test_all_audio_urls_are_https() -> None:
         "audio_url": "https://cdn1.suno.ai/test.mp3",
         "image_url": "https://cdn1.suno.ai/image_test.jpeg",
         "image_large_url": "https://cdn1.suno.ai/image_large_test.jpeg",
-        "metadata": {},
+        "metadata": {"type": "gen"},
     }
     clip = _sanitise_clip(raw)
     for url in [clip.audio_url, clip.image_url, clip.image_large_url]:
@@ -444,9 +444,9 @@ async def test_get_feed_success() -> None:
     client = _make_authed_client(session)
 
     raw_clips = [
-        {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {}},
-        {"id": "c2", "status": "processing", "audio_url": "", "metadata": {}},
-        {"id": "c3", "status": "complete", "audio_url": "https://cdn1.suno.ai/c3.mp3", "metadata": {}},
+        {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {"type": "gen"}},
+        {"id": "c2", "status": "processing", "audio_url": "", "metadata": {"type": "gen"}},
+        {"id": "c3", "status": "complete", "audio_url": "https://cdn1.suno.ai/c3.mp3", "metadata": {"type": "gen"}},
     ]
     session.get = MagicMock(return_value=_mock_response(200, raw_clips))
 
@@ -477,11 +477,21 @@ async def test_get_all_songs_pagination() -> None:
 
     # Page 0: 20 clips (full page), page 1: 5 clips (short → stop)
     page0 = [
-        {"id": f"p0-{i}", "status": "complete", "audio_url": f"https://cdn1.suno.ai/p0-{i}.mp3", "metadata": {}}
+        {
+            "id": f"p0-{i}",
+            "status": "complete",
+            "audio_url": f"https://cdn1.suno.ai/p0-{i}.mp3",
+            "metadata": {"type": "gen"},
+        }
         for i in range(20)
     ]
     page1 = [
-        {"id": f"p1-{i}", "status": "complete", "audio_url": f"https://cdn1.suno.ai/p1-{i}.mp3", "metadata": {}}
+        {
+            "id": f"p1-{i}",
+            "status": "complete",
+            "audio_url": f"https://cdn1.suno.ai/p1-{i}.mp3",
+            "metadata": {"type": "gen"},
+        }
         for i in range(5)
     ]
 
@@ -556,7 +566,12 @@ async def test_get_playlist_clips_dict_response() -> None:
             200,
             {
                 "clips": [
-                    {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {}},
+                    {
+                        "id": "c1",
+                        "status": "complete",
+                        "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                        "metadata": {"type": "gen"},
+                    },
                 ]
             },
         )
@@ -574,7 +589,12 @@ async def test_get_playlist_clips_list_response() -> None:
         return_value=_mock_response(
             200,
             [
-                {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {}},
+                {
+                    "id": "c1",
+                    "status": "complete",
+                    "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                    "metadata": {"type": "gen"},
+                },
             ],
         )
     )
@@ -602,7 +622,12 @@ async def test_get_playlist_clips_playlist_clips_key() -> None:
             200,
             {
                 "playlist_clips": [
-                    {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {}},
+                    {
+                        "id": "c1",
+                        "status": "complete",
+                        "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                        "metadata": {"type": "gen"},
+                    },
                 ]
             },
         )

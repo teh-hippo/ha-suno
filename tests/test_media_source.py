@@ -124,7 +124,7 @@ async def test_browse_root(hass: HomeAssistant, mock_suno_client: AsyncMock) -> 
     titles = [c.title for c in result.children]
     assert any("Liked" in t for t in titles)
     assert any("Recent" in t for t in titles)
-    assert any("Playlists" in t for t in titles)
+    # Playlists disabled until endpoint is found
     assert any("All Songs" in t for t in titles)
 
 
@@ -210,50 +210,6 @@ async def test_browse_recent_fallback_on_error(hass: HomeAssistant, mock_suno_cl
     # Falls back to cached clips
     assert "Recent" in result.title
     assert len(result.children) == 2
-
-
-async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Browsing 'playlists' shows playlist folders."""
-    entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
-        await setup_entry(hass, entry)
-
-    source = SunoMediaSource(hass)
-    item = MediaSourceItem(hass, "suno", "playlists", None)
-    result = await source.async_browse_media(item)
-
-    assert "Playlists" in result.title
-    assert len(result.children) == 1
-    assert result.children[0].identifier == "playlist/pl-001"
-
-
-async def test_browse_playlist_by_id(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Browsing a specific playlist fetches its clips."""
-    entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
-        await setup_entry(hass, entry)
-
-    source = SunoMediaSource(hass)
-    item = MediaSourceItem(hass, "suno", "playlist/pl-001", None)
-    result = await source.async_browse_media(item)
-
-    assert "My Favourites" in result.title
-    assert len(result.children) == 1
-    mock_suno_client.get_playlist_clips.assert_awaited_with("pl-001")
-
-
-async def test_browse_playlist_fetch_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Playlist fetch error returns empty folder."""
-    mock_suno_client.get_playlist_clips.side_effect = Exception("Network error")
-    entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
-        await setup_entry(hass, entry)
-
-    source = SunoMediaSource(hass)
-    item = MediaSourceItem(hass, "suno", "playlist/pl-001", None)
-    result = await source.async_browse_media(item)
-
-    assert result.children == []
 
 
 async def test_browse_all_small_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
