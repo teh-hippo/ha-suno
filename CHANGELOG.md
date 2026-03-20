@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.3.2 (2026-03-20)
+
+### Bug Fixes
+
+- Exponential backoff on 429 rate limits
+  ([`5eed88e`](https://github.com/teh-hippo/ha-suno/commit/5eed88e00379c0ccd8ac6e5e63151291d41966b8))
+
+
 ## v1.3.1 (2026-03-20)
 
 ### Performance Improvements
