@@ -21,6 +21,9 @@ CONF_SHOW_RECENT = "show_recent"
 CONF_RECENT_COUNT = "recent_count"
 CONF_SHOW_PLAYLISTS = "show_playlists"
 CONF_CACHE_TTL = "cache_ttl_minutes"
+CONF_AUDIO_QUALITY = "audio_quality"
+CONF_CACHE_ENABLED = "cache_enabled"
+CONF_CACHE_MAX_SIZE = "cache_max_size_mb"
 
 # Defaults
 DEFAULT_SHOW_LIKED = True
@@ -28,6 +31,13 @@ DEFAULT_SHOW_RECENT = True
 DEFAULT_RECENT_COUNT = 20
 DEFAULT_SHOW_PLAYLISTS = True
 DEFAULT_CACHE_TTL = 30
+DEFAULT_AUDIO_QUALITY = "standard"
+DEFAULT_CACHE_ENABLED = False
+DEFAULT_CACHE_MAX_SIZE = 500
+
+# Audio quality options
+QUALITY_STANDARD = "standard"
+QUALITY_HIGH = "high"
 
 # JWT refresh buffer (seconds before expiry to trigger refresh)
 JWT_REFRESH_BUFFER = 60

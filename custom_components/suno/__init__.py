@@ -11,10 +11,17 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SunoClient
-from .const import CONF_COOKIE, DOMAIN
+from .const import (
+    CONF_CACHE_ENABLED,
+    CONF_CACHE_MAX_SIZE,
+    CONF_COOKIE,
+    DEFAULT_CACHE_ENABLED,
+    DEFAULT_CACHE_MAX_SIZE,
+    DOMAIN,
+)
 from .coordinator import SunoCoordinator
 from .exceptions import SunoAuthError
-from .proxy import SunoMediaProxyView
+from .proxy import _SUNO_CACHE_KEY, SunoMediaProxyView
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +48,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+
+    # Initialise local audio cache if enabled
+    if entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED):
+        from .cache import SunoCache  # noqa: PLC0415
+
+        cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE))
+        await cache.async_init()
+        hass.data[_SUNO_CACHE_KEY] = cache
 
     if not hass.data.get(_VIEW_REGISTERED):
         hass.http.register_view(SunoMediaProxyView(hass))

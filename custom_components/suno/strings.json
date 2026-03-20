@@ -28,7 +28,15 @@
           "show_recent": "Show Recent folder",
           "recent_count": "Number of recent songs",
           "show_playlists": "Show Playlists folder",
-          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+          "cache_ttl_minutes": "Cache refresh interval (minutes)",
+          "audio_quality": "Audio quality",
+          "cache_enabled": "Enable local file cache",
+          "cache_max_size_mb": "Maximum cache size"
+        },
+        "data_description": {
+          "audio_quality": "Standard streams MP3.  High quality streams lossless WAV (larger files, works best with caching enabled).",
+          "cache_enabled": "Cache audio files locally for faster playback.",
+          "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
       }
     },
@@ -51,7 +59,15 @@
           "show_recent": "Show Recent folder",
           "recent_count": "Number of recent songs",
           "show_playlists": "Show Playlists folder",
-          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+          "cache_ttl_minutes": "Cache refresh interval (minutes)",
+          "audio_quality": "Audio quality",
+          "cache_enabled": "Enable local file cache",
+          "cache_max_size_mb": "Maximum cache size"
+        },
+        "data_description": {
+          "audio_quality": "Standard streams MP3.  High quality streams lossless WAV (larger files, works best with caching enabled).",
+          "cache_enabled": "Cache audio files locally for faster playback.",
+          "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
       }
     }

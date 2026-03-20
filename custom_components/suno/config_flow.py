@@ -20,6 +20,10 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -27,12 +31,18 @@ from homeassistant.helpers.selector import (
 
 from .api import SunoClient
 from .const import (
+    CONF_AUDIO_QUALITY,
+    CONF_CACHE_ENABLED,
+    CONF_CACHE_MAX_SIZE,
     CONF_CACHE_TTL,
     CONF_COOKIE,
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_CACHE_ENABLED,
+    DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CACHE_TTL,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
@@ -81,6 +91,9 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_RECENT_COUNT: DEFAULT_RECENT_COUNT,
                         CONF_SHOW_PLAYLISTS: DEFAULT_SHOW_PLAYLISTS,
                         CONF_CACHE_TTL: DEFAULT_CACHE_TTL,
+                        CONF_AUDIO_QUALITY: DEFAULT_AUDIO_QUALITY,
+                        CONF_CACHE_ENABLED: DEFAULT_CACHE_ENABLED,
+                        CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
                     },
                 )
 
@@ -176,6 +189,34 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_CACHE_TTL,
                         default=entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
                     ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
+                    vol.Required(
+                        CONF_AUDIO_QUALITY,
+                        default=entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value="standard", label="Standard (MP3)"),
+                                SelectOptionDict(value="high", label="High Quality (WAV)"),
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_CACHE_ENABLED,
+                        default=entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_CACHE_MAX_SIZE,
+                        default=entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=100,
+                            max=10000,
+                            step=100,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="MB",
+                        )
+                    ),
                 }
             ),
         )
@@ -219,6 +260,34 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                         CONF_CACHE_TTL,
                         default=self.config_entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
                     ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
+                    vol.Required(
+                        CONF_AUDIO_QUALITY,
+                        default=self.config_entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value="standard", label="Standard (MP3)"),
+                                SelectOptionDict(value="high", label="High Quality (WAV)"),
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_CACHE_ENABLED,
+                        default=self.config_entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_CACHE_MAX_SIZE,
+                        default=self.config_entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=100,
+                            max=10000,
+                            step=100,
+                            mode=NumberSelectorMode.BOX,
+                            unit_of_measurement="MB",
+                        )
+                    ),
                 }
             ),
         )

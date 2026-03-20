@@ -12,12 +12,18 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.suno.api import SunoClip, SunoCredits, SunoPlaylist
 from custom_components.suno.const import (
+    CONF_AUDIO_QUALITY,
+    CONF_CACHE_ENABLED,
+    CONF_CACHE_MAX_SIZE,
     CONF_CACHE_TTL,
     CONF_COOKIE,
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_CACHE_ENABLED,
+    DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CACHE_TTL,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
@@ -54,6 +60,9 @@ def make_entry(
             CONF_RECENT_COUNT: DEFAULT_RECENT_COUNT,
             CONF_SHOW_PLAYLISTS: DEFAULT_SHOW_PLAYLISTS,
             CONF_CACHE_TTL: DEFAULT_CACHE_TTL,
+            CONF_AUDIO_QUALITY: DEFAULT_AUDIO_QUALITY,
+            CONF_CACHE_ENABLED: DEFAULT_CACHE_ENABLED,
+            CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
         },
     )
 

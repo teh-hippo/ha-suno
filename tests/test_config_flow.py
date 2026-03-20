@@ -10,12 +10,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.suno.const import (
+    CONF_AUDIO_QUALITY,
+    CONF_CACHE_ENABLED,
+    CONF_CACHE_MAX_SIZE,
     CONF_CACHE_TTL,
     CONF_COOKIE,
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
+    DEFAULT_AUDIO_QUALITY,
+    DEFAULT_CACHE_ENABLED,
+    DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CACHE_TTL,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
@@ -65,6 +71,9 @@ async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry: AsyncMoc
     assert result["options"][CONF_RECENT_COUNT] == DEFAULT_RECENT_COUNT
     assert result["options"][CONF_SHOW_PLAYLISTS] == DEFAULT_SHOW_PLAYLISTS
     assert result["options"][CONF_CACHE_TTL] == DEFAULT_CACHE_TTL
+    assert result["options"][CONF_AUDIO_QUALITY] == DEFAULT_AUDIO_QUALITY
+    assert result["options"][CONF_CACHE_ENABLED] == DEFAULT_CACHE_ENABLED
+    assert result["options"][CONF_CACHE_MAX_SIZE] == DEFAULT_CACHE_MAX_SIZE
 
 
 async def test_user_flow_invalid_cookie(hass: HomeAssistant) -> None:
@@ -279,6 +288,9 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
                 CONF_RECENT_COUNT: 10,
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_CACHE_TTL: 60,
+                CONF_AUDIO_QUALITY: "high",
+                CONF_CACHE_ENABLED: True,
+                CONF_CACHE_MAX_SIZE: 1000,
             },
         )
     await hass.async_block_till_done()
@@ -287,6 +299,9 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
     assert result["reason"] == "reconfigure_successful"
     assert entry.options[CONF_SHOW_LIKED] is False
     assert entry.options[CONF_CACHE_TTL] == 60
+    assert entry.options[CONF_AUDIO_QUALITY] == "high"
+    assert entry.options[CONF_CACHE_ENABLED] is True
+    assert entry.options[CONF_CACHE_MAX_SIZE] == 1000
 
 
 # ── Options flow ─────────────────────────────────────────────────────
@@ -318,6 +333,9 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
             CONF_RECENT_COUNT: 30,
             CONF_SHOW_PLAYLISTS: True,
             CONF_CACHE_TTL: 15,
+            CONF_AUDIO_QUALITY: "high",
+            CONF_CACHE_ENABLED: True,
+            CONF_CACHE_MAX_SIZE: 2000,
         },
     )
 
@@ -325,3 +343,6 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
     assert result["data"][CONF_SHOW_LIKED] is False
     assert result["data"][CONF_RECENT_COUNT] == 30
     assert result["data"][CONF_CACHE_TTL] == 15
+    assert result["data"][CONF_AUDIO_QUALITY] == "high"
+    assert result["data"][CONF_CACHE_ENABLED] is True
+    assert result["data"][CONF_CACHE_MAX_SIZE] == 2000
