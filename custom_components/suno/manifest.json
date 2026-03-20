@@ -1,0 +1,12 @@
+{
+  "domain": "suno",
+  "name": "Suno",
+  "codeowners": ["@teh-hippo"],
+  "config_flow": true,
+  "dependencies": ["media_source"],
+  "documentation": "https://github.com/teh-hippo/ha-suno",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/teh-hippo/ha-suno/issues",
+  "version": "0.1.0"
+}

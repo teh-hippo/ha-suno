@@ -1,0 +1,9 @@
+{
+  "entity": {
+    "sensor": {
+      "credits": {
+        "default": "mdi:music-note-plus"
+      }
+    }
+  }
+}

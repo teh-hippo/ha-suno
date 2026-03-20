@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Suno",
+        "description": "Enter your Suno session cookie.  To get it:\n\n1. Open https://suno.com and log in\n2. Open DevTools (F12) then the Network tab\n3. Click any request to suno.com\n4. Copy the full Cookie header value from the request headers",
+        "data": {
+          "cookie": "Session cookie"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with Suno",
+        "description": "Your Suno session has expired.  Please paste a fresh cookie from your browser.",
+        "data": {
+          "cookie": "Session cookie"
+        }
+      },
+      "reconfigure": {
+        "title": "Suno settings",
+        "data": {
+          "show_liked": "Show Liked Songs folder",
+          "show_recent": "Show Recent folder",
+          "recent_count": "Number of recent songs",
+          "show_playlists": "Show Playlists folder",
+          "cache_ttl_minutes": "Cache refresh interval (minutes)"
+        }
+      }
+    },
+    "error": {
+      "invalid_cookie": "Could not authenticate.  Check your cookie is correct and not expired.",
+      "cannot_connect": "Could not connect to Suno.  Check your network connection.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Suno account is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "issues": {
+    "auth_expired": {
+      "title": "Suno authentication expired",
+      "description": "Your Suno session cookie has expired.  Open the integration settings to re-authenticate."
+    }
+  }
+}

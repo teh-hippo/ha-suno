@@ -1,0 +1,7 @@
+rules:
+  config-flow:
+    status: done
+  runtime-data:
+    status: done
+  unique-config-entry:
+    status: done

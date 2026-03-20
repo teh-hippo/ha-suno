@@ -1,0 +1,73 @@
+[project]
+name = "ha-suno"
+version = "0.1.0"
+description = "Suno.ai integration for Home Assistant"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14.2,<3.15"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["custom_components/suno/manifest.json:version"]
+build_command = ""
+commit_message = "chore(release): {version}"
+tag_format = "v{version}"
+
+[tool.semantic_release.commit_parser_options]
+patch_tags = ["fix", "perf"]
+other_allowed_tags = ["build", "chore", "ci", "docs", "style", "refactor", "test"]
+
+[tool.semantic_release.branches.master]
+match = "master"
+prerelease = false
+
+[tool.semantic_release.changelog]
+mode = "init"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.remote]
+type = "github"
+token = { env = "GITHUB_TOKEN" }
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = [
+    "homeassistant.*",
+    "pytest_homeassistant_custom_component.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+warn_return_any = false
+disable_error_code = ["arg-type", "type-arg"]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.10.6,<7.14",
+    "mypy>=1.15",
+    "pytest>=9.0.0,<9.1",
+    "pytest-asyncio>=1.3.0,<1.4",
+    "pytest-homeassistant-custom-component>=0.13.316",
+    "ruff>=0.9",
+]
