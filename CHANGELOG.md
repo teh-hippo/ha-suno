@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.1.7 (2026-03-20)
+
+### Bug Fixes
+
+- Media browser compatibility and song filtering
+  ([`530950a`](https://github.com/teh-hippo/ha-suno/commit/530950a887932e16c3afc4e4ae90fa7151d37fa4))
+
+
 ## v1.1.6 (2026-03-20)
 
 ### Bug Fixes
