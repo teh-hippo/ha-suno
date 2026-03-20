@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v1.3.3 (2026-03-20)
+
+### Bug Fixes
+
+- Use /api/playlist/me endpoint for all 5 user playlists
+  ([`90b5fa7`](https://github.com/teh-hippo/ha-suno/commit/90b5fa71c8fa6c7f1de3dc1afa7984ca9c1728f2))
+
+### Refactoring
+
+- Remove dead code, unused constants, and stale test fixtures
+  ([`7658e4a`](https://github.com/teh-hippo/ha-suno/commit/7658e4ad1aebec7495d510e111739e018af15d74))
+
+- Split api.py into models, helpers, and client
+  ([`cb5df71`](https://github.com/teh-hippo/ha-suno/commit/cb5df71f646dafb721896d4052dbd94f0ad95679))
+
+
 ## v1.3.2 (2026-03-20)
 
 ### Bug Fixes
