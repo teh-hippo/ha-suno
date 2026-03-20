@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v1.1.2 (2026-03-20)
+
+### Bug Fixes
+
+- Add parens to multi-except clauses for Python 3.13 compat
+  ([`1666ddb`](https://github.com/teh-hippo/ha-suno/commit/1666ddb1e746126b38a851671d533cff3b822993))
+
+- Format except clauses for consistent style
+  ([`fdf5f32`](https://github.com/teh-hippo/ha-suno/commit/fdf5f3232dc23c6548921abda2f41fc27cf10a48))
+
+
 ## v1.1.1 (2026-03-20)
 
 ### Bug Fixes
