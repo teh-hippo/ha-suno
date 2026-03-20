@@ -124,7 +124,7 @@ async def test_browse_root(hass: HomeAssistant, mock_suno_client: AsyncMock) -> 
     titles = [c.title for c in result.children]
     assert any("Liked" in t for t in titles)
     assert any("Recent" in t for t in titles)
-    # Playlists disabled until endpoint is found
+    assert any("Playlists" in t for t in titles)
     assert any("All Songs" in t for t in titles)
 
 

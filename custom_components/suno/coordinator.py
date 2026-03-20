@@ -26,6 +26,7 @@ class SunoData:
     """Holds all cached Suno data."""
 
     clips: list[SunoClip] = field(default_factory=list)
+    liked_clips: list[SunoClip] = field(default_factory=list)
     playlists: list[SunoPlaylist] = field(default_factory=list)
     credits: SunoCredits | None = None
 
@@ -59,10 +60,22 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
 
     async def _async_update_data(self) -> SunoData:
-        """Fetch library, playlists, and credits from Suno."""
+        """Fetch library, liked songs, playlists, and credits from Suno."""
         try:
             clips = await self.client.get_all_songs()
             _LOGGER.debug("Fetched %d clips from Suno library", len(clips))
+
+            await asyncio.sleep(1.0)
+            liked_clips = await self.client.get_liked_songs()
+            _LOGGER.debug("Fetched %d liked clips", len(liked_clips))
+
+            playlists: list[SunoPlaylist] = []
+            try:
+                await asyncio.sleep(1.0)
+                playlists = await self.client.get_playlists()
+                _LOGGER.debug("Fetched %d playlists", len(playlists))
+            except Exception:
+                _LOGGER.warning("Could not fetch playlists, skipping", exc_info=True)
 
             credits: SunoCredits | None = None
             try:
@@ -71,7 +84,12 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             except Exception:
                 _LOGGER.warning("Could not fetch credits, skipping", exc_info=True)
 
-            return SunoData(clips=clips, credits=credits)
+            return SunoData(
+                clips=clips,
+                liked_clips=liked_clips,
+                playlists=playlists,
+                credits=credits,
+            )
 
         except SunoAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err

@@ -19,12 +19,13 @@ def test_suno_data_defaults() -> None:
     """Test SunoData initialises with empty defaults."""
     data = SunoData()
     assert data.clips == []
+    assert data.liked_clips == []
     assert data.playlists == []
     assert data.credits is None
 
 
 async def test_coordinator_successful_update(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Coordinator fetches clips, playlists, and credits."""
+    """Coordinator fetches clips, liked clips, playlists, and credits."""
     entry = make_entry()
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
@@ -33,10 +34,13 @@ async def test_coordinator_successful_update(hass: HomeAssistant, mock_suno_clie
     data = coordinator.data
 
     assert len(data.clips) == 2
-    assert len(data.playlists) == 0
+    assert len(data.liked_clips) == 1
+    assert len(data.playlists) == 1
     assert data.credits is not None
     assert data.credits.credits_left == 1500
     mock_suno_client.get_all_songs.assert_awaited()
+    mock_suno_client.get_liked_songs.assert_awaited()
+    mock_suno_client.get_playlists.assert_awaited()
     mock_suno_client.get_credits.assert_awaited()
 
 
@@ -71,7 +75,8 @@ async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistan
 async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Coordinator handles empty library gracefully."""
     mock_suno_client.get_all_songs.return_value = []
-    # playlists endpoint not available yet
+    mock_suno_client.get_liked_songs.return_value = []
+    mock_suno_client.get_playlists.return_value = []
     mock_suno_client.get_credits.return_value = sample_credits()
 
     entry = make_entry()
@@ -80,6 +85,7 @@ async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: 
 
     coordinator: SunoCoordinator = entry.runtime_data
     assert coordinator.data.clips == []
+    assert coordinator.data.liked_clips == []
     assert coordinator.data.playlists == []
 
 

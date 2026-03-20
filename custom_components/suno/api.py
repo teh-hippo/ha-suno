@@ -21,7 +21,6 @@ from .const import (
     CLERK_BASE_URL,
     CLERK_JS_VERSION,
     CLERK_TOKEN_JS_VERSION,
-    FEED_PAGE_SIZE,
     JWT_REFRESH_BUFFER,
     SUNO_API_BASE_URL,
 )
@@ -181,11 +180,17 @@ class SunoClient:
         self._jwt_lock = asyncio.Lock()
         self._session_id: str | None = None
         self._user_id: str | None = None
+        self._handle: str | None = None
 
     @property
     def user_id(self) -> str | None:
         """The Suno user ID from the Clerk session."""
         return self._user_id
+
+    @property
+    def handle(self) -> str | None:
+        """The Suno profile handle, discovered from feed responses."""
+        return self._handle
 
     async def authenticate(self) -> str:
         """Authenticate with Clerk and return the user ID.
@@ -199,59 +204,114 @@ class SunoClient:
             raise SunoAuthError(msg)
         return self._user_id
 
-    async def get_feed(self, page: int = 0) -> list[SunoClip]:
-        """Fetch a page of songs from the library."""
-        data = await self._api_get(f"/api/feed/?page={page}")
-        if not isinstance(data, list):
-            return []
-        return [
+    async def get_feed(self, page: int = 0) -> tuple[list[SunoClip], bool]:
+        """Fetch a page of songs from the v2 feed.
+
+        Returns (clips, has_more).
+        """
+        data = await self._api_get(f"/api/feed/v2/?page={page}")
+        if not isinstance(data, dict):
+            return [], False
+        raw_clips = data.get("clips") or []
+        has_more = bool(data.get("has_more", False))
+
+        # Extract handle from the first clip if we don't have one yet
+        if not self._handle and raw_clips:
+            self._handle = raw_clips[0].get("handle")
+
+        clips = [
             _sanitise_clip(clip)
-            for clip in data
+            for clip in raw_clips
             if clip.get("status") == "complete" and clip.get("metadata", {}).get("type") == "gen"
         ]
+        return clips, has_more
 
     async def get_all_songs(self) -> list[SunoClip]:
-        """Fetch all songs by paginating through the feed."""
+        """Fetch all songs by paginating through the v2 feed."""
         all_clips: list[SunoClip] = []
         page = 0
         while True:
-            clips = await self.get_feed(page)
-            if not clips:
-                break
+            clips, has_more = await self.get_feed(page)
             all_clips.extend(clips)
-            if len(clips) < FEED_PAGE_SIZE:
+            if not has_more:
                 break
             page += 1
-            # Rate limit: avoid hammering the API
+            await asyncio.sleep(1.0)
+        return all_clips
+
+    async def get_liked_songs(self) -> list[SunoClip]:
+        """Fetch all liked songs using the v2 feed endpoint."""
+        all_clips: list[SunoClip] = []
+        page = 0
+        while True:
+            data = await self._api_get(f"/api/feed/v2/?is_liked=true&page={page}")
+            if not isinstance(data, dict):
+                break
+            raw_clips = data.get("clips") or []
+            has_more = bool(data.get("has_more", False))
+
+            # Extract handle from liked clips too
+            if not self._handle and raw_clips:
+                self._handle = raw_clips[0].get("handle")
+
+            clips = [_sanitise_clip(clip) for clip in raw_clips if clip.get("metadata", {}).get("type") == "gen"]
+            all_clips.extend(clips)
+            if not has_more:
+                break
+            page += 1
             await asyncio.sleep(1.0)
         return all_clips
 
     async def get_playlists(self) -> list[SunoPlaylist]:
-        """Fetch the user's playlists."""
-        data = await self._api_get("/me/v2/playlists")
-        if not isinstance(data, list):
+        """Fetch the user's playlists from the profile endpoint."""
+        if not self._handle:
+            _LOGGER.debug("No handle available, cannot fetch playlists")
             return []
+
+        seen_ids: set[str] = set()
         playlists: list[SunoPlaylist] = []
-        for item in data:
-            playlists.append(
-                SunoPlaylist(
-                    id=item.get("id", ""),
-                    name=item.get("name", "Untitled"),
-                    image_url=_fix_cdn_url(item.get("image_url")),
-                    num_clips=item.get("num_clips", 0),
-                )
+        page = 0
+        while True:
+            data = await self._api_get(
+                f"/api/profiles/{self._handle}"
+                f"?playlists_sort_by=created_at"
+                f"&clips_sort_by=created_at"
+                f"&playlists_page={page}"
             )
+            if not isinstance(data, dict):
+                break
+            raw_playlists = data.get("playlists") or []
+            if not raw_playlists:
+                break
+
+            added_new = False
+            for item in raw_playlists:
+                pl_id = item.get("id", "")
+                if pl_id and pl_id not in seen_ids:
+                    seen_ids.add(pl_id)
+                    added_new = True
+                    playlists.append(
+                        SunoPlaylist(
+                            id=pl_id,
+                            name=item.get("name", "Untitled"),
+                            image_url=_fix_cdn_url(item.get("image_url")),
+                            num_clips=item.get("num_total_results", 0),
+                        )
+                    )
+
+            if not added_new:
+                break
+            page += 1
+            await asyncio.sleep(1.0)
         return playlists
 
     async def get_playlist_clips(self, playlist_id: str) -> list[SunoClip]:
         """Fetch songs in a specific playlist."""
         data = await self._api_get(f"/api/playlist/{playlist_id}/")
-        if isinstance(data, dict):
-            clips_data = data.get("clips") or data.get("playlist_clips") or []
-        elif isinstance(data, list):
-            clips_data = data
-        else:
-            clips_data = []
+        if not isinstance(data, dict):
+            return []
+        raw_entries = data.get("playlist_clips") or []
+        clips_data = [entry.get("clip") or entry for entry in raw_entries]
         return [_sanitise_clip(clip) for clip in clips_data if clip.get("status") == "complete"]
 
     async def get_credits(self) -> SunoCredits:

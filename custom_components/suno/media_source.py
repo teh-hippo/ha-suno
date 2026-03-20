@@ -21,9 +21,11 @@ from .api import SunoClip
 from .const import (
     CONF_RECENT_COUNT,
     CONF_SHOW_LIKED,
+    CONF_SHOW_PLAYLISTS,
     CONF_SHOW_RECENT,
     DEFAULT_RECENT_COUNT,
     DEFAULT_SHOW_LIKED,
+    DEFAULT_SHOW_PLAYLISTS,
     DEFAULT_SHOW_RECENT,
     DOMAIN,
 )
@@ -100,7 +102,11 @@ class SunoMediaSource(MediaSource):
         _, coordinator = result
         data: SunoData = coordinator.data
 
+        # Search all clips and liked clips
         for clip in data.clips:
+            if clip.id == clip_id:
+                return PlayMedia(url=clip.audio_url, mime_type="audio/mpeg")
+        for clip in data.liked_clips:
             if clip.id == clip_id:
                 return PlayMedia(url=clip.audio_url, mime_type="audio/mpeg")
 
@@ -121,6 +127,11 @@ class SunoMediaSource(MediaSource):
             return self._browse_liked(coordinator)
         if identifier == "recent":
             return await self._browse_recent(entry, coordinator)
+        if identifier == "playlists":
+            return self._browse_playlists(coordinator)
+        if identifier.startswith("playlist/"):
+            playlist_id = identifier.removeprefix("playlist/")
+            return await self._browse_playlist(coordinator, playlist_id)
         if identifier == "all":
             return self._browse_all(coordinator)
         if identifier.startswith("all/page/"):
@@ -135,11 +146,14 @@ class SunoMediaSource(MediaSource):
         data: SunoData = coordinator.data
 
         if entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
-            liked_count = sum(1 for c in data.clips if c.is_liked)
+            liked_count = len(data.liked_clips)
             children.append(_folder("liked", f"Liked Songs ({liked_count})"))
 
         if entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT):
             children.append(_folder("recent", "Recent"))
+
+        if entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS) and data.playlists:
+            children.append(_folder("playlists", f"Playlists ({len(data.playlists)})"))
 
         children.append(_folder("all", f"All Songs ({len(data.clips)})"))
 
@@ -148,7 +162,7 @@ class SunoMediaSource(MediaSource):
     def _browse_liked(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
         """Show liked songs."""
         data: SunoData = coordinator.data
-        liked = [c for c in data.clips if c.is_liked]
+        liked = data.liked_clips
         children = [_clip_to_media(clip) for clip in liked]
         return _folder("liked", f"Liked Songs ({len(liked)})", children)
 
@@ -156,7 +170,7 @@ class SunoMediaSource(MediaSource):
         """Show recent songs, fetched live from page 0."""
         count = entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT)
         try:
-            clips = await coordinator.client.get_feed(0)
+            clips, _ = await coordinator.client.get_feed(0)
             clips = clips[:count]
         except Exception:
             _LOGGER.warning("Could not fetch recent songs live, falling back to cache")

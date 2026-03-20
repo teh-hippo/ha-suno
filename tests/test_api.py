@@ -439,7 +439,7 @@ async def test_ensure_jwt_refreshes_expired() -> None:
 
 
 async def test_get_feed_success() -> None:
-    """get_feed returns sanitised clips for complete songs."""
+    """get_feed returns sanitised clips for complete gen songs."""
     session = AsyncMock()
     client = _make_authed_client(session)
 
@@ -448,35 +448,71 @@ async def test_get_feed_success() -> None:
         {"id": "c2", "status": "processing", "audio_url": "", "metadata": {"type": "gen"}},
         {"id": "c3", "status": "complete", "audio_url": "https://cdn1.suno.ai/c3.mp3", "metadata": {"type": "gen"}},
     ]
-    session.get = MagicMock(return_value=_mock_response(200, raw_clips))
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
 
-    clips = await client.get_feed(0)
-    # Only 'complete' clips are returned
+    clips, has_more = await client.get_feed(0)
     assert len(clips) == 2
     assert clips[0].id == "c1"
     assert clips[1].id == "c3"
+    assert has_more is False
 
 
-async def test_get_feed_non_list_response() -> None:
-    """get_feed returns empty list for non-list response."""
+async def test_get_feed_has_more() -> None:
+    """get_feed returns has_more=True when more pages exist."""
     session = AsyncMock()
     client = _make_authed_client(session)
-    session.get = MagicMock(return_value=_mock_response(200, {"error": "unexpected"}))
 
-    clips = await client.get_feed(0)
+    raw_clips = [
+        {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": {"type": "gen"}},
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": True}))
+
+    clips, has_more = await client.get_feed(0)
+    assert len(clips) == 1
+    assert has_more is True
+
+
+async def test_get_feed_non_dict_response() -> None:
+    """get_feed returns empty list for non-dict response."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(200, []))
+
+    clips, has_more = await client.get_feed(0)
     assert clips == []
+    assert has_more is False
+
+
+async def test_get_feed_extracts_handle() -> None:
+    """get_feed stores the handle from the first clip."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    assert client._handle is None
+
+    raw_clips = [
+        {
+            "id": "c1",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+            "metadata": {"type": "gen"},
+            "handle": "my-handle",
+        },
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    await client.get_feed(0)
+    assert client._handle == "my-handle"
 
 
 # ── SunoClient.get_all_songs ────────────────────────────────────────
 
 
 async def test_get_all_songs_pagination() -> None:
-    """get_all_songs paginates through pages until short page."""
+    """get_all_songs paginates through pages until has_more is false."""
     session = AsyncMock()
     client = _make_authed_client(session)
 
-    # Page 0: 20 clips (full page), page 1: 5 clips (short → stop)
-    page0 = [
+    page0_clips = [
         {
             "id": f"p0-{i}",
             "status": "complete",
@@ -485,7 +521,7 @@ async def test_get_all_songs_pagination() -> None:
         }
         for i in range(20)
     ]
-    page1 = [
+    page1_clips = [
         {
             "id": f"p1-{i}",
             "status": "complete",
@@ -499,7 +535,10 @@ async def test_get_all_songs_pagination() -> None:
 
     def mock_get(url, **kwargs):
         nonlocal call_count
-        data = page0 if call_count == 0 else page1
+        if call_count == 0:
+            data = {"clips": page0_clips, "has_more": True}
+        else:
+            data = {"clips": page1_clips, "has_more": False}
         call_count += 1
         return _mock_response(200, data)
 
@@ -514,7 +553,7 @@ async def test_get_all_songs_empty_first_page() -> None:
     """get_all_songs with empty first page returns empty list."""
     session = AsyncMock()
     client = _make_authed_client(session)
-    session.get = MagicMock(return_value=_mock_response(200, []))
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": [], "has_more": False}))
 
     clips = await client.get_all_songs()
     assert clips == []
@@ -524,83 +563,181 @@ async def test_get_all_songs_empty_first_page() -> None:
 
 
 async def test_get_playlists_success() -> None:
-    """get_playlists returns parsed playlist objects."""
+    """get_playlists returns parsed playlist objects from the profile endpoint."""
     session = AsyncMock()
     client = _make_authed_client(session)
-    session.get = MagicMock(
-        return_value=_mock_response(
-            200,
-            [
-                {"id": "pl-1", "name": "Chill", "image_url": "https://cdn1.suno.ai/img.jpg", "num_clips": 10},
-                {"id": "pl-2", "name": "Workout", "image_url": "https://cdn2.suno.ai/img.jpg", "num_clips": 5},
-            ],
-        )
-    )
+    client._handle = "test-handle"
+
+    call_count = 0
+
+    def mock_get(url, **kwargs):
+        nonlocal call_count
+        if call_count == 0:
+            data = {
+                "playlists": [
+                    {
+                        "id": "pl-1",
+                        "name": "Chill",
+                        "image_url": "https://cdn1.suno.ai/img.jpg",
+                        "num_total_results": 10,
+                    },
+                ],
+            }
+        elif call_count == 1:
+            data = {
+                "playlists": [
+                    {
+                        "id": "pl-2",
+                        "name": "Workout",
+                        "image_url": "https://cdn2.suno.ai/img.jpg",
+                        "num_total_results": 5,
+                    },
+                ],
+            }
+        else:
+            # Return an already-seen id to signal end
+            data = {
+                "playlists": [
+                    {
+                        "id": "pl-2",
+                        "name": "Workout",
+                        "image_url": "https://cdn2.suno.ai/img.jpg",
+                        "num_total_results": 5,
+                    },
+                ],
+            }
+        call_count += 1
+        return _mock_response(200, data)
+
+    session.get = mock_get
 
     playlists = await client.get_playlists()
     assert len(playlists) == 2
     assert playlists[0].name == "Chill"
+    assert playlists[0].num_clips == 10
     # cdn2 URL should be rewritten to cdn1
     assert "cdn1" in playlists[1].image_url
 
 
-async def test_get_playlists_non_list() -> None:
-    """get_playlists returns empty list for non-list response."""
+async def test_get_playlists_no_handle() -> None:
+    """get_playlists returns empty list when no handle is available."""
     session = AsyncMock()
     client = _make_authed_client(session)
+    client._handle = None
+
+    playlists = await client.get_playlists()
+    assert playlists == []
+
+
+async def test_get_playlists_non_dict() -> None:
+    """get_playlists returns empty list for non-dict response."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    client._handle = "test-handle"
     session.get = MagicMock(return_value=_mock_response(200, None))
 
     playlists = await client.get_playlists()
     assert playlists == []
 
 
+async def test_get_playlists_deduplicates() -> None:
+    """get_playlists deduplicates playlists by id."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    client._handle = "test-handle"
+
+    # Always return the same playlist (simulates duplicate responses)
+    session.get = MagicMock(
+        return_value=_mock_response(
+            200,
+            {
+                "playlists": [
+                    {
+                        "id": "pl-1",
+                        "name": "Chill",
+                        "image_url": "https://cdn1.suno.ai/img.jpg",
+                        "num_total_results": 10,
+                    },
+                ],
+            },
+        )
+    )
+
+    playlists = await client.get_playlists()
+    # Should stop after seeing only duplicates on the second page
+    assert len(playlists) == 1
+
+
 # ── SunoClient.get_playlist_clips ────────────────────────────────────
 
 
 async def test_get_playlist_clips_dict_response() -> None:
-    """get_playlist_clips handles dict response with clips key."""
+    """get_playlist_clips handles dict response with playlist_clips key."""
     session = AsyncMock()
     client = _make_authed_client(session)
     session.get = MagicMock(
         return_value=_mock_response(
             200,
             {
-                "clips": [
+                "playlist_clips": [
                     {
-                        "id": "c1",
-                        "status": "complete",
-                        "audio_url": "https://cdn1.suno.ai/c1.mp3",
-                        "metadata": {"type": "gen"},
+                        "clip": {
+                            "id": "c1",
+                            "status": "complete",
+                            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                            "metadata": {"type": "gen"},
+                        },
                     },
-                ]
+                ],
+                "name": "Test Playlist",
+                "id": "pl-1",
+                "num_total_results": 1,
             },
         )
     )
 
     clips = await client.get_playlist_clips("pl-1")
     assert len(clips) == 1
+    assert clips[0].id == "c1"
 
 
-async def test_get_playlist_clips_list_response() -> None:
-    """get_playlist_clips handles list response."""
+async def test_get_playlist_clips_filters_incomplete() -> None:
+    """get_playlist_clips filters out non-complete clips."""
     session = AsyncMock()
     client = _make_authed_client(session)
     session.get = MagicMock(
         return_value=_mock_response(
             200,
-            [
-                {
-                    "id": "c1",
-                    "status": "complete",
-                    "audio_url": "https://cdn1.suno.ai/c1.mp3",
-                    "metadata": {"type": "gen"},
-                },
-            ],
+            {
+                "playlist_clips": [
+                    {
+                        "clip": {
+                            "id": "c1",
+                            "status": "complete",
+                            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                            "metadata": {"type": "gen"},
+                        },
+                    },
+                    {
+                        "clip": {
+                            "id": "c2",
+                            "status": "processing",
+                            "audio_url": "",
+                            "metadata": {"type": "gen"},
+                        },
+                    },
+                ],
+            },
         )
     )
 
     clips = await client.get_playlist_clips("pl-1")
     assert len(clips) == 1
+    assert clips[0].id == "c1"
+
+    clips = await client.get_playlist_clips("pl-1")
+    assert len(clips) == 1
+    assert clips[0].id == "c1"
 
 
 async def test_get_playlist_clips_empty() -> None:
@@ -613,28 +750,101 @@ async def test_get_playlist_clips_empty() -> None:
     assert clips == []
 
 
-async def test_get_playlist_clips_playlist_clips_key() -> None:
-    """get_playlist_clips handles 'playlist_clips' key in dict response."""
+async def test_get_playlist_clips_empty_playlist() -> None:
+    """get_playlist_clips returns empty for playlist with no clips."""
     session = AsyncMock()
     client = _make_authed_client(session)
     session.get = MagicMock(
         return_value=_mock_response(
             200,
             {
-                "playlist_clips": [
-                    {
-                        "id": "c1",
-                        "status": "complete",
-                        "audio_url": "https://cdn1.suno.ai/c1.mp3",
-                        "metadata": {"type": "gen"},
-                    },
-                ]
+                "playlist_clips": [],
+                "name": "Empty Playlist",
+                "id": "pl-1",
+                "num_total_results": 0,
             },
         )
     )
 
     clips = await client.get_playlist_clips("pl-1")
+    assert clips == []
+
+
+# ── SunoClient.get_liked_songs ──────────────────────────────────────
+
+
+async def test_get_liked_songs_success() -> None:
+    """get_liked_songs returns liked gen clips."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    raw_clips = [
+        {
+            "id": "c1",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c1.mp3",
+            "metadata": {"type": "gen"},
+            "is_liked": True,
+            "handle": "my-handle",
+        },
+        {
+            "id": "c2",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c2.mp3",
+            "metadata": {"type": "upload"},
+            "is_liked": True,
+        },
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    clips = await client.get_liked_songs()
+    # Only type=gen clips are returned
     assert len(clips) == 1
+    assert clips[0].id == "c1"
+    assert client._handle == "my-handle"
+
+
+async def test_get_liked_songs_pagination() -> None:
+    """get_liked_songs paginates until has_more is false."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    call_count = 0
+
+    def mock_get(url, **kwargs):
+        nonlocal call_count
+        if call_count == 0:
+            data = {
+                "clips": [
+                    {
+                        "id": "c1",
+                        "status": "complete",
+                        "audio_url": "https://cdn1.suno.ai/c1.mp3",
+                        "metadata": {"type": "gen"},
+                    }
+                ],
+                "has_more": True,
+            }
+        else:
+            data = {
+                "clips": [
+                    {
+                        "id": "c2",
+                        "status": "complete",
+                        "audio_url": "https://cdn1.suno.ai/c2.mp3",
+                        "metadata": {"type": "gen"},
+                    }
+                ],
+                "has_more": False,
+            }
+        call_count += 1
+        return _mock_response(200, data)
+
+    session.get = mock_get
+
+    clips = await client.get_liked_songs()
+    assert len(clips) == 2
+    assert call_count == 2
 
 
 # ── SunoClient.get_credits ──────────────────────────────────────────
@@ -745,7 +955,7 @@ async def test_client_cookie_only_sent_to_clerk() -> None:
                 }
             )
         else:
-            mock_resp.json = AsyncMock(return_value=[])
+            mock_resp.json = AsyncMock(return_value={"clips": [], "has_more": False})
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         return mock_resp
