@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.1.5 (2026-03-20)
+
+### Bug Fixes
+
+- Parenthesise all multi-except clauses (Python 3.13 compat)
+  ([`d607da6`](https://github.com/teh-hippo/ha-suno/commit/d607da6c557682e27b0ef7aa1f86a72085c2f7d3))
+
+
 ## v1.1.4 (2026-03-20)
 
 ### Bug Fixes
