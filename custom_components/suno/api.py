@@ -11,13 +11,11 @@ import base64
 import json
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from aiohttp import ClientSession
 
 from .const import (
-    CDN_BASE_URL,
     CLERK_BASE_URL,
     CLERK_JS_VERSION,
     CLERK_TOKEN_JS_VERSION,
@@ -27,81 +25,22 @@ from .const import (
     SUNO_API_BASE_URL,
 )
 from .exceptions import SunoApiError, SunoAuthError
+from .helpers import _fix_cdn_url, _sanitise_clip
+from .models import SunoClip, SunoCredits, SunoPlaylist
+
+# Re-export models and helpers so existing ``from .api import ...`` still works.
+__all__ = [
+    "SunoClient",
+    "SunoClip",
+    "SunoCredits",
+    "SunoPlaylist",
+    "_decode_jwt_exp",
+    "_fix_cdn_url",
+    "_normalise_token",
+    "_sanitise_clip",
+]
 
 _LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
-class SunoClip:
-    """A song/clip from the Suno library."""
-
-    id: str
-    title: str
-    audio_url: str
-    image_url: str
-    image_large_url: str
-    is_liked: bool
-    status: str
-    created_at: str
-    tags: str
-    duration: float
-    clip_type: str
-    has_vocal: bool
-
-
-@dataclass
-class SunoCredits:
-    """Credit balance information."""
-
-    credits_left: int
-    monthly_limit: int
-    monthly_usage: int
-    period: str | None
-
-
-@dataclass
-class SunoPlaylist:
-    """A playlist from the user's library."""
-
-    id: str
-    name: str
-    image_url: str
-    num_clips: int
-
-
-def _fix_cdn_url(url: str | None) -> str:
-    """Rewrite cdn2.suno.ai URLs to cdn1.suno.ai (cdn2 returns 403)."""
-    if not url:
-        return ""
-    return url.replace("cdn2.suno.ai", "cdn1.suno.ai")
-
-
-def _sanitise_clip(raw: dict[str, Any]) -> SunoClip:
-    """Build a SunoClip from raw API data, keeping only allowlisted fields."""
-    metadata = raw.get("metadata") or {}
-    image_url = _fix_cdn_url(raw.get("image_url"))
-    image_large_url = _fix_cdn_url(raw.get("image_large_url"))
-
-    # Prefer cdn1 direct MP3 URL over audiopipe
-    audio_url = raw.get("audio_url", "")
-    clip_id = raw.get("id", "")
-    if audio_url and "audiopipe" in audio_url and clip_id:
-        audio_url = f"{CDN_BASE_URL}/{clip_id}.mp3"
-
-    return SunoClip(
-        id=clip_id,
-        title=raw.get("title", "Untitled"),
-        audio_url=audio_url,
-        image_url=image_url,
-        image_large_url=image_large_url,
-        is_liked=raw.get("is_liked", False),
-        status=raw.get("status", "unknown"),
-        created_at=raw.get("created_at", ""),
-        tags=metadata.get("tags", ""),
-        duration=metadata.get("duration") or 0.0,
-        clip_type=metadata.get("type", ""),
-        has_vocal=metadata.get("has_vocal", False),
-    )
 
 
 def _decode_jwt_exp(token: str) -> int:
@@ -149,17 +88,11 @@ class SunoClient:
         self._jwt_lock = asyncio.Lock()
         self._session_id: str | None = None
         self._user_id: str | None = None
-        self._handle: str | None = None
 
     @property
     def user_id(self) -> str | None:
         """The Suno user ID from the Clerk session."""
         return self._user_id
-
-    @property
-    def handle(self) -> str | None:
-        """The Suno profile handle, discovered from feed responses."""
-        return self._handle
 
     async def authenticate(self) -> str:
         """Authenticate with Clerk and return the user ID.
@@ -183,10 +116,6 @@ class SunoClient:
             return [], False
         raw_clips = data.get("clips") or []
         has_more = bool(data.get("has_more", False))
-
-        # Extract handle from the first clip if we don't have one yet
-        if not self._handle and raw_clips:
-            self._handle = raw_clips[0].get("handle")
 
         clips = [
             _sanitise_clip(clip)
@@ -221,10 +150,6 @@ class SunoClient:
             raw_clips = data.get("clips") or []
             has_more = bool(data.get("has_more", False))
 
-            # Extract handle from liked clips too
-            if not self._handle and raw_clips:
-                self._handle = raw_clips[0].get("handle")
-
             clips = [
                 _sanitise_clip(clip)
                 for clip in raw_clips
@@ -240,46 +165,23 @@ class SunoClient:
         return all_clips
 
     async def get_playlists(self) -> list[SunoPlaylist]:
-        """Fetch the user's playlists from the profile endpoint."""
-        if not self._handle:
-            _LOGGER.debug("No handle available, cannot fetch playlists")
+        """Fetch the user's playlists via /api/playlist/me."""
+        data = await self._api_get("/api/playlist/me?page=1&show_trashed=false&show_sharelist=false")
+        if not isinstance(data, dict):
             return []
-
-        seen_ids: set[str] = set()
+        raw_playlists = data.get("playlists") or []
         playlists: list[SunoPlaylist] = []
-        page = 0
-        while page < MAX_PAGES:
-            data = await self._api_get(
-                f"/api/profiles/{self._handle}"
-                f"?playlists_sort_by=created_at"
-                f"&clips_sort_by=created_at"
-                f"&playlists_page={page}"
-            )
-            if not isinstance(data, dict):
-                break
-            raw_playlists = data.get("playlists") or []
-            if not raw_playlists:
-                break
-
-            added_new = False
-            for item in raw_playlists:
-                pl_id = item.get("id", "")
-                if pl_id and pl_id not in seen_ids:
-                    seen_ids.add(pl_id)
-                    added_new = True
-                    playlists.append(
-                        SunoPlaylist(
-                            id=pl_id,
-                            name=item.get("name", "Untitled"),
-                            image_url=_fix_cdn_url(item.get("image_url")),
-                            num_clips=item.get("num_total_results", 0),
-                        )
+        for item in raw_playlists:
+            pl_id = item.get("id", "")
+            if pl_id:
+                playlists.append(
+                    SunoPlaylist(
+                        id=pl_id,
+                        name=item.get("name", "Untitled"),
+                        image_url=_fix_cdn_url(item.get("image_url")),
+                        num_clips=item.get("num_total_results", 0),
                     )
-
-            if not added_new:
-                break
-            page += 1
-            await asyncio.sleep(0.25)
+                )
         return playlists
 
     async def get_playlist_clips(self, playlist_id: str) -> list[SunoClip]:
