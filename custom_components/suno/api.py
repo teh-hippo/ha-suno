@@ -416,28 +416,47 @@ class SunoClient:
             return self._jwt
 
     async def _api_get(self, path: str) -> Any:
-        """Make an authenticated GET request to the Suno API."""
-        jwt = await self._ensure_jwt()
-        url = f"{SUNO_API_BASE_URL}{path}"
-        headers = {"Authorization": f"Bearer {jwt}"}
+        """Make an authenticated GET request to the Suno API with retry on 429."""
+        max_retries = 3
+        base_delay = 2.0
 
-        _LOGGER.debug("GET %s", path)
-        try:
-            async with self._session.get(url, headers=headers) as resp:
-                if resp.status == 401 or resp.status == 403:
-                    msg = f"Suno API auth failed with status {resp.status}"
-                    raise SunoAuthError(msg)
-                if resp.status == 429:
-                    _LOGGER.warning("Rate limited by Suno API, backing off")
-                    msg = "Rate limited by Suno API.  Try again later."
-                    raise SunoApiError(msg)
-                if resp.status != 200:
-                    text = await resp.text()
-                    msg = f"Suno API returned {resp.status}: {text[:200]}"
-                    raise SunoApiError(msg)
-                return await resp.json()
-        except SunoApiError, SunoAuthError:
-            raise
-        except Exception as err:
-            msg = f"Suno API request failed: {err}"
-            raise SunoApiError(msg) from err
+        for attempt in range(max_retries + 1):
+            jwt = await self._ensure_jwt()
+            url = f"{SUNO_API_BASE_URL}{path}"
+            headers = {"Authorization": f"Bearer {jwt}"}
+
+            _LOGGER.debug("GET %s (attempt %d)", path, attempt + 1)
+            try:
+                async with self._session.get(url, headers=headers) as resp:
+                    if resp.status == 401 or resp.status == 403:
+                        msg = f"Suno API auth failed with status {resp.status}"
+                        raise SunoAuthError(msg)
+                    if resp.status == 429:
+                        if attempt < max_retries:
+                            delay = base_delay * (2**attempt)
+                            retry_after = resp.headers.get("Retry-After")
+                            if retry_after and retry_after.isdigit():
+                                delay = max(delay, float(retry_after))
+                            _LOGGER.warning(
+                                "Rate limited by Suno API, retrying in %.1fs (attempt %d/%d)",
+                                delay,
+                                attempt + 1,
+                                max_retries,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        msg = "Rate limited by Suno API after retries"
+                        raise SunoApiError(msg)
+                    if resp.status != 200:
+                        text = await resp.text()
+                        msg = f"Suno API returned {resp.status}: {text[:200]}"
+                        raise SunoApiError(msg)
+                    return await resp.json()
+            except SunoApiError, SunoAuthError:
+                raise
+            except Exception as err:
+                msg = f"Suno API request failed: {err}"
+                raise SunoApiError(msg) from err
+
+        msg = "Suno API request failed after retries"
+        raise SunoApiError(msg)

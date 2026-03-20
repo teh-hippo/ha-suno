@@ -28,12 +28,13 @@ def _make_jwt(exp: int = 9999999999) -> str:
     return f"header.{payload}.signature"
 
 
-def _mock_response(status: int = 200, json_data=None, text: str = ""):
+def _mock_response(status: int = 200, json_data=None, text: str = "", headers: dict | None = None):
     """Create a mock aiohttp response as an async context manager."""
     resp = AsyncMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_data)
     resp.text = AsyncMock(return_value=text)
+    resp.headers = headers or {}
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=False)
     return resp
@@ -1015,13 +1016,67 @@ async def test_api_get_500_raises_api_error() -> None:
         await client._api_get("/api/test")
 
 
-async def test_api_get_429_raises_api_error() -> None:
-    """429 rate limit from Suno API raises SunoApiError."""
+async def test_api_get_429_retries_with_backoff() -> None:
+    """429 rate limit triggers exponential backoff retries."""
     session = AsyncMock()
     client = _make_authed_client(session)
+
+    call_count = 0
+
+    def make_response(*args: object, **kwargs: object) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            return _mock_response(429)
+        return _mock_response(200, {"result": "ok"})
+
+    session.get = MagicMock(side_effect=make_response)
+
+    result = await client._api_get("/api/test")
+    assert result == {"result": "ok"}
+    assert call_count == 3
+
+
+async def test_api_get_429_exhausts_retries() -> None:
+    """429 on all retries raises SunoApiError."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
     session.get = MagicMock(return_value=_mock_response(429))
 
-    with pytest.raises(SunoApiError, match="Rate limited"):
+    with pytest.raises(SunoApiError, match="after retries"):
+        await client._api_get("/api/test")
+
+
+async def test_api_get_429_respects_retry_after_header() -> None:
+    """429 with Retry-After header uses that delay."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    call_count = 0
+
+    def make_response(*args: object, **kwargs: object) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _mock_response(429, headers={"Retry-After": "5"})
+        return _mock_response(200, {"result": "ok"})
+
+    session.get = MagicMock(side_effect=make_response)
+
+    result = await client._api_get("/api/test")
+    assert result == {"result": "ok"}
+    assert call_count == 2
+
+
+async def test_api_get_401_not_retried() -> None:
+    """Auth errors (401) are not retried."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    session.get = MagicMock(return_value=_mock_response(401))
+
+    with pytest.raises(SunoAuthError, match="auth failed"):
         await client._api_get("/api/test")
 
 
