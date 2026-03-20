@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.3.0 (2026-03-20)
+
+### Features
+
+- Quality scale compliance (Bronze/Silver/Gold)
+  ([`6849aba`](https://github.com/teh-hippo/ha-suno/commit/6849aba5d453f32b797bf428bf356b80cf94af21))
+
+
 ## v1.2.1 (2026-03-20)
 
 ### Bug Fixes
