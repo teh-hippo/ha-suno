@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.1.4 (2026-03-20)
+
+### Bug Fixes
+
+- Add translations/en.json for config flow rendering
+  ([`1e69cea`](https://github.com/teh-hippo/ha-suno/commit/1e69cea43ce8c4c75ca00f438e055914c72fec4f))
+
+
 ## v1.1.3 (2026-03-20)
 
 ### Bug Fixes
