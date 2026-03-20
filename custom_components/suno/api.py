@@ -30,30 +30,6 @@ from .exceptions import SunoApiError, SunoAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
-# Fields we keep from clip responses (everything else is dropped for PII safety)
-_CLIP_ALLOWLIST = frozenset(
-    {
-        "id",
-        "title",
-        "audio_url",
-        "image_url",
-        "image_large_url",
-        "is_liked",
-        "status",
-        "created_at",
-        "metadata",
-    }
-)
-
-_METADATA_ALLOWLIST = frozenset(
-    {
-        "tags",
-        "duration",
-        "type",
-        "has_vocal",
-    }
-)
-
 
 @dataclass
 class SunoClip:
@@ -126,15 +102,6 @@ def _sanitise_clip(raw: dict[str, Any]) -> SunoClip:
         clip_type=metadata.get("type", ""),
         has_vocal=metadata.get("has_vocal", False),
     )
-
-
-def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Strip sensitive headers for logging."""
-    redacted = dict(headers)
-    for key in ("Authorization", "Cookie", "cookie", "authorization"):
-        if key in redacted:
-            redacted[key] = "***REDACTED***"
-    return redacted
 
 
 def _decode_jwt_exp(token: str) -> int:

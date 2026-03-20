@@ -14,7 +14,6 @@ from custom_components.suno.api import (
     _decode_jwt_exp,
     _fix_cdn_url,
     _normalise_token,
-    _redact_headers,
     _sanitise_clip,
 )
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
@@ -157,25 +156,6 @@ def test_decode_jwt_exp_no_exp_claim() -> None:
     payload = base64.urlsafe_b64encode(json.dumps({"sub": "user"}).encode()).rstrip(b"=").decode()
     token = f"header.{payload}.sig"
     assert _decode_jwt_exp(token) == 0
-
-
-def test_redact_headers() -> None:
-    """Sensitive headers are redacted."""
-    headers = {
-        "Authorization": "Bearer secret-jwt",
-        "Cookie": "secret-cookie",
-        "Content-Type": "application/json",
-    }
-    redacted = _redact_headers(headers)
-    assert redacted["Authorization"] == "***REDACTED***"
-    assert redacted["Cookie"] == "***REDACTED***"
-    assert redacted["Content-Type"] == "application/json"
-
-
-def test_redact_headers_no_sensitive() -> None:
-    """Headers without sensitive keys are unchanged."""
-    headers = {"Content-Type": "text/html"}
-    assert _redact_headers(headers) == {"Content-Type": "text/html"}
 
 
 # ── Token normalisation tests ────────────────────────────────────────

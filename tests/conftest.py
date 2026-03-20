@@ -59,12 +59,6 @@ def make_entry(
 
 
 @pytest.fixture
-def mock_entry() -> MockConfigEntry:
-    """Return a MockConfigEntry registered with HA."""
-    return make_entry()
-
-
-@pytest.fixture
 def mock_suno_client() -> AsyncMock:
     """Return a mocked SunoClient."""
     client = AsyncMock()

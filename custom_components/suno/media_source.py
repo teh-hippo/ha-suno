@@ -42,7 +42,7 @@ async def async_get_media_source(hass: HomeAssistant) -> SunoMediaSource:
     return SunoMediaSource(hass)
 
 
-def _clip_to_media(clip: SunoClip, identifier_prefix: str = "") -> BrowseMediaSource:
+def _clip_to_media(clip: SunoClip) -> BrowseMediaSource:
     """Convert a SunoClip to a browsable media item."""
     return BrowseMediaSource(
         domain=DOMAIN,

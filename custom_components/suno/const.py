@@ -10,12 +10,8 @@ CLERK_TOKEN_JS_VERSION = "4.72.0-snapshot.vc141245"
 
 # CDN (cdn1 works publicly; cdn2 returns 403)
 CDN_BASE_URL = "https://cdn1.suno.ai"
-CDN_AUDIO_URL = f"{CDN_BASE_URL}/{{clip_id}}.mp3"
-CDN_IMAGE_URL = f"{CDN_BASE_URL}/image_{{clip_id}}.jpeg"
-CDN_IMAGE_LARGE_URL = f"{CDN_BASE_URL}/image_large_{{clip_id}}.jpeg"
 
 # API pagination
-FEED_PAGE_SIZE = 20
 MAX_PAGES = 100
 
 # Config keys
@@ -32,9 +28,6 @@ DEFAULT_SHOW_RECENT = True
 DEFAULT_RECENT_COUNT = 20
 DEFAULT_SHOW_PLAYLISTS = True
 DEFAULT_CACHE_TTL = 30
-
-# Media source identifiers
-MEDIA_SOURCE_PREFIX = f"media-source://{DOMAIN}"
 
 # JWT refresh buffer (seconds before expiry to trigger refresh)
 JWT_REFRESH_BUFFER = 60
