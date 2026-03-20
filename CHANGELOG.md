@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.1.6 (2026-03-20)
+
+### Bug Fixes
+
+- Rate limit API calls to avoid 429s
+  ([`cf578a9`](https://github.com/teh-hippo/ha-suno/commit/cf578a9fec082766b8b09e57e3a4d68fe9d35f94))
+
+
 ## v1.1.5 (2026-03-20)
 
 ### Bug Fixes
