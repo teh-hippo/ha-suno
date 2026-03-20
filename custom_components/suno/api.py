@@ -146,7 +146,7 @@ def _decode_jwt_exp(token: str) -> int:
             payload_b64 += "=" * padding
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return int(payload.get("exp", 0))
-    except IndexError, ValueError, json.JSONDecodeError:
+    except (IndexError, ValueError, json.JSONDecodeError):
         return 0
 
 
@@ -356,7 +356,7 @@ class SunoClient:
                     msg = f"Suno API returned {resp.status}: {text[:200]}"
                     raise SunoApiError(msg)
                 return await resp.json()
-        except SunoApiError, SunoAuthError:
+        except (SunoApiError, SunoAuthError):
             raise
         except Exception as err:
             msg = f"Suno API request failed: {err}"
