@@ -6,7 +6,7 @@ Suno.ai integration for Home Assistant.  Browse and play your Suno music library
 
 - Browse your Suno library in the Home Assistant media browser
 - Play songs on any media player (Sonos, Apple TV, Chromecast, etc.)
-- Filter by liked songs, playlists, or recent renders
+- Filter by liked songs, playlists, or recent creations
 - Track your remaining Suno credits via a sensor
 
 ## Installation
@@ -27,42 +27,44 @@ Suno.ai integration for Home Assistant.  Browse and play your Suno music library
 
 ## Setup
 
-The integration requires a session cookie from your Suno account.  Suno does not offer a public API, so this is the only way to access your library programmatically.
+Suno does not offer a public API.  This integration uses a session token from your browser to access your library.  The token is valid for approximately 2 years.
 
-### Getting your cookie
+### Getting your session token
 
 1. Open [suno.com](https://suno.com) in your browser and log in
-2. Open Developer Tools (F12 or right-click and select Inspect)
-3. Go to the **Network** tab
-4. Click on any request to `suno.com`
-5. In the **Headers** section, find the **Cookie** header
-6. Copy the entire value
+2. Press **F12** to open Developer Tools
+3. Go to the **Application** tab
+4. In the sidebar, expand **Cookies** and click **suno.com**
+5. Find the row named `__client`
+6. Double-click its **Value** cell (starts with `eyJ...`) and copy it
 
 ### Adding the integration
 
-1. Go to Settings > Devices & Services > Add Integration
+1. Go to **Settings > Devices & Services > Add Integration**
 2. Search for "Suno"
-3. Paste your cookie into the field
-4. The integration will validate and set up
+3. Paste the token value into the field
+4. The integration will validate your token and set up
 
-The cookie contains a long-lived refresh token (~1 year expiry).  If it expires, HA will prompt you to re-authenticate.
+If the token expires, HA will show a "needs attention" badge on the integration card.  Click it to paste a fresh token.
 
 ## Media browser
 
-The media browser shows:
+Open any media player card, click "Browse Media", and select **Suno**.  You will see:
 
-- **Liked Songs** -- songs you have liked on Suno (default view)
-- **Recent** -- the most recently created songs (fetched live)
+- **Liked Songs** -- songs you have liked on Suno
+- **Recent** -- your most recently created songs (fetched live)
 - **Playlists** -- your Suno playlists
 - **All Songs** -- your complete library
 
-These can be toggled on or off in the integration options.
+These folders can be toggled on or off in the integration options.
 
-## Sensor
+## Credits sensor
 
-The integration creates a `sensor.suno_credits` entity showing your remaining credits with monthly limit and usage as attributes.
+The integration creates a `sensor.suno_credits` entity showing your remaining credits.  Monthly limit and usage are available as state attributes.
 
 ## Configuration options
+
+Available under the integration's options menu:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -70,17 +72,17 @@ The integration creates a `sensor.suno_credits` entity showing your remaining cr
 | Show Recent | On | Display the Recent folder |
 | Recent count | 20 | Number of songs in the Recent folder |
 | Show Playlists | On | Display playlists |
-| Cache refresh | 30 min | How often the library is refreshed |
+| Cache refresh | 30 min | How often the library is refreshed from Suno |
 
 ## Privacy
 
-This integration only reads your library metadata (titles, audio URLs, cover art).  It does not store or expose your email, username, or other personal information.  The cookie is stored securely within Home Assistant's config entry system.
+This integration only reads library metadata needed for playback: song titles, audio URLs, cover art, tags, and duration.  It does not store or expose your email, username, or other personal information.  The session token is stored within Home Assistant's config entry system.
 
 ## Limitations
 
-- Suno does not have an official public API.  This integration uses reverse-engineered internal endpoints that could change without notice.
+- Suno does not have an official public API.  This integration uses internal endpoints that could change without notice.
 - Song generation is not supported.  This is a playback-only integration.
-- The cookie must be manually extracted from your browser.
+- The session token must be manually copied from your browser's Developer Tools.
 
 ## Licence
 
