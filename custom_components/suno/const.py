@@ -16,6 +16,7 @@ CDN_IMAGE_LARGE_URL = f"{CDN_BASE_URL}/image_large_{{clip_id}}.jpeg"
 
 # API pagination
 FEED_PAGE_SIZE = 20
+MAX_PAGES = 100
 
 # Config keys
 CONF_COOKIE = "cookie"

@@ -22,6 +22,7 @@ from .const import (
     CLERK_JS_VERSION,
     CLERK_TOKEN_JS_VERSION,
     JWT_REFRESH_BUFFER,
+    MAX_PAGES,
     SUNO_API_BASE_URL,
 )
 from .exceptions import SunoApiError, SunoAuthError
@@ -230,7 +231,7 @@ class SunoClient:
         """Fetch all songs by paginating through the v2 feed."""
         all_clips: list[SunoClip] = []
         page = 0
-        while True:
+        while page < MAX_PAGES:
             clips, has_more = await self.get_feed(page)
             all_clips.extend(clips)
             if not has_more:
@@ -243,7 +244,7 @@ class SunoClient:
         """Fetch all liked songs using the v2 feed endpoint."""
         all_clips: list[SunoClip] = []
         page = 0
-        while True:
+        while page < MAX_PAGES:
             data = await self._api_get(f"/api/feed/v2/?is_liked=true&page={page}")
             if not isinstance(data, dict):
                 break
@@ -271,7 +272,7 @@ class SunoClient:
         seen_ids: set[str] = set()
         playlists: list[SunoPlaylist] = []
         page = 0
-        while True:
+        while page < MAX_PAGES:
             data = await self._api_get(
                 f"/api/profiles/{self._handle}"
                 f"?playlists_sort_by=created_at"

@@ -66,8 +66,12 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             _LOGGER.debug("Fetched %d clips from Suno library", len(clips))
 
             await asyncio.sleep(1.0)
-            liked_clips = await self.client.get_liked_songs()
-            _LOGGER.debug("Fetched %d liked clips", len(liked_clips))
+            liked_clips: list[SunoClip] = []
+            try:
+                liked_clips = await self.client.get_liked_songs()
+                _LOGGER.debug("Fetched %d liked clips", len(liked_clips))
+            except Exception:
+                _LOGGER.warning("Could not fetch liked songs, skipping", exc_info=True)
 
             playlists: list[SunoPlaylist] = []
             try:
