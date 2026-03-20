@@ -583,3 +583,99 @@ async def test_save_to_cache_bytes_failure_is_silent(
         resp = await client.get("/api/suno/media/clip-aaa-111")
 
     assert resp.status == 200
+
+
+# ── ffmpeg integration tests ────────────────────────────────────────
+
+
+async def test_wav_to_flac_uses_ffmpeg_manager_binary(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """_wav_to_flac should resolve the binary path via get_ffmpeg_manager."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    wav_data = _make_test_wav()
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.read = AsyncMock(return_value=wav_data)
+    mock_response.close = MagicMock()
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.get_ffmpeg_manager") as mock_ffmpeg_mgr,
+    ):
+        mock_ffmpeg_mgr.return_value.binary = "ffmpeg"
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111")
+
+    assert resp.status == 200
+    body = await resp.read()
+    assert body[:4] == b"fLaC"
+    mock_ffmpeg_mgr.assert_called_once_with(hass)
+
+
+async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """If ffmpeg returns non-zero, the proxy should return 502."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    wav_data = _make_test_wav()
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.read = AsyncMock(return_value=wav_data)
+    mock_response.close = MagicMock()
+
+    mock_proc = AsyncMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"", b"error details"))
+    mock_proc.returncode = 1
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.get_ffmpeg_manager") as mock_ffmpeg_mgr,
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+    ):
+        mock_ffmpeg_mgr.return_value.binary = "/usr/bin/ffmpeg"
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111")
+
+    assert resp.status == 502
+
+
+async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """If the ffmpeg binary is missing, the proxy should return 502."""
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+        await setup_entry(hass, entry)
+
+    wav_data = _make_test_wav()
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.read = AsyncMock(return_value=wav_data)
+    mock_response.close = MagicMock()
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.get_ffmpeg_manager") as mock_ffmpeg_mgr,
+        patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError),
+    ):
+        mock_ffmpeg_mgr.return_value.binary = "/nonexistent/ffmpeg"
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111")
+
+    assert resp.status == 502

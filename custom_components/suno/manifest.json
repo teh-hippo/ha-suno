@@ -3,7 +3,7 @@
   "name": "Suno",
   "codeowners": ["@teh-hippo"],
   "config_flow": true,
-  "dependencies": ["http", "media_source"],
+  "dependencies": ["ffmpeg", "http", "media_source"],
   "documentation": "https://github.com/teh-hippo/ha-suno",
   "integration_type": "service",
   "iot_class": "cloud_polling",

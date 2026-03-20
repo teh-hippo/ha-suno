@@ -1,12 +1,11 @@
-"""HTTP proxy that injects ID3 metadata into Suno audio streams.
+"""HTTP proxy that injects metadata into Suno audio streams.
 
 Suno's CDN serves audio files with no tags, so media players (e.g. Sonos)
 display the filename instead of the song title.  This view sits in front of
 the CDN and prepends metadata before streaming the audio data to the client.
 
-Supports both MP3 (ID3v2.4 injection) and WAV (RIFF INFO injection when
-served from cache).  WAV metadata injection requires buffering the whole
-file, so it only happens for cached files; streamed WAV is served raw.
+Supports MP3 (ID3v2.4 header injection) and high-quality mode which downloads
+WAV from the CDN and transcodes to FLAC via ffmpeg with embedded metadata.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import ClientResponse, web
+from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.components.http import HomeAssistantView  # type: ignore[attr-defined]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -251,9 +251,10 @@ class SunoMediaProxyView(HomeAssistantView):
         """Transcode WAV bytes to FLAC with metadata using ffmpeg."""
         import asyncio
 
+        ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg",
+                ffmpeg_binary,
                 "-i",
                 "pipe:0",
                 "-metadata",

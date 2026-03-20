@@ -65,6 +65,7 @@ disable_error_code = ["arg-type", "type-arg"]
 [dependency-groups]
 dev = [
     "coverage>=7.10.6,<7.14",
+    "ha-ffmpeg>=3.2.2",
     "mypy>=1.15",
     "playwright>=1.58.0",
     "pytest>=9.0.0,<9.1",
