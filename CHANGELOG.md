@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.1.1 (2026-03-20)
+
+### Bug Fixes
+
+- Improve config flow UX with step-by-step instructions
+  ([`5d559b1`](https://github.com/teh-hippo/ha-suno/commit/5d559b12ebe516c838777c3e4e8db24fa7e8608a))
+
+### Documentation
+
+- Rewrite README with simplified token setup instructions
+  ([`99a951f`](https://github.com/teh-hippo/ha-suno/commit/99a951f453599324b359a06014aea7871a914336))
+
+
 ## v1.1.0 (2026-03-20)
 
 ### Features
