@@ -11,7 +11,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SunoClient
-from .const import CONF_COOKIE
+from .const import CONF_COOKIE, DOMAIN
 from .coordinator import SunoCoordinator
 from .exceptions import SunoAuthError
 from .proxy import SunoMediaProxyView
@@ -19,6 +19,8 @@ from .proxy import SunoMediaProxyView
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+_VIEW_REGISTERED = f"{DOMAIN}_view_registered"
 
 type SunoConfigEntry = ConfigEntry[SunoCoordinator]
 
@@ -40,7 +42,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
 
     entry.runtime_data = coordinator
 
-    hass.http.register_view(SunoMediaProxyView(hass))
+    if not hass.data.get(_VIEW_REGISTERED):
+        hass.http.register_view(SunoMediaProxyView(hass))
+        hass.data[_VIEW_REGISTERED] = True
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
