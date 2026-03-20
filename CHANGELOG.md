@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.3.1 (2026-03-20)
+
+### Performance Improvements
+
+- Reduce startup delay from ~13s to ~2s
+  ([`c4e0bf8`](https://github.com/teh-hippo/ha-suno/commit/c4e0bf8684d1b872302dde0fc263f7ee5ada35e6))
+
+
 ## v1.3.0 (2026-03-20)
 
 ### Features
