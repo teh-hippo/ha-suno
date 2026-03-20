@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.4.1 (2026-03-20)
+
+### Bug Fixes
+
+- Use correct MIME type for WAV playback
+  ([`827b86f`](https://github.com/teh-hippo/ha-suno/commit/827b86faaa7d0d3791809e9b6bd60e96a7dd3312))
+
+
 ## v1.4.0 (2026-03-20)
 
 ### Bug Fixes
