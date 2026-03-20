@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.4.2 (2026-03-20)
+
+### Bug Fixes
+
+- Buffer WAV response for browser playback compatibility
+  ([`3240575`](https://github.com/teh-hippo/ha-suno/commit/324057532d99165ce0de6c84f7def395ede0dd3e))
+
+
 ## v1.4.1 (2026-03-20)
 
 ### Bug Fixes
