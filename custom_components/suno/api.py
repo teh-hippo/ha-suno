@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import time
 from typing import Any
 
@@ -302,7 +303,7 @@ class SunoClient:
                         raise SunoAuthError(msg)
                     if resp.status == 429:
                         if attempt < max_retries:
-                            delay = base_delay * (2**attempt)
+                            delay = base_delay * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                             retry_after = resp.headers.get("Retry-After")
                             if retry_after and retry_after.isdigit():
                                 delay = max(delay, float(retry_after))

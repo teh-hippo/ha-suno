@@ -67,6 +67,7 @@ def _folder(identifier: str, title: str, children: list[BrowseMediaSource] | Non
         can_play=False,
         can_expand=True,
         children=children or [],
+        children_media_class=MediaClass.MUSIC,
     )
 
 

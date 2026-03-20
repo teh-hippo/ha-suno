@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -31,6 +31,7 @@ class SunoCreditsSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
     _attr_translation_key = "credits"
     _attr_native_unit_of_measurement = "credits"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
         super().__init__(coordinator)
