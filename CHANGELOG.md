@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.5.1 (2026-03-20)
+
+### Bug Fixes
+
+- Use Suno API for WAV generation instead of direct CDN access
+  ([`ed8ee31`](https://github.com/teh-hippo/ha-suno/commit/ed8ee31d5cac988ffbbc5c869755b5fb0a47af27))
+
+
 ## v1.5.0 (2026-03-20)
 
 ### Features
