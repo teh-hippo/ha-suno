@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Suno",
-        "description": "Enter your Suno session cookie.  To get it:\n\n1. Open https://suno.com and log in\n2. Open DevTools (F12) then the Network tab\n3. Click any request to suno.com\n4. Copy the full Cookie header value from the request headers",
+        "description": "Enter your Suno session cookie.  To get it:\n\n1. Open suno.com in your browser and log in\n2. Open DevTools (F12) then the Network tab\n3. Click any request to suno.com\n4. Copy the full Cookie header value from the request headers",
         "data": {
           "cookie": "Session cookie"
         },
