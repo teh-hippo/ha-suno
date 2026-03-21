@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.7.5 (2026-03-21)
+
+### Bug Fixes
+
+- Add library size, cache size, and pending downloads diagnostics
+  ([`b6d77d5`](https://github.com/teh-hippo/ha-suno/commit/b6d77d58e7aa9025323f7617b414e81d7cd4bde4))
+
+
 ## v1.7.4 (2026-03-21)
 
 ### Bug Fixes
