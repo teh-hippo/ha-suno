@@ -6,7 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -18,6 +18,10 @@ from .api import SunoClient
 from .const import CONF_CACHE_TTL, DEFAULT_CACHE_TTL, DOMAIN
 from .exceptions import SunoAuthError
 from .models import SunoClip, SunoCredits, SunoPlaylist
+
+if TYPE_CHECKING:
+    from .cache import SunoCache
+    from .sync import SunoSync
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,8 +51,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             config_entry=entry,
         )
         self.client = client
-        self.cache: Any | None = None
-        self.sync: Any | None = None
+        self.cache: SunoCache | None = None
+        self.sync: SunoSync | None = None
 
     @property
     def device_info(self) -> DeviceInfo:

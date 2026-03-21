@@ -97,9 +97,11 @@ class SunoMediaProxyView(HomeAssistantView):
         """Return the SunoCache from the first loaded coordinator that has one."""
         entries = self.hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
-            coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
-            if coordinator is not None and coordinator.cache is not None:
-                return coordinator.cache
+            runtime_data = getattr(entry, "runtime_data", None)
+            if not isinstance(runtime_data, SunoCoordinator):
+                continue
+            if runtime_data.cache is not None:
+                return runtime_data.cache
         return None
 
     def _get_client(self) -> Any:

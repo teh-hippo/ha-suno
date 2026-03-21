@@ -89,7 +89,7 @@ class SunoClient:
             raise SunoApiError(msg)
         return SunoCredits.from_api_response(data)
 
-    def _filter_and_sanitise(self, raw_clips: list[dict]) -> list[SunoClip]:
+    def _filter_and_sanitise(self, raw_clips: list[dict[str, Any]]) -> list[SunoClip]:
         """Apply status/type/task filters and build SunoClip instances."""
         return [
             SunoClip.from_api_response(clip)

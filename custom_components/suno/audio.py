@@ -130,13 +130,13 @@ async def ensure_wav_url(client: Any, clip_id: str, polls: int = 24, interval: f
     """Poll for a WAV URL, requesting server-side generation if needed."""
     wav_url = await client.get_wav_url(clip_id)
     if wav_url:
-        return wav_url
+        return str(wav_url)
     await client.request_wav(clip_id)
     for _ in range(polls):
         await asyncio.sleep(interval)
         wav_url = await client.get_wav_url(clip_id)
         if wav_url:
-            return wav_url
+            return str(wav_url)
     return None
 
 
