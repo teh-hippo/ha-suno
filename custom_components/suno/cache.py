@@ -61,7 +61,15 @@ class SunoCache:
     async def async_init(self) -> None:
         """Create the cache directory, clean temp files, and load the index."""
         await self._hass.async_add_executor_job(self._init_dir)
-        saved = await self._store.async_load()
+        try:
+            saved = await self._store.async_load()
+        except Exception:
+            _LOGGER.warning("Cache index incompatible or corrupt, resetting")
+            storage_path = Path(self._hass.config.path(".storage", STORE_KEY))
+            await self._hass.async_add_executor_job(storage_path.unlink, True)
+            self._store = Store(self._hass, STORE_VERSION, STORE_KEY)
+            await self._hass.async_add_executor_job(self._wipe_cache_files)
+            saved = None
         if saved is not None:
             # Detect old schema (values were plain floats, now dicts)
             if saved and any(isinstance(v, (int, float)) for v in saved.values()):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -125,3 +127,24 @@ async def async_unload_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> boo
     hass.data.pop(_SYNC_KEY, None)
     hass.data.pop(_SUNO_CACHE_KEY, None)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> None:
+    """Clean up cache files and stored data when the integration is removed."""
+    # Remove cached audio files
+    cache_dir = Path(hass.config.path("suno_cache"))
+    if cache_dir.is_dir():
+        await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
+        _LOGGER.debug("Removed cache directory: %s", cache_dir)
+
+    # Remove persisted store files (.storage/suno_*)
+    storage_dir = Path(hass.config.path(".storage"))
+    if storage_dir.is_dir():
+        for store_file in await hass.async_add_executor_job(
+            lambda: list(storage_dir.glob("suno_*"))
+        ):
+            try:
+                await hass.async_add_executor_job(store_file.unlink)
+                _LOGGER.debug("Removed store file: %s", store_file.name)
+            except OSError:
+                _LOGGER.warning("Could not remove store file: %s", store_file)

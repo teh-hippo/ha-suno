@@ -83,7 +83,6 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 user_id = await client.authenticate()
-                await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
             except aiohttp.ClientError, TimeoutError:
@@ -137,7 +136,6 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 await client.authenticate()
-                await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
             except aiohttp.ClientError, TimeoutError:

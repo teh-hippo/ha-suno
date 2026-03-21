@@ -3,22 +3,16 @@
     "step": {
       "user": {
         "title": "Connect to Suno",
-        "description": "**Step 1:** Open [{suno_url}]({suno_url}) and make sure you are logged in.\n\n**Step 2:** Open Developer Tools (**F12** on Windows/Linux, **Cmd+Option+I** on Mac).\n\n**Step 3:** Go to **Application** tab > **Cookies** > **suno.com** in the sidebar.  Find the row named `__client` and copy its value (starts with `eyJ`).",
+        "description": "Paste the `__client` cookie from [{suno_url}]({suno_url}). Open DevTools → Application → Cookies → copy the `__client` value.",
         "data": {
           "cookie": "Session token"
-        },
-        "data_description": {
-          "cookie": "The __client cookie value from suno.com.  Starts with eyJ.  Valid for approximately 2 years."
         }
       },
       "reauth_confirm": {
         "title": "Re-authenticate with Suno",
-        "description": "Your Suno session has expired.  Open [{suno_url}]({suno_url}), then repeat the steps above to get a fresh token.",
+        "description": "Your session has expired. Paste a fresh `__client` cookie from [{suno_url}]({suno_url}).",
         "data": {
           "cookie": "Session token"
-        },
-        "data_description": {
-          "cookie": "The __client cookie value from suno.com.  Starts with eyJ."
         }
       },
       "reconfigure": {
@@ -32,11 +26,6 @@
           "audio_quality": "Audio quality",
           "cache_enabled": "Enable local file cache",
           "cache_max_size_mb": "Maximum cache size"
-        },
-        "data_description": {
-          "audio_quality": "Standard streams MP3.  High quality transcodes to lossless FLAC (larger files, first play triggers server-side conversion).",
-          "cache_enabled": "Cache audio files locally for faster playback.",
-          "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
       }
     },
@@ -63,16 +52,10 @@
           "cache_ttl_minutes": "Refresh interval (minutes)",
           "cache_enabled": "Enable playback cache",
           "cache_max_size_mb": "Maximum cache size"
-        },
-        "data_description": {
-          "audio_quality": "Standard streams MP3.  High transcodes to lossless FLAC (larger files, first play triggers server-side conversion).",
-          "cache_enabled": "Cache audio files locally for faster repeat playback.",
-          "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
       },
       "sync": {
         "title": "Sync settings",
-        "description": "Download FLAC files to a local directory for offline playback, Jellyfin, or backup.",
         "data": {
           "sync_enabled": "Enable sync",
           "sync_path": "Sync directory",
@@ -81,13 +64,6 @@
           "sync_recent_count": "Keep most recent songs",
           "sync_recent_days": "Keep songs from last N days",
           "sync_trash_days": "Days to keep removed files"
-        },
-        "data_description": {
-          "sync_path": "Full path where FLAC files will be saved.  Can be any mounted path (NAS, OneDrive, etc.).",
-          "sync_all_playlists": "When disabled, you can choose specific playlists on the next page.",
-          "sync_recent_count": "Leave empty to disable.  A song is kept if it matches either recent rule.",
-          "sync_recent_days": "Leave empty to disable.  A song is kept if it matches either recent rule.",
-          "sync_trash_days": "Leave empty to delete files immediately when removed from Suno."
         }
       },
       "sync_playlists": {

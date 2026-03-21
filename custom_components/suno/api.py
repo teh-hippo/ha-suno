@@ -89,12 +89,18 @@ class SunoClient:
         self._jwt_lock = asyncio.Lock()
         self._session_id: str | None = None
         self._user_id: str | None = None
+        self._display_name: str | None = None
         self._throttle_until: float = 0
 
     @property
     def user_id(self) -> str | None:
         """The Suno user ID from the Clerk session."""
         return self._user_id
+
+    @property
+    def display_name(self) -> str:
+        """Return the user's display name."""
+        return self._display_name or "Suno"
 
     async def authenticate(self) -> str:
         """Authenticate with Clerk and return the user ID.
@@ -242,6 +248,12 @@ class SunoClient:
             if session.get("id") == self._session_id:
                 user = session.get("user", {})
                 self._user_id = user.get("id")
+                first = (user.get("first_name") or "").strip()
+                last = (user.get("last_name") or "").strip()
+                if first:
+                    self._display_name = f"{first} {last}".strip() if last else first
+                else:
+                    self._display_name = (user.get("username") or "").strip() or None
                 break
 
     async def _refresh_jwt(self) -> None:

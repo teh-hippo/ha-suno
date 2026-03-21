@@ -72,6 +72,7 @@ def mock_suno_client() -> AsyncMock:
     """Return a mocked SunoClient."""
     client = AsyncMock()
     client.user_id = MOCK_USER_ID
+    client.display_name = "Suno"
     client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
     client.get_feed = AsyncMock(return_value=(sample_clips(), False))
     client.get_all_songs = AsyncMock(return_value=sample_clips())
