@@ -12,7 +12,6 @@ from custom_components.suno.const import (
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
     CONF_SYNC_LIKED,
-    CONF_SYNC_ORGANISE,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
 )
@@ -51,22 +50,17 @@ class TestClipPath:
 
     def test_date_organisation(self) -> None:
         clip = self._make_clip()
-        result = _clip_path(clip, 0, "date", "Liked Songs")
+        result = _clip_path(clip, 0)
         assert result == "2026-03-15/01 - My Song.flac"
 
-    def test_playlist_organisation(self) -> None:
+    def test_index_numbering(self) -> None:
         clip = self._make_clip()
-        result = _clip_path(clip, 2, "playlist", "Zac & Xavi")
-        assert result == "Zac & Xavi/03 - My Song.flac"
-
-    def test_flat_organisation(self) -> None:
-        clip = self._make_clip()
-        result = _clip_path(clip, 4, "flat", "anything")
-        assert result == "05 - My Song.flac"
+        result = _clip_path(clip, 2)
+        assert result == "2026-03-15/03 - My Song.flac"
 
     def test_missing_created_date(self) -> None:
         clip = self._make_clip(created=None)
-        result = _clip_path(clip, 0, "date", "Liked Songs")
+        result = _clip_path(clip, 0)
         assert result == "unknown/01 - My Song.flac"
 
 
@@ -172,7 +166,6 @@ async def test_sync_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> 
             CONF_SYNC_LIKED: True,
             CONF_SYNC_ALL_PLAYLISTS: False,
             CONF_SYNC_PLAYLISTS: [],
-            CONF_SYNC_ORGANISE: "flat",
         }
         await sync.async_sync(opts, client)
 
@@ -216,7 +209,6 @@ async def test_sync_deletes_orphaned_clips(hass: HomeAssistant, tmp_path: Path) 
             CONF_SYNC_LIKED: True,
             CONF_SYNC_ALL_PLAYLISTS: False,
             CONF_SYNC_PLAYLISTS: [],
-            CONF_SYNC_ORGANISE: "flat",
         }
         await sync.async_sync(opts, client)
 
@@ -244,7 +236,6 @@ async def test_sync_writes_manifest(hass: HomeAssistant, tmp_path: Path) -> None
                 CONF_SYNC_LIKED: True,
                 CONF_SYNC_ALL_PLAYLISTS: False,
                 CONF_SYNC_PLAYLISTS: [],
-                CONF_SYNC_ORGANISE: "flat",
             },
             client,
         )

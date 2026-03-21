@@ -348,7 +348,6 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
         CONF_SYNC_ALL_PLAYLISTS,
         CONF_SYNC_ENABLED,
         CONF_SYNC_LIKED,
-        CONF_SYNC_ORGANISE,
         CONF_SYNC_PATH,
     )
 
@@ -357,7 +356,6 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
         {
             CONF_SYNC_ENABLED: False,
             CONF_SYNC_PATH: "/media/suno",
-            CONF_SYNC_ORGANISE: "date",
             CONF_SYNC_LIKED: True,
             CONF_SYNC_ALL_PLAYLISTS: True,
         },

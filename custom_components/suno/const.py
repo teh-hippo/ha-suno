@@ -38,24 +38,26 @@ DEFAULT_CACHE_MAX_SIZE = 500
 # Sync config keys
 CONF_SYNC_ENABLED = "sync_enabled"
 CONF_SYNC_PATH = "sync_path"
-CONF_SYNC_ORGANISE = "sync_organise"
 CONF_SYNC_LIKED = "sync_liked"
 CONF_SYNC_ALL_PLAYLISTS = "sync_all_playlists"
 CONF_SYNC_PLAYLISTS = "sync_playlists"
 CONF_SYNC_RECENT_COUNT = "sync_recent_count"
 CONF_SYNC_RECENT_DAYS = "sync_recent_days"
+CONF_SYNC_TRASH_DAYS = "sync_trash_days"
 
 # Sync defaults
 DEFAULT_SYNC_ENABLED = False
-DEFAULT_SYNC_ORGANISE = "date"
 DEFAULT_SYNC_LIKED = True
 DEFAULT_SYNC_ALL_PLAYLISTS = True
 DEFAULT_SYNC_RECENT_COUNT = None
 DEFAULT_SYNC_RECENT_DAYS = None
+DEFAULT_SYNC_TRASH_DAYS = 7
 
 # Sync limits
 SYNC_MAX_DOWNLOADS_PER_RUN = 20
+SYNC_MAX_DOWNLOADS_BOOTSTRAP = 50
 SYNC_DOWNLOAD_DELAY = 5  # seconds between downloads
+SYNC_FFMPEG_TIMEOUT = 60  # seconds
 
 # Audio quality options
 QUALITY_HIGH = "high"

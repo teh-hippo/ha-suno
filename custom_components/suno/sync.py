@@ -25,18 +25,20 @@ from .const import (
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
     CONF_SYNC_LIKED,
-    CONF_SYNC_ORGANISE,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
+    CONF_SYNC_TRASH_DAYS,
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
-    DEFAULT_SYNC_ORGANISE,
     DEFAULT_SYNC_RECENT_COUNT,
     DEFAULT_SYNC_RECENT_DAYS,
+    DEFAULT_SYNC_TRASH_DAYS,
     SYNC_DOWNLOAD_DELAY,
+    SYNC_FFMPEG_TIMEOUT,
+    SYNC_MAX_DOWNLOADS_BOOTSTRAP,
     SYNC_MAX_DOWNLOADS_PER_RUN,
 )
 from .models import SunoClip
@@ -54,19 +56,12 @@ def _sanitise_filename(name: str, max_len: int = 200) -> str:
     return safe[:max_len] if safe else "untitled"
 
 
-def _clip_path(clip: SunoClip, index: int, organise: str, collection: str) -> str:
-    """Build the relative file path for a clip."""
+def _clip_path(clip: SunoClip, index: int) -> str:
+    """Build the relative file path for a clip (date organisation)."""
     title = _sanitise_filename(clip.title or "untitled")
     num = f"{index + 1:02d}"
-
-    if organise == "date":
-        date_str = clip.created_at[:10] if clip.created_at else "unknown"
-        return f"{date_str}/{num} - {title}.flac"
-    if organise == "playlist":
-        folder = _sanitise_filename(collection)
-        return f"{folder}/{num} - {title}.flac"
-    # flat
-    return f"{num} - {title}.flac"
+    date_str = clip.created_at[:10] if clip.created_at else "unknown"
+    return f"{date_str}/{num} - {title}.flac"
 
 
 class SunoSync:
@@ -156,23 +151,35 @@ class SunoSync:
         force: bool,
     ) -> None:
         """Core sync logic: build desired state, diff, download, cleanup."""
-        organise = options.get(CONF_SYNC_ORGANISE, DEFAULT_SYNC_ORGANISE)
+        trash_days = options.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)
+
+        # Purge old trash first
+        base = Path(sync_path)
+        if trash_days:
+            await self._purge_trash(base, int(trash_days))
 
         # Build desired clips with sources
         desired = await self._build_desired(options, client)
 
         clips_state: dict[str, Any] = dict(self._state.get("clips", {}))
+        trash_state: dict[str, Any] = dict(self._state.get("trash", {}))
 
         # Determine what to download and what to delete
-        to_download: list[tuple[SunoClip, int, str]] = []
+        to_download: list[tuple[SunoClip, int]] = []
         to_delete: list[str] = []
         seen_ids: set[str] = set()
 
-        for clip, index, collection, sources in desired:
+        for clip, index, _collection, sources in desired:
             seen_ids.add(clip.id)
             if clip.id not in clips_state or force:
-                to_download.append((clip, index, collection))
-            # Update sources regardless
+                # Check if restorable from trash
+                if clip.id in trash_state:
+                    restored = await self._restore_from_trash(base, clip.id, trash_state)
+                    if restored:
+                        clips_state[clip.id] = restored
+                        clips_state[clip.id]["sources"] = sources
+                        continue
+                to_download.append((clip, index))
             if clip.id in clips_state:
                 clips_state[clip.id]["sources"] = sources
 
@@ -182,24 +189,34 @@ class SunoSync:
 
         self._pending = len(to_download)
         _LOGGER.info(
-            "Sync: %d to download, %d to delete, %d current",
+            "Sync: %d to download, %d to remove, %d current",
             len(to_download),
             len(to_delete),
             len(seen_ids),
         )
 
         # Ensure sync directory exists
-        base = Path(sync_path)
-        await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
+        try:
+            await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
+        except OSError:
+            _LOGGER.error("Cannot create sync directory: %s", sync_path)
+            self._errors += 1
+            return
+
+        # Bootstrap mode: higher cap for initial sync
+        is_bootstrap = self.total_files == 0 and len(to_download) > SYNC_MAX_DOWNLOADS_PER_RUN
+        max_downloads = SYNC_MAX_DOWNLOADS_BOOTSTRAP if is_bootstrap else SYNC_MAX_DOWNLOADS_PER_RUN
+        if is_bootstrap:
+            _LOGGER.info("Bootstrap mode: downloading up to %d files", max_downloads)
 
         # Download new clips (rate limited)
         downloaded = 0
-        for clip, index, collection in to_download:
-            if downloaded >= SYNC_MAX_DOWNLOADS_PER_RUN:
-                _LOGGER.info("Reached max downloads per run (%d), will continue next sync", SYNC_MAX_DOWNLOADS_PER_RUN)
+        for clip, index in to_download:
+            if downloaded >= max_downloads:
+                _LOGGER.info("Reached max downloads (%d), continuing next sync", max_downloads)
                 break
 
-            rel_path = _clip_path(clip, index, organise, collection)
+            rel_path = _clip_path(clip, index)
             success = await self._download_clip(client, clip, base, rel_path)
             if success:
                 clips_state[clip.id] = {
@@ -215,14 +232,18 @@ class SunoSync:
             if downloaded < len(to_download):
                 await asyncio.sleep(SYNC_DOWNLOAD_DELAY)
 
-        # Cleanup orphaned files
+        # Remove orphaned files (trash or delete)
         for clip_id in to_delete:
             entry = clips_state.pop(clip_id, None)
             if entry and entry.get("path"):
-                await self._delete_file(base, entry["path"])
+                if trash_days:
+                    await self._trash_file(base, clip_id, entry, trash_state)
+                else:
+                    await self._delete_file(base, entry["path"])
 
         # Update state
         self._state["clips"] = clips_state
+        self._state["trash"] = trash_state
         self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
         await self._save_state(base)
@@ -386,11 +407,20 @@ class SunoSync:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate(input=wav_data)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=wav_data),
+                timeout=SYNC_FFMPEG_TIMEOUT,
+            )
             if proc.returncode != 0:
                 _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
                 return None
             return stdout
+        except TimeoutError:
+            _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            return None
         except FileNotFoundError:
             _LOGGER.error("ffmpeg not found. Install ffmpeg for FLAC sync.")
             return None
@@ -420,19 +450,115 @@ class SunoSync:
 
         def _delete(b: Path, r: str) -> None:
             target = b / r
-            if target.exists():
-                target.unlink()
-                _LOGGER.info("Removed: %s", r)
-                # Clean up empty parent dirs (but not the base)
-                parent = target.parent
+            try:
+                if target.exists():
+                    target.unlink()
+                    _LOGGER.info("Removed: %s", r)
+                    parent = target.parent
+                    while parent != b:
+                        try:
+                            parent.rmdir()
+                            parent = parent.parent
+                        except OSError:
+                            break
+            except OSError:
+                _LOGGER.warning("Failed to delete: %s", r)
+
+        await self.hass.async_add_executor_job(_delete, base, rel_path)
+
+    async def _trash_file(self, base: Path, clip_id: str, entry: dict[str, Any], trash_state: dict[str, Any]) -> None:
+        """Move a file to .trash/ instead of deleting."""
+        rel_path = entry.get("path", "")
+
+        def _move_to_trash(b: Path, r: str) -> str | None:
+            source = b / r
+            if not source.exists():
+                return None
+            trash_dir = b / ".trash"
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            dest = trash_dir / source.name
+            try:
+                os.replace(str(source), str(dest))
+                _LOGGER.info("Trashed: %s", r)
+                # Clean empty parent dirs
+                parent = source.parent
                 while parent != b:
                     try:
                         parent.rmdir()
                         parent = parent.parent
                     except OSError:
                         break
+                return f".trash/{source.name}"
+            except OSError:
+                _LOGGER.warning("Failed to trash: %s", r)
+                return None
 
-        await self.hass.async_add_executor_job(_delete, base, rel_path)
+        trash_path = await self.hass.async_add_executor_job(_move_to_trash, base, rel_path)
+        if trash_path:
+            trash_state[clip_id] = {
+                "path": trash_path,
+                "original_path": rel_path,
+                "trashed_at": datetime.now(tz=UTC).isoformat(),
+            }
+
+    async def _restore_from_trash(self, base: Path, clip_id: str, trash_state: dict[str, Any]) -> dict[str, Any] | None:
+        """Restore a file from .trash/ if it exists. Returns clip state entry or None."""
+        trash_entry = trash_state.get(clip_id)
+        if not trash_entry:
+            return None
+
+        trash_path = trash_entry.get("path", "")
+        original_path = trash_entry.get("original_path", "")
+
+        def _restore(b: Path, tp: str, op: str) -> bool:
+            source = b / tp
+            if not source.exists():
+                return False
+            dest = b / op
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(str(source), str(dest))
+                _LOGGER.info("Restored from trash: %s", op)
+                return True
+            except OSError:
+                _LOGGER.warning("Failed to restore: %s", tp)
+                return False
+
+        restored = await self.hass.async_add_executor_job(_restore, base, trash_path, original_path)
+        if restored:
+            trash_state.pop(clip_id, None)
+            return {
+                "path": original_path,
+                "title": trash_entry.get("title", ""),
+                "created": trash_entry.get("created"),
+                "sources": [],
+            }
+        return None
+
+    async def _purge_trash(self, base: Path, max_days: int) -> None:
+        """Delete trash files older than max_days."""
+        trash_state: dict[str, Any] = dict(self._state.get("trash", {}))
+        now = datetime.now(tz=UTC)
+        to_purge: list[str] = []
+
+        for clip_id, entry in trash_state.items():
+            trashed_at = entry.get("trashed_at", "")
+            try:
+                trashed = datetime.fromisoformat(trashed_at)
+                age_days = (now - trashed).total_seconds() / 86400
+                if age_days >= max_days:
+                    to_purge.append(clip_id)
+            except ValueError, TypeError:
+                to_purge.append(clip_id)
+
+        for clip_id in to_purge:
+            entry = trash_state.pop(clip_id)
+            path = entry.get("path", "")
+            if path:
+                await self._delete_file(base, path)
+            _LOGGER.debug("Purged from trash: %s", clip_id)
+
+        self._state["trash"] = trash_state
 
     async def cleanup_tmp_files(self, sync_path: str) -> None:
         """Remove stale .tmp files from the sync directory."""

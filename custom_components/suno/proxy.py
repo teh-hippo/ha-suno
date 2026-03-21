@@ -292,6 +292,8 @@ class SunoMediaProxyView(HomeAssistantView):
 
     async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
         """Transcode WAV bytes to FLAC with metadata using ffmpeg."""
+        from .const import SYNC_FFMPEG_TIMEOUT  # noqa: PLC0415
+
         ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -311,11 +313,20 @@ class SunoMediaProxyView(HomeAssistantView):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate(input=wav_data)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=wav_data),
+                timeout=SYNC_FFMPEG_TIMEOUT,
+            )
             if proc.returncode != 0:
                 _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
                 return None
             return stdout
+        except TimeoutError:
+            _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            return None
         except FileNotFoundError:
             _LOGGER.error("ffmpeg not found.  Install ffmpeg for high quality audio.")
             return None

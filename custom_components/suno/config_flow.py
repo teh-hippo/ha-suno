@@ -43,11 +43,11 @@ from .const import (
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
     CONF_SYNC_LIKED,
-    CONF_SYNC_ORGANISE,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
+    CONF_SYNC_TRASH_DAYS,
     DEFAULT_AUDIO_QUALITY,
     DEFAULT_CACHE_ENABLED,
     DEFAULT_CACHE_MAX_SIZE,
@@ -59,7 +59,7 @@ from .const import (
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
-    DEFAULT_SYNC_ORGANISE,
+    DEFAULT_SYNC_TRASH_DAYS,
     DOMAIN,
 )
 from .exceptions import SunoAuthError
@@ -252,49 +252,50 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             self._options = {**self.config_entry.options, **user_input}
             return await self.async_step_sync()
 
+        opts = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
+                        CONF_SHOW_PLAYLISTS,
+                        default=opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
+                    ): BooleanSelector(),
+                    vol.Required(
                         CONF_SHOW_LIKED,
-                        default=self.config_entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
+                        default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_SHOW_RECENT,
-                        default=self.config_entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
+                        default=opts.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_RECENT_COUNT,
-                        default=self.config_entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
-                    ): NumberSelector(NumberSelectorConfig(min=5, max=50, step=5, mode=NumberSelectorMode.SLIDER)),
-                    vol.Required(
-                        CONF_SHOW_PLAYLISTS,
-                        default=self.config_entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_CACHE_TTL,
-                        default=self.config_entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
-                    ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
+                        default=opts.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
+                    ): NumberSelector(NumberSelectorConfig(min=1, max=50, step=1, mode=NumberSelectorMode.SLIDER)),
                     vol.Required(
                         CONF_AUDIO_QUALITY,
-                        default=self.config_entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
+                        default=opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[
                                 SelectOptionDict(value="standard", label="Standard (MP3)"),
-                                SelectOptionDict(value="high", label="High Quality (FLAC)"),
+                                SelectOptionDict(value="high", label="High (Lossless)"),
                             ],
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
                     vol.Required(
+                        CONF_CACHE_TTL,
+                        default=opts.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
+                    ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
+                    vol.Required(
                         CONF_CACHE_ENABLED,
-                        default=self.config_entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
+                        default=opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
                     ): BooleanSelector(),
                     vol.Required(
                         CONF_CACHE_MAX_SIZE,
-                        default=self.config_entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
+                        default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
                     ): NumberSelector(
                         NumberSelectorConfig(
                             min=100,
@@ -342,19 +343,6 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                 default=opts.get(CONF_SYNC_PATH, default_path),
             ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
             vol.Required(
-                CONF_SYNC_ORGANISE,
-                default=opts.get(CONF_SYNC_ORGANISE, DEFAULT_SYNC_ORGANISE),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value="date", label="By date (YYYY-MM-DD/)"),
-                        SelectOptionDict(value="flat", label="Flat (all in root)"),
-                        SelectOptionDict(value="playlist", label="By playlist folder"),
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(
                 CONF_SYNC_LIKED,
                 default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED),
             ): BooleanSelector(),
@@ -365,10 +353,14 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             vol.Optional(
                 CONF_SYNC_RECENT_COUNT,
                 description={"suggested_value": opts.get(CONF_SYNC_RECENT_COUNT)},
-            ): NumberSelector(NumberSelectorConfig(min=1, max=100, step=5, mode=NumberSelectorMode.BOX)),
+            ): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode=NumberSelectorMode.BOX)),
             vol.Optional(
                 CONF_SYNC_RECENT_DAYS,
                 description={"suggested_value": opts.get(CONF_SYNC_RECENT_DAYS)},
+            ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
+            vol.Optional(
+                CONF_SYNC_TRASH_DAYS,
+                description={"suggested_value": opts.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)},
             ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
         }
 
