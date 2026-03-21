@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v1.10.1 (2026-03-21)
+
+### Bug Fixes
+
+- Audio pipeline — sync lookup, request coalescing, cache fixes
+  ([`f9cfb83`](https://github.com/teh-hippo/ha-suno/commit/f9cfb83148d854ffa88e2da79fae18f91558c6be))
+
+- Resolve CI failures — ruff format + mypy type annotation
+  ([`7568b65`](https://github.com/teh-hippo/ha-suno/commit/7568b6513586e9db7c75dc36ac14ebeee0484901))
+
+
 ## v1.10.0 (2026-03-21)
 
 ### Documentation
