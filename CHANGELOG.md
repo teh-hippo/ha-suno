@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.7.0 (2026-03-21)
+
+### Bug Fixes
+
+- Lower coverage threshold to 70% during sync development
+  ([`e5cf4cf`](https://github.com/teh-hippo/ha-suno/commit/e5cf4cf6898cd6cd3a7619b9e43d16ff1d8047e4))
+
+### Features
+
+- Sync polish - trash, ffmpeg timeout, bootstrap, UX improvements
+  ([`fb6ff80`](https://github.com/teh-hippo/ha-suno/commit/fb6ff806c9826d39c8c99974567a7c68e7f99d0a))
+
+
 ## v1.6.0 (2026-03-21)
 
 ### Bug Fixes
