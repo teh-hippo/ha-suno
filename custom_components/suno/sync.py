@@ -47,6 +47,7 @@ from .models import SunoClip, clip_meta_hash
 
 if TYPE_CHECKING:
     from .api import SunoClient
+    from .cache import SunoCache
     from .coordinator import SunoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -234,6 +235,7 @@ class SunoSync:
         self.hass = hass
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
         self._state: dict[str, Any] = {"clips": {}, "last_sync": None}
+        self._cache: SunoCache | None = None
         self._running = False
         self._errors = 0
         self._pending = 0
@@ -254,6 +256,7 @@ class SunoSync:
     ) -> SunoSync:
         """Create, initialise, and wire up sync."""
         sync = cls(hass, f"suno_sync_{entry.entry_id}")
+        sync._cache = coordinator.cache
         await sync.async_init()
 
         sync_path = entry.options.get(CONF_SYNC_PATH, "")
@@ -610,6 +613,14 @@ class SunoSync:
             # Atomic write
             await _write_file(self.hass, target, flac_data)
             _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(flac_data))
+
+            # Populate audio cache so proxy doesn't re-download
+            if self._cache is not None:
+                try:
+                    await self._cache.async_put(clip.id, "flac", flac_data, clip_meta_hash(clip))
+                except Exception:
+                    _LOGGER.debug("Could not populate cache for %s", clip.id)
+
             return len(flac_data)
 
         except asyncio.CancelledError:

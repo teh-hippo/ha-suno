@@ -176,7 +176,7 @@ class SunoMediaSource(MediaSource):
 
     async def _browse_recent(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Show recent songs, fetched live from page 0."""
-        count = entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT)
+        count = int(entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT))
         try:
             clips, _ = await coordinator.client.get_feed(0)
             clips = clips[:count]

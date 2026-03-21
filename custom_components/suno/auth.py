@@ -155,10 +155,14 @@ class ClerkAuth:
                 self._user_id = user.get("id")
                 first = (user.get("first_name") or "").strip()
                 last = (user.get("last_name") or "").strip()
-                if first:
+                username = (user.get("username") or "").strip()
+
+                if username:
+                    self._display_name = username
+                elif first and "@" not in first:
                     self._display_name = f"{first} {last}".strip() if last else first
                 else:
-                    self._display_name = (user.get("username") or "").strip() or None
+                    self._display_name = None
                 break
 
     async def _refresh_jwt(self) -> None:

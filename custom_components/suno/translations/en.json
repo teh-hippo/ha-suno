@@ -103,6 +103,14 @@
       "sync_size": {
         "name": "Sync library size"
       }
+    },
+    "button": {
+      "clear_cache": {
+        "name": "Clear cache"
+      },
+      "clear_sync_library": {
+        "name": "Clear sync library"
+      }
     }
   },
   "exceptions": {
