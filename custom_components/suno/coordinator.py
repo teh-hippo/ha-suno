@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,9 +14,10 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import SunoClient, SunoClip, SunoCredits, SunoPlaylist
+from .api import SunoClient
 from .const import CONF_CACHE_TTL, DEFAULT_CACHE_TTL, DOMAIN
 from .exceptions import SunoAuthError
+from .models import SunoClip, SunoCredits, SunoPlaylist
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +47,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             config_entry=entry,
         )
         self.client = client
+        self.cache: Any | None = None
+        self.sync: Any | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -61,7 +65,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
     async def _async_update_data(self) -> SunoData:
         """Fetch library, liked songs, playlists, and credits from Suno."""
         try:
-            await self.client._ensure_jwt()
+            await self.client._auth.ensure_jwt()
         except SunoAuthError as err:
             raise ConfigEntryAuthFailed(
                 translation_domain=DOMAIN,

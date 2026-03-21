@@ -7,6 +7,7 @@ don't rely on filesystem atime (unreliable on many platforms).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -36,6 +37,9 @@ class SunoCache:
         self._cache_dir = Path(hass.config.path("suno_cache"))
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
         self._index: dict[str, Any] = {}  # filename -> {access: epoch, meta_hash: str}
+        self._lock = asyncio.Lock()
+        self._save_pending = False
+        self._save_handle: asyncio.TimerHandle | None = None
 
     @property
     def cache_dir(self) -> Path:
@@ -47,9 +51,12 @@ class SunoCache:
         """Number of files in the cache."""
         return len(self._index)
 
-    @property
-    def size_mb(self) -> float:
+    async def async_size_mb(self) -> float:
         """Total cache size in MB (from disk)."""
+        return await self._hass.async_add_executor_job(self._calc_size_mb)
+
+    def _calc_size_mb(self) -> float:
+        """Calculate total cache size in MB (runs in executor)."""
         try:
             total = sum(
                 f.stat().st_size for f in self._cache_dir.iterdir() if f.is_file() and not f.name.startswith(".")
@@ -57,6 +64,29 @@ class SunoCache:
         except OSError:
             return 0.0
         return round(total / 1048576, 1)
+
+    def _schedule_save(self) -> None:
+        """Schedule a debounced index save after 5 seconds."""
+        self._save_pending = True
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+        self._save_handle = self._hass.loop.call_later(5, self._do_save)
+
+    def _do_save(self) -> None:
+        """Trigger the actual async save from the event loop."""
+        self._save_handle = None
+        if self._save_pending:
+            self._save_pending = False
+            self._hass.async_create_task(self._store.async_save(self._index))
+
+    async def async_flush(self) -> None:
+        """Save immediately if a debounced save is pending."""
+        if self._save_handle is not None:
+            self._save_handle.cancel()
+            self._save_handle = None
+        if self._save_pending:
+            self._save_pending = False
+            await self._store.async_save(self._index)
 
     async def async_init(self) -> None:
         """Create the cache directory, clean temp files, and load the index."""
@@ -105,53 +135,60 @@ class SunoCache:
 
         If meta_hash is provided, invalidates the entry when stale.
         """
-        filename = f"{clip_id}.{fmt}"
-        entry = self._index.get(filename)
-        if entry is None:
-            return None
+        async with self._lock:
+            filename = f"{clip_id}.{fmt}"
+            entry = self._index.get(filename)
+            if entry is None:
+                return None
 
-        # Check metadata staleness
-        if meta_hash and isinstance(entry, dict) and entry.get("meta_hash") != meta_hash:
-            _LOGGER.debug("Cache stale for %s (meta changed), invalidating", clip_id)
-            await self.async_invalidate(clip_id, fmt)
-            return None
+            # Check metadata staleness
+            if meta_hash and isinstance(entry, dict) and entry.get("meta_hash") != meta_hash:
+                _LOGGER.debug("Cache stale for %s (meta changed), invalidating", clip_id)
+                await self._async_invalidate_locked(clip_id, fmt)
+                return None
 
-        path = self._cache_dir / filename
-        valid = await self._hass.async_add_executor_job(self._validate_file, path, fmt)
-        if not valid:
-            self._index.pop(filename, None)
-            await self._store.async_save(self._index)
-            return None
+            path = self._cache_dir / filename
+            valid = await self._hass.async_add_executor_job(self._validate_file, path, fmt)
+            if not valid:
+                self._index.pop(filename, None)
+                await self._store.async_save(self._index)
+                return None
 
-        # Update access time
-        if isinstance(entry, dict):
-            entry["access"] = time()
-        else:
-            self._index[filename] = {"access": time(), "meta_hash": ""}
-        await self._store.async_save(self._index)
-        return path
+            # Update access time (debounced save)
+            if isinstance(entry, dict):
+                entry["access"] = time()
+            else:
+                self._index[filename] = {"access": time(), "meta_hash": ""}
+            self._schedule_save()
+            return path
 
     async def async_put(self, clip_id: str, fmt: str, data: bytes, meta_hash: str = "") -> Path | None:
         """Write data to cache atomically.  Returns the final path or None."""
-        filename = f"{clip_id}.{fmt}"
-        final_path = self._cache_dir / filename
-        tmp_path = self._cache_dir / f"{filename}.tmp"
+        async with self._lock:
+            filename = f"{clip_id}.{fmt}"
+            final_path = self._cache_dir / filename
+            tmp_path = self._cache_dir / f"{filename}.tmp"
 
-        # Evict if needed
-        await self.async_evict(len(data))
+            # Evict if needed
+            await self._async_evict_locked(len(data))
 
-        try:
-            await self._hass.async_add_executor_job(self._atomic_write, tmp_path, final_path, data)
-        except OSError:
-            _LOGGER.warning("Failed to write cache file %s, skipping", filename)
-            return None
+            try:
+                await self._hass.async_add_executor_job(self._atomic_write, tmp_path, final_path, data)
+            except OSError:
+                _LOGGER.warning("Failed to write cache file %s, skipping", filename)
+                return None
 
-        self._index[filename] = {"access": time(), "meta_hash": meta_hash}
-        await self._store.async_save(self._index)
-        return final_path
+            self._index[filename] = {"access": time(), "meta_hash": meta_hash}
+            await self._store.async_save(self._index)
+            return final_path
 
     async def async_invalidate(self, clip_id: str, fmt: str) -> None:
         """Remove a cached file and its index entry."""
+        async with self._lock:
+            await self._async_invalidate_locked(clip_id, fmt)
+
+    async def _async_invalidate_locked(self, clip_id: str, fmt: str) -> None:
+        """Remove a cached file and its index entry (caller holds _lock)."""
         filename = f"{clip_id}.{fmt}"
         self._index.pop(filename, None)
         path = self._cache_dir / filename
@@ -163,6 +200,11 @@ class SunoCache:
 
     async def async_evict(self, needed_bytes: int) -> None:
         """Remove oldest entries until there is room for needed_bytes."""
+        async with self._lock:
+            await self._async_evict_locked(needed_bytes)
+
+    async def _async_evict_locked(self, needed_bytes: int) -> None:
+        """Remove oldest entries (caller holds _lock)."""
         current = await self._hass.async_add_executor_job(self._total_size)
         target = self._max_bytes - needed_bytes
         if current <= target:
@@ -209,9 +251,13 @@ class SunoCache:
 
     @staticmethod
     def _atomic_write(tmp_path: Path, final_path: Path, data: bytes) -> None:
-        """Write to a temp file then rename for atomicity."""
-        tmp_path.write_bytes(data)
-        os.rename(tmp_path, final_path)
+        """Write to a temp file then replace for atomicity."""
+        try:
+            tmp_path.write_bytes(data)
+            os.replace(tmp_path, final_path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _validate_file(path: Path, fmt: str) -> bool:

@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.media_player import BrowseError
 from homeassistant.components.media_source import MediaSourceItem
 from homeassistant.core import HomeAssistant
 
-from custom_components.suno.api import SunoClip
 from custom_components.suno.media_source import (
     SunoMediaSource,
     _clip_to_media,
     _folder,
     async_get_media_source,
 )
+from custom_components.suno.models import SunoClip
 
-from .conftest import make_entry, setup_entry
+from .conftest import make_entry, patch_suno_setup, setup_entry
 
 
 def test_clip_to_media() -> None:
@@ -113,7 +113,7 @@ async def test_async_get_media_source(hass: HomeAssistant) -> None:
 async def test_browse_root(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing root shows liked, recent, playlists, all."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -148,7 +148,7 @@ async def test_browse_root_options_disable_folders(hass: HomeAssistant, mock_sun
             "cache_ttl_minutes": 30,
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -166,7 +166,7 @@ async def test_browse_root_options_disable_folders(hass: HomeAssistant, mock_sun
 async def test_browse_liked(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing 'liked' shows only liked clips."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -182,7 +182,7 @@ async def test_browse_liked(hass: HomeAssistant, mock_suno_client: AsyncMock) ->
 async def test_browse_recent(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing 'recent' fetches live from get_feed."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -197,7 +197,7 @@ async def test_browse_recent(hass: HomeAssistant, mock_suno_client: AsyncMock) -
 async def test_browse_recent_fallback_on_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Recent falls back to cached data when live fetch fails."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Make live fetch fail after initial setup
@@ -215,7 +215,7 @@ async def test_browse_recent_fallback_on_error(hass: HomeAssistant, mock_suno_cl
 async def test_browse_all_small_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """All songs with <=50 clips shows flat list."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -251,7 +251,7 @@ async def test_browse_all_large_library_chunks(hass: HomeAssistant, mock_suno_cl
     mock_suno_client.get_all_songs.return_value = many_clips
 
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -288,7 +288,7 @@ async def test_browse_all_page(hass: HomeAssistant, mock_suno_client: AsyncMock)
     mock_suno_client.get_all_songs.return_value = many_clips
 
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -303,7 +303,7 @@ async def test_browse_all_page(hass: HomeAssistant, mock_suno_client: AsyncMock)
 async def test_browse_unknown_identifier(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Unknown identifier returns empty folder."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -320,7 +320,7 @@ async def test_browse_unknown_identifier(hass: HomeAssistant, mock_suno_client: 
 async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Resolving a clip returns a PlayMedia with the audio URL."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -334,7 +334,7 @@ async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: Asyn
 async def test_resolve_media_unknown_clip(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Resolving a clip not in cache still returns a proxy URL."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -348,7 +348,7 @@ async def test_resolve_media_unknown_clip(hass: HomeAssistant, mock_suno_client:
 async def test_resolve_media_bad_identifier(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Resolving with a non-clip identifier raises BrowseError."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -370,7 +370,7 @@ async def test_resolve_media_no_entry(hass: HomeAssistant) -> None:
 async def test_resolve_media_empty_identifier(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Resolving with empty identifier raises BrowseError."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -386,7 +386,7 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
     mock_suno_client.get_all_songs.return_value = []
 
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -400,7 +400,7 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
 async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing playlists shows playlist folders."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -415,7 +415,7 @@ async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock
 async def test_browse_playlist_detail(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing a specific playlist shows its clips."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
@@ -429,7 +429,7 @@ async def test_browse_playlist_detail(hass: HomeAssistant, mock_suno_client: Asy
 async def test_browse_playlist_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing a playlist that fails returns empty children."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_suno_client.get_playlist_clips.side_effect = Exception("Network error")
@@ -445,7 +445,7 @@ async def test_browse_playlist_error(hass: HomeAssistant, mock_suno_client: Asyn
 async def test_browse_playlist_unknown_id(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Browsing a playlist with unknown ID uses generic name."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_suno_client.get_playlist_clips.return_value = []

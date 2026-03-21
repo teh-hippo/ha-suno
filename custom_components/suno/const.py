@@ -2,6 +2,9 @@
 
 DOMAIN = "suno"
 
+# hass.data keys (global, not per-entry)
+DATA_VIEW_REGISTERED = f"{DOMAIN}_view_registered"
+
 # Suno API
 SUNO_API_BASE_URL = "https://studio-api-prod.suno.com"
 CLERK_BASE_URL = "https://clerk.suno.com"

@@ -14,10 +14,9 @@ from homeassistant.components.media_source import (
     MediaSourceItem,
     PlayMedia,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .api import SunoClip
+from . import SunoConfigEntry
 from .const import (
     CONF_AUDIO_QUALITY,
     CONF_RECENT_COUNT,
@@ -33,6 +32,7 @@ from .const import (
     QUALITY_HIGH,
 )
 from .coordinator import SunoCoordinator, SunoData
+from .models import SunoClip
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class SunoMediaSource(MediaSource):
         super().__init__(DOMAIN)
         self.hass = hass
 
-    def _get_entry_and_coordinator(self) -> tuple[ConfigEntry, SunoCoordinator] | None:
+    def _get_entry_and_coordinator(self) -> tuple[SunoConfigEntry, SunoCoordinator] | None:
         """Find the active Suno config entry and its coordinator."""
         entries = self.hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
@@ -91,7 +91,7 @@ class SunoMediaSource(MediaSource):
                 return entry, entry.runtime_data
         return None
 
-    def _get_mime_type(self, entry: ConfigEntry) -> str:
+    def _get_mime_type(self, entry: SunoConfigEntry) -> str:
         """Return the MIME type based on the audio quality setting."""
         quality = entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
         return "audio/flac" if quality == QUALITY_HIGH else "audio/mpeg"
@@ -148,7 +148,7 @@ class SunoMediaSource(MediaSource):
 
         return _folder("", "Suno", [])
 
-    async def _browse_root(self, entry: ConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    async def _browse_root(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Build the root media browser view."""
         children: list[BrowseMediaSource] = []
         data: SunoData = coordinator.data
@@ -174,7 +174,7 @@ class SunoMediaSource(MediaSource):
         children = [_clip_to_media(clip, ct) for clip in liked]
         return _folder("liked", f"Liked Songs ({len(liked)})", children)
 
-    async def _browse_recent(self, entry: ConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    async def _browse_recent(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
         """Show recent songs, fetched live from page 0."""
         count = entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT)
         try:

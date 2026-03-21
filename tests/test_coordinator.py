@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -12,7 +12,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
 
-from .conftest import make_entry, sample_credits, setup_entry
+from .conftest import make_entry, patch_suno_setup, sample_credits, setup_entry
 
 
 def test_suno_data_defaults() -> None:
@@ -27,7 +27,7 @@ def test_suno_data_defaults() -> None:
 async def test_coordinator_successful_update(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Coordinator fetches clips, liked clips, playlists, and credits."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -49,7 +49,7 @@ async def test_coordinator_auth_failure_raises_config_entry_auth_failed(
 ) -> None:
     """SunoAuthError during update raises ConfigEntryAuthFailed."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -62,7 +62,7 @@ async def test_coordinator_auth_failure_raises_config_entry_auth_failed(
 async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Generic exception during update raises UpdateFailed."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -80,7 +80,7 @@ async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: 
     mock_suno_client.get_credits.return_value = sample_credits()
 
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -93,7 +93,7 @@ async def test_coordinator_credits_failure_graceful(hass: HomeAssistant, mock_su
     """Credits fetch failure is swallowed; clips and playlists still available."""
     mock_suno_client.get_credits.side_effect = Exception("Credits error")
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -105,7 +105,7 @@ async def test_coordinator_liked_songs_failure_graceful(hass: HomeAssistant, moc
     """Liked songs fetch failure is swallowed; clips and playlists still available."""
     mock_suno_client.get_liked_songs.side_effect = Exception("Liked error")
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -117,7 +117,7 @@ async def test_coordinator_playlists_failure_graceful(hass: HomeAssistant, mock_
     """Playlists fetch failure is swallowed; clips still available."""
     mock_suno_client.get_playlists.side_effect = Exception("Playlists error")
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
@@ -136,7 +136,7 @@ async def test_coordinator_uses_cache_ttl_from_options(hass: HomeAssistant, mock
             "cache_ttl_minutes": 45,
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data

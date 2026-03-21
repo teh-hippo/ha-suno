@@ -31,17 +31,17 @@ async def async_setup_entry(
     ]
 
     # Cache sensors (always, cache may be enabled later)
-    entities.append(SunoCacheSizeSensor(coordinator, entry, hass))
+    entities.append(SunoCacheSizeSensor(coordinator, entry))
 
     from .const import CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED  # noqa: PLC0415
 
     if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
         entities.extend(
             [
-                SunoSyncStatusSensor(coordinator, entry, hass),
-                SunoSyncFilesSensor(coordinator, entry, hass),
-                SunoSyncPendingSensor(coordinator, entry, hass),
-                SunoSyncSizeSensor(coordinator, entry, hass),
+                SunoSyncStatusSensor(coordinator, entry),
+                SunoSyncFilesSensor(coordinator, entry),
+                SunoSyncPendingSensor(coordinator, entry),
+                SunoSyncSizeSensor(coordinator, entry),
             ]
         )
 
@@ -57,9 +57,10 @@ class _SunoSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, key: str) -> None:
         super().__init__(coordinator)
         self._attr_device_info = coordinator.device_info
+        self._attr_unique_id = f"{entry.unique_id}_{key}"
         self._entry = entry
 
 
@@ -74,8 +75,7 @@ class SunoCreditsSensor(_SunoSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.unique_id}_credits"
+        super().__init__(coordinator, entry, "credits")
 
     @property
     def native_value(self) -> int | None:
@@ -105,8 +105,7 @@ class SunoTotalSongsSensor(_SunoSensor):
     _attr_icon = "mdi:music-note-plus"
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.unique_id}_total_songs"
+        super().__init__(coordinator, entry, "total_songs")
 
     @property
     def native_value(self) -> int:
@@ -121,8 +120,7 @@ class SunoLikedSongsSensor(_SunoSensor):
     _attr_icon = "mdi:heart-outline"
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.unique_id}_liked_songs"
+        super().__init__(coordinator, entry, "liked_songs")
 
     @property
     def native_value(self) -> int:
@@ -140,19 +138,24 @@ class SunoCacheSizeSensor(_SunoSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:database"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.unique_id}_cache_size"
-        self._hass = hass
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry, "cache_size")
+        self._cached_size: float = 0.0
 
     @property
     def native_value(self) -> float:
-        cache = self._hass.data.get("suno_cache")
-        return cache.size_mb if cache is not None else 0.0
+        return self._cached_size
+
+    async def async_update(self) -> None:
+        cache = self.coordinator.cache
+        if cache is not None:
+            self._cached_size = await cache.async_size_mb()
+        else:
+            self._cached_size = 0.0
 
     @property
     def extra_state_attributes(self) -> dict[str, int]:
-        cache = self._hass.data.get("suno_cache")
+        cache = self.coordinator.cache
         return {"cached_files": cache.file_count} if cache is not None else {}
 
 
@@ -160,16 +163,10 @@ class SunoCacheSizeSensor(_SunoSensor):
 
 
 class _SunoSyncSensor(_SunoSensor):
-    """Base for sync sensors that need hass reference."""
-
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry)
-        self._hass = hass
+    """Base for sync sensors."""
 
     def _get_sync(self) -> Any:
-        from . import _SYNC_KEY  # noqa: PLC0415
-
-        return self._hass.data.get(_SYNC_KEY)
+        return self.coordinator.sync
 
 
 class SunoSyncStatusSensor(_SunoSyncSensor):
@@ -178,9 +175,8 @@ class SunoSyncStatusSensor(_SunoSyncSensor):
     _attr_translation_key = "sync_status"
     _attr_icon = "mdi:sync"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry, hass)
-        self._attr_unique_id = f"{entry.unique_id}_sync_status"
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry, "sync_status")
 
     @property
     def native_value(self) -> str:
@@ -211,9 +207,8 @@ class SunoSyncFilesSensor(_SunoSyncSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:file-music"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry, hass)
-        self._attr_unique_id = f"{entry.unique_id}_sync_files"
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry, "sync_files")
 
     @property
     def native_value(self) -> int:
@@ -228,9 +223,8 @@ class SunoSyncPendingSensor(_SunoSyncSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:download"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry, hass)
-        self._attr_unique_id = f"{entry.unique_id}_sync_pending"
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry, "sync_pending")
 
     @property
     def native_value(self) -> int:
@@ -246,9 +240,8 @@ class SunoSyncSizeSensor(_SunoSyncSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:harddisk"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator, entry, hass)
-        self._attr_unique_id = f"{entry.unique_id}_sync_size"
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry, "sync_size")
 
     @property
     def native_value(self) -> float:

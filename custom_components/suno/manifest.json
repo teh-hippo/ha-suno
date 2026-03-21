@@ -8,6 +8,6 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/teh-hippo/ha-suno/issues",
-  "quality_scale": "platinum",
+  "quality_scale": "gold",
   "version": "1.9.3"
 }

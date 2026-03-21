@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +11,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.suno.api import SunoClip, SunoCredits, SunoPlaylist
 from custom_components.suno.const import (
     CONF_AUDIO_QUALITY,
     CONF_CACHE_ENABLED,
@@ -31,6 +31,7 @@ from custom_components.suno.const import (
     DEFAULT_SHOW_RECENT,
     DOMAIN,
 )
+from custom_components.suno.models import SunoClip, SunoCredits, SunoPlaylist
 
 MOCK_COOKIE = "__client=test-cookie-value; __client_uat=1234567890"
 MOCK_USER_ID = "test-user-id-123"
@@ -67,12 +68,23 @@ def make_entry(
     )
 
 
+def _make_mock_auth() -> AsyncMock:
+    """Return a mocked ClerkAuth."""
+    auth = AsyncMock()
+    auth.user_id = MOCK_USER_ID
+    auth.display_name = "Suno"
+    auth.authenticate = AsyncMock(return_value=MOCK_USER_ID)
+    auth.ensure_jwt = AsyncMock(return_value="mock-jwt-token")
+    return auth
+
+
 @pytest.fixture
 def mock_suno_client() -> AsyncMock:
     """Return a mocked SunoClient."""
     client = AsyncMock()
     client.user_id = MOCK_USER_ID
     client.display_name = "Suno"
+    client._auth = _make_mock_auth()
     client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
     client.get_feed = AsyncMock(return_value=(sample_clips(), False))
     client.get_all_songs = AsyncMock(return_value=sample_clips())
@@ -81,6 +93,17 @@ def mock_suno_client() -> AsyncMock:
     client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
     client.get_credits = AsyncMock(return_value=sample_credits())
     return client
+
+
+@contextmanager
+def patch_suno_setup(mock_client: AsyncMock, module: str = "custom_components.suno"):
+    """Patch both ClerkAuth and SunoClient for setup tests."""
+    mock_auth = mock_client._auth
+    with (
+        patch(f"{module}.ClerkAuth", return_value=mock_auth),
+        patch(f"{module}.SunoClient", return_value=mock_client),
+    ):
+        yield mock_client
 
 
 @pytest.fixture

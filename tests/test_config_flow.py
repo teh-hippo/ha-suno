@@ -31,12 +31,24 @@ from custom_components.suno.const import (
 )
 from custom_components.suno.exceptions import SunoAuthError
 
-from .conftest import MOCK_COOKIE, MOCK_USER_ID, make_entry, setup_entry
+from .conftest import MOCK_COOKIE, MOCK_USER_ID, make_entry, patch_suno_setup, setup_entry
 
 
 def _patch_client(mock_client: AsyncMock):
-    """Patch SunoClient at the config_flow import path."""
-    return patch("custom_components.suno.config_flow.SunoClient", return_value=mock_client)
+    """Patch ClerkAuth at the config_flow import path."""
+    mock_auth = mock_client._auth
+    return patch("custom_components.suno.config_flow.ClerkAuth", return_value=mock_auth)
+
+
+def _make_flow_client(**auth_kwargs) -> AsyncMock:
+    """Create a mock client for config flow tests with _auth set up."""
+    from .conftest import _make_mock_auth  # noqa: PLC0415
+
+    mock = AsyncMock()
+    mock._auth = _make_mock_auth()
+    for key, value in auth_kwargs.items():
+        setattr(mock._auth, key, value)
+    return mock
 
 
 # ── User flow ────────────────────────────────────────────────────────
@@ -53,8 +65,7 @@ async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry: AsyncMoc
     """Test successful user config flow."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=MOCK_USER_ID))
     mock_client.get_feed = AsyncMock(return_value=[])
 
     with _patch_client(mock_client):
@@ -80,8 +91,7 @@ async def test_user_flow_invalid_cookie(hass: HomeAssistant) -> None:
     """Test config flow with invalid cookie."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=SunoAuthError("Bad cookie"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=SunoAuthError("Bad cookie")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -97,8 +107,7 @@ async def test_user_flow_cannot_connect(hass: HomeAssistant) -> None:
     """Test config flow with connection error."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=aiohttp.ClientError("Connection refused"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=aiohttp.ClientError("Connection refused")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -114,8 +123,7 @@ async def test_user_flow_cannot_connect_timeout(hass: HomeAssistant) -> None:
     """Test config flow with timeout error."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=TimeoutError("Timed out"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=TimeoutError("Timed out")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -131,8 +139,7 @@ async def test_user_flow_unknown_error(hass: HomeAssistant) -> None:
     """Test config flow with unexpected exception."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=RuntimeError("Boom"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=RuntimeError("Boom")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -152,8 +159,7 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, mock_setup_entry: 
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=MOCK_USER_ID))
     mock_client.get_feed = AsyncMock(return_value=[])
 
     with _patch_client(mock_client):
@@ -172,15 +178,14 @@ async def test_user_flow_duplicate_entry(hass: HomeAssistant, mock_setup_entry: 
 async def test_reauth_flow_success(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reauth flow with valid new cookie succeeds."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reauth_flow(hass)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "reauth_confirm"
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=MOCK_USER_ID))
     mock_client.get_feed = AsyncMock(return_value=[])
 
     with _patch_client(mock_client):
@@ -197,13 +202,12 @@ async def test_reauth_flow_success(hass: HomeAssistant, mock_suno_client: AsyncM
 async def test_reauth_flow_invalid_cookie(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reauth flow with bad cookie shows error."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reauth_flow(hass)
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=SunoAuthError("Expired"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=SunoAuthError("Expired")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -218,13 +222,12 @@ async def test_reauth_flow_invalid_cookie(hass: HomeAssistant, mock_suno_client:
 async def test_reauth_flow_cannot_connect(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reauth flow with connection error shows cannot_connect."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reauth_flow(hass)
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=aiohttp.ClientError("Connection refused"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=aiohttp.ClientError("Connection refused")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -239,13 +242,12 @@ async def test_reauth_flow_cannot_connect(hass: HomeAssistant, mock_suno_client:
 async def test_reauth_flow_unknown_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reauth flow with unexpected error shows unknown."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reauth_flow(hass)
 
-    mock_client = AsyncMock()
-    mock_client.authenticate = AsyncMock(side_effect=RuntimeError("Boom"))
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=RuntimeError("Boom")))
 
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
@@ -263,7 +265,7 @@ async def test_reauth_flow_unknown_error(hass: HomeAssistant, mock_suno_client: 
 async def test_reconfigure_flow_shows_form(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reconfigure flow shows form with current options."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reconfigure_flow(hass)
@@ -274,12 +276,12 @@ async def test_reconfigure_flow_shows_form(hass: HomeAssistant, mock_suno_client
 async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reconfigure flow updates options and reloads."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await entry.start_reconfigure_flow(hass)
 
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
@@ -310,7 +312,7 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
 async def test_options_flow_shows_form(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Options flow shows form with current values."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -321,7 +323,7 @@ async def test_options_flow_shows_form(hass: HomeAssistant, mock_suno_client: As
 async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Options flow saves updated values across steps."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)

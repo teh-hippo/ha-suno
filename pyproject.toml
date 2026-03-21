@@ -67,9 +67,8 @@ dev = [
     "coverage>=7.10.6,<7.14",
     "ha-ffmpeg>=3.2.2",
     "mypy>=1.15",
-    "playwright>=1.58.0",
-    "pytest>=9.0.0,<9.1",
-    "pytest-asyncio>=1.3.0,<1.4",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
     "pytest-homeassistant-custom-component>=0.13.316",
     "ruff>=0.9",
 ]

@@ -1,57 +1,49 @@
-"""Pure utility functions for the Suno integration."""
+"""Audio processing utilities for the Suno integration.
+
+Contains ID3v2 header manipulation, WAV-to-FLAC transcoding via ffmpeg,
+and shared helpers for WAV URL polling and album art download.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .const import CDN_BASE_URL, SYNC_FFMPEG_TIMEOUT
-from .models import SunoClip
+from .const import SYNC_FFMPEG_TIMEOUT
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _fix_cdn_url(url: str | None) -> str:
-    """Rewrite cdn2.suno.ai URLs to cdn1.suno.ai (cdn2 returns 403)."""
-    if not url:
-        return ""
-    return url.replace("cdn2.suno.ai", "cdn1.suno.ai")
+def _build_id3_header(title: str, artist: str) -> bytes:
+    """Build a minimal ID3v2.4 header with title and artist frames."""
+    frames = b""
+    for frame_id, text in [("TIT2", title), ("TPE1", artist)]:
+        text_bytes = b"\x03" + text.encode("utf-8")
+        frame_header = frame_id.encode("ascii") + len(text_bytes).to_bytes(4, "big") + b"\x00\x00"
+        frames += frame_header + text_bytes
 
-
-def clip_meta_hash(clip: SunoClip) -> str:
-    """Compute a short hash of clip metadata for change detection."""
-    key = f"{clip.title}|{clip.tags}|{clip.image_url}"
-    return hashlib.md5(key.encode()).hexdigest()[:12]  # noqa: S324
-
-
-def _sanitise_clip(raw: dict[str, Any]) -> SunoClip:
-    """Build a SunoClip from raw API data, keeping only allowlisted fields."""
-    metadata = raw.get("metadata") or {}
-    image_url = _fix_cdn_url(raw.get("image_url"))
-    image_large_url = _fix_cdn_url(raw.get("image_large_url"))
-
-    audio_url = raw.get("audio_url", "")
-    clip_id = raw.get("id", "")
-    if audio_url and "audiopipe" in audio_url and clip_id:
-        audio_url = f"{CDN_BASE_URL}/{clip_id}.mp3"
-
-    return SunoClip(
-        id=clip_id,
-        title=raw.get("title", "Untitled"),
-        audio_url=audio_url,
-        image_url=image_url,
-        image_large_url=image_large_url,
-        is_liked=raw.get("is_liked", False),
-        status=raw.get("status", "unknown"),
-        created_at=raw.get("created_at", ""),
-        tags=metadata.get("tags", ""),
-        duration=metadata.get("duration") or 0.0,
-        clip_type=metadata.get("type", ""),
-        has_vocal=metadata.get("has_vocal", False),
+    # ID3v2.4 header: "ID3" + version 2.4 + no flags + syncsafe size
+    size = len(frames)
+    syncsafe = (
+        ((size & 0x0FE00000) << 3) | ((size & 0x001FC000) << 2) | ((size & 0x00003F80) << 1) | (size & 0x0000007F)
     )
+    header = b"ID3\x04\x00\x00" + syncsafe.to_bytes(4, "big")
+    return header + frames
+
+
+def _skip_existing_id3(chunk: bytes) -> bytes:
+    """Strip a leading ID3v2 tag from the first chunk of upstream data."""
+    if len(chunk) < 10 or chunk[:3] != b"ID3":
+        return chunk
+    raw = chunk[6:10]
+    tag_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
+    skip = tag_size + 10
+    return chunk[skip:]
 
 
 async def wav_to_flac(
@@ -132,3 +124,28 @@ async def wav_to_flac(
                 os.unlink(tmp_img_path)
             except OSError:
                 pass
+
+
+async def ensure_wav_url(client: Any, clip_id: str, polls: int = 24, interval: float = 5.0) -> str | None:
+    """Poll for a WAV URL, requesting server-side generation if needed."""
+    wav_url = await client.get_wav_url(clip_id)
+    if wav_url:
+        return wav_url
+    await client.request_wav(clip_id)
+    for _ in range(polls):
+        await asyncio.sleep(interval)
+        wav_url = await client.get_wav_url(clip_id)
+        if wav_url:
+            return wav_url
+    return None
+
+
+async def fetch_album_art(session: ClientSession, image_url: str) -> bytes | None:
+    """Download album art, returning raw bytes or None on failure."""
+    try:
+        async with session.get(image_url) as resp:
+            if resp.status == 200:
+                return await resp.read()
+    except Exception:
+        _LOGGER.debug("Failed to download album art from %s", image_url)
+    return None

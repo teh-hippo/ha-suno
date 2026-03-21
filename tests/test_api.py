@@ -11,12 +11,17 @@ import pytest
 
 from custom_components.suno.api import (
     SunoClient,
+)
+from custom_components.suno.auth import (
+    ClerkAuth,
     _decode_jwt_exp,
-    _fix_cdn_url,
     _normalise_token,
-    _sanitise_clip,
 )
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
+from custom_components.suno.models import (
+    SunoClip,
+    _fix_cdn_url,
+)
 
 # ── Helper utilities ─────────────────────────────────────────────────
 
@@ -41,11 +46,12 @@ def _mock_response(status: int = 200, json_data=None, text: str = "", headers: d
 
 def _make_authed_client(session: AsyncMock) -> SunoClient:
     """Create a SunoClient with a pre-populated JWT (skips auth calls)."""
-    client = SunoClient(session, "test-cookie")
-    client._jwt = _make_jwt(int(time.time()) + 3600)
-    client._jwt_exp = int(time.time()) + 3600
-    client._session_id = "sess-123"
-    client._user_id = "user-123"
+    auth = ClerkAuth(session, "test-cookie")
+    auth._jwt = _make_jwt(int(time.time()) + 3600)
+    auth._jwt_exp = int(time.time()) + 3600
+    auth._session_id = "sess-123"
+    auth._user_id = "user-123"
+    client = SunoClient(auth)
     return client
 
 
@@ -87,7 +93,7 @@ def test_sanitise_clip_allowlist() -> None:
         "user_id": "secret-user-id",
         "display_name": "Secret Name",
     }
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     assert clip.id == "test-id"
     assert clip.title == "Test"
     assert clip.is_liked is True
@@ -99,7 +105,7 @@ def test_sanitise_clip_allowlist() -> None:
 def test_sanitise_clip_missing_fields() -> None:
     """Missing fields get safe defaults."""
     raw: dict = {"metadata": {"type": "gen"}}
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     assert clip.id == ""
     assert clip.title == "Untitled"
     assert clip.audio_url == ""
@@ -112,7 +118,7 @@ def test_sanitise_clip_missing_fields() -> None:
 def test_sanitise_clip_none_metadata() -> None:
     """None metadata is handled."""
     raw: dict = {"id": "x", "metadata": None}
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     assert clip.tags == ""
     assert clip.duration == 0.0
 
@@ -124,7 +130,7 @@ def test_sanitise_clip_rewrites_audiopipe_url() -> None:
         "audio_url": "https://audiopipe.suno.ai/?item_id=abc-123",
         "metadata": {"type": "gen"},
     }
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     assert clip.audio_url == "https://cdn1.suno.ai/abc-123.mp3"
 
 
@@ -135,7 +141,7 @@ def test_sanitise_clip_keeps_non_audiopipe() -> None:
         "audio_url": "https://cdn1.suno.ai/abc-123.mp3",
         "metadata": {"type": "gen"},
     }
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     assert clip.audio_url == "https://cdn1.suno.ai/abc-123.mp3"
 
 
@@ -195,7 +201,7 @@ def test_all_audio_urls_are_https() -> None:
         "image_large_url": "https://cdn1.suno.ai/image_large_test.jpeg",
         "metadata": {"type": "gen"},
     }
-    clip = _sanitise_clip(raw)
+    clip = SunoClip.from_api_response(raw)
     for url in [clip.audio_url, clip.image_url, clip.image_large_url]:
         if url:
             assert url.startswith("https://"), f"URL is not HTTPS: {url}"
@@ -207,11 +213,12 @@ def test_all_audio_urls_are_https() -> None:
 def test_client_user_id_initially_none() -> None:
     """user_id is None before authentication."""
     session = AsyncMock()
-    client = SunoClient(session, "cookie")
+    auth = ClerkAuth(session, "cookie")
+    client = SunoClient(auth)
     assert client.user_id is None
 
 
-# ── SunoClient.authenticate ─────────────────────────────────────────
+# ── ClerkAuth.authenticate ──────────────────────────────────────────
 
 
 async def test_authenticate_success() -> None:
@@ -231,11 +238,11 @@ async def test_authenticate_success() -> None:
     session.get = MagicMock(return_value=clerk_resp)
     session.post = MagicMock(return_value=jwt_resp)
 
-    client = SunoClient(session, "test-cookie")
-    user_id = await client.authenticate()
+    auth = ClerkAuth(session, "test-cookie")
+    user_id = await auth.authenticate()
 
     assert user_id == "user-456"
-    assert client.user_id == "user-456"
+    assert auth.user_id == "user-456"
 
 
 async def test_authenticate_no_user_id_raises() -> None:
@@ -255,12 +262,12 @@ async def test_authenticate_no_user_id_raises() -> None:
     session.get = MagicMock(return_value=clerk_resp)
     session.post = MagicMock(return_value=jwt_resp)
 
-    client = SunoClient(session, "test-cookie")
+    auth = ClerkAuth(session, "test-cookie")
     with pytest.raises(SunoAuthError, match="Could not determine user ID"):
-        await client.authenticate()
+        await auth.authenticate()
 
 
-# ── SunoClient._get_session_id ───────────────────────────────────────
+# ── ClerkAuth._get_session_id ────────────────────────────────────────
 
 
 async def test_get_session_id_clerk_http_error() -> None:
@@ -268,9 +275,9 @@ async def test_get_session_id_clerk_http_error() -> None:
     session = AsyncMock()
     session.get = MagicMock(return_value=_mock_response(403))
 
-    client = SunoClient(session, "cookie")
+    auth = ClerkAuth(session, "cookie")
     with pytest.raises(SunoAuthError, match="status 403"):
-        await client._get_session_id()
+        await auth._get_session_id()
 
 
 async def test_get_session_id_no_response() -> None:
@@ -278,9 +285,9 @@ async def test_get_session_id_no_response() -> None:
     session = AsyncMock()
     session.get = MagicMock(return_value=_mock_response(200, {"response": None}))
 
-    client = SunoClient(session, "cookie")
+    auth = ClerkAuth(session, "cookie")
     with pytest.raises(SunoAuthError, match="Invalid Clerk response"):
-        await client._get_session_id()
+        await auth._get_session_id()
 
 
 async def test_get_session_id_no_active_session() -> None:
@@ -290,9 +297,9 @@ async def test_get_session_id_no_active_session() -> None:
         return_value=_mock_response(200, {"response": {"last_active_session_id": None, "sessions": []}})
     )
 
-    client = SunoClient(session, "cookie")
+    auth = ClerkAuth(session, "cookie")
     with pytest.raises(SunoAuthError, match="No active session"):
-        await client._get_session_id()
+        await auth._get_session_id()
 
 
 async def test_get_session_id_connection_error() -> None:
@@ -304,12 +311,12 @@ async def test_get_session_id_connection_error() -> None:
     error_resp.__aexit__ = AsyncMock(return_value=False)
     session.get = MagicMock(return_value=error_resp)
 
-    client = SunoClient(session, "cookie")
+    auth = ClerkAuth(session, "cookie")
     with pytest.raises(SunoAuthError, match="Could not connect to Clerk"):
-        await client._get_session_id()
+        await auth._get_session_id()
 
 
-# ── SunoClient._refresh_jwt ─────────────────────────────────────────
+# ── ClerkAuth._refresh_jwt ──────────────────────────────────────────
 
 
 async def test_refresh_jwt_success() -> None:
@@ -318,12 +325,12 @@ async def test_refresh_jwt_success() -> None:
     jwt_token = _make_jwt(2000000000)
     session.post = MagicMock(return_value=_mock_response(200, {"jwt": jwt_token}))
 
-    client = SunoClient(session, "cookie")
-    client._session_id = "sess-123"
+    auth = ClerkAuth(session, "cookie")
+    auth._session_id = "sess-123"
 
-    await client._refresh_jwt()
-    assert client._jwt == jwt_token
-    assert client._jwt_exp == 2000000000
+    await auth._refresh_jwt()
+    assert auth._jwt == jwt_token
+    assert auth._jwt_exp == 2000000000
 
 
 async def test_refresh_jwt_http_error() -> None:
@@ -331,11 +338,11 @@ async def test_refresh_jwt_http_error() -> None:
     session = AsyncMock()
     session.post = MagicMock(return_value=_mock_response(401))
 
-    client = SunoClient(session, "cookie")
-    client._session_id = "sess-123"
+    auth = ClerkAuth(session, "cookie")
+    auth._session_id = "sess-123"
 
     with pytest.raises(SunoAuthError, match="JWT refresh failed"):
-        await client._refresh_jwt()
+        await auth._refresh_jwt()
 
 
 async def test_refresh_jwt_no_jwt_in_response() -> None:
@@ -343,11 +350,11 @@ async def test_refresh_jwt_no_jwt_in_response() -> None:
     session = AsyncMock()
     session.post = MagicMock(return_value=_mock_response(200, {"jwt": None}))
 
-    client = SunoClient(session, "cookie")
-    client._session_id = "sess-123"
+    auth = ClerkAuth(session, "cookie")
+    auth._session_id = "sess-123"
 
     with pytest.raises(SunoAuthError, match="No JWT"):
-        await client._refresh_jwt()
+        await auth._refresh_jwt()
 
 
 async def test_refresh_jwt_connection_error() -> None:
@@ -359,11 +366,11 @@ async def test_refresh_jwt_connection_error() -> None:
     error_resp.__aexit__ = AsyncMock(return_value=False)
     session.post = MagicMock(return_value=error_resp)
 
-    client = SunoClient(session, "cookie")
-    client._session_id = "sess-123"
+    auth = ClerkAuth(session, "cookie")
+    auth._session_id = "sess-123"
 
     with pytest.raises(SunoAuthError, match="Could not refresh JWT"):
-        await client._refresh_jwt()
+        await auth._refresh_jwt()
 
 
 async def test_refresh_jwt_fetches_session_if_missing() -> None:
@@ -383,36 +390,36 @@ async def test_refresh_jwt_fetches_session_if_missing() -> None:
     session.get = MagicMock(return_value=clerk_resp)
     session.post = MagicMock(return_value=jwt_resp)
 
-    client = SunoClient(session, "cookie")
-    assert client._session_id is None
+    auth = ClerkAuth(session, "cookie")
+    assert auth._session_id is None
 
-    await client._refresh_jwt()
-    assert client._session_id == "sess-auto"
-    assert client._jwt is not None
+    await auth._refresh_jwt()
+    assert auth._session_id == "sess-auto"
+    assert auth._jwt is not None
 
 
-# ── SunoClient._ensure_jwt ──────────────────────────────────────────
+# ── ClerkAuth.ensure_jwt ─────────────────────────────────────────────
 
 
 async def test_ensure_jwt_returns_valid_jwt() -> None:
-    """_ensure_jwt returns existing JWT when still valid."""
+    """ensure_jwt returns existing JWT when still valid."""
     session = AsyncMock()
     client = _make_authed_client(session)
 
-    jwt = await client._ensure_jwt()
-    assert jwt == client._jwt
+    jwt = await client._auth.ensure_jwt()
+    assert jwt == client._auth._jwt
 
 
 async def test_ensure_jwt_refreshes_expired() -> None:
-    """_ensure_jwt refreshes when JWT is expired."""
+    """ensure_jwt refreshes when JWT is expired."""
     session = AsyncMock()
     client = _make_authed_client(session)
-    client._jwt_exp = int(time.time()) - 10  # expired
+    client._auth._jwt_exp = int(time.time()) - 10  # expired
 
     new_jwt = _make_jwt(int(time.time()) + 7200)
     session.post = MagicMock(return_value=_mock_response(200, {"jwt": new_jwt}))
 
-    jwt = await client._ensure_jwt()
+    jwt = await client._auth.ensure_jwt()
     assert jwt == new_jwt
 
 
@@ -998,7 +1005,8 @@ async def test_api_get_connection_error() -> None:
 async def test_client_cookie_only_sent_to_clerk() -> None:
     """Cookie must only be sent to clerk.suno.com, never to the Suno API."""
     session = AsyncMock()
-    client = SunoClient(session, "test-cookie")
+    auth = ClerkAuth(session, "test-cookie")
+    client = SunoClient(auth)
 
     cookie_urls: list[str] = []
 
@@ -1037,7 +1045,7 @@ async def test_client_cookie_only_sent_to_clerk() -> None:
     session.get = capture_get
     session.post = capture_post
 
-    await client.authenticate()
+    await auth.authenticate()
     await client.get_feed(0)
 
     for url in cookie_urls:

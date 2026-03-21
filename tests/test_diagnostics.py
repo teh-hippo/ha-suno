@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 
 from custom_components.suno.diagnostics import async_get_config_entry_diagnostics
 
-from .conftest import make_entry, setup_entry
+from .conftest import make_entry, patch_suno_setup, setup_entry
 
 
 async def test_diagnostics_output(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Diagnostics returns expected structure with redacted cookie."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await async_get_config_entry_diagnostics(hass, entry)
@@ -37,7 +37,7 @@ async def test_diagnostics_no_credits(hass: HomeAssistant, mock_suno_client: Asy
     """Diagnostics handles missing credits gracefully."""
     mock_suno_client.get_credits.side_effect = Exception("Credits error")
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await async_get_config_entry_diagnostics(hass, entry)

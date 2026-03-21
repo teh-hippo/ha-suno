@@ -6,13 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.suno.proxy import (
-    SunoMediaProxyView,
+from custom_components.suno.audio import (
     _build_id3_header,
     _skip_existing_id3,
 )
+from custom_components.suno.proxy import (
+    SunoMediaProxyView,
+)
 
-from .conftest import make_entry, setup_entry
+from .conftest import make_entry, patch_suno_setup, setup_entry
 
 # ── ID3 header builder ──────────────────────────────────────────────
 
@@ -123,7 +125,7 @@ class TestSkipExistingId3:
 async def test_view_registered_on_setup(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """The proxy view should be registered when the entry loads."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Check that a route matching our pattern exists
@@ -135,7 +137,7 @@ async def test_view_registered_on_setup(hass: HomeAssistant, mock_suno_client: A
 async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Requesting a nonexistent clip returns 404."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
@@ -146,7 +148,7 @@ async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncM
 async def test_view_finds_clip_in_main_clips(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """The view can find a clip from the main clips list."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
@@ -160,7 +162,7 @@ async def test_view_finds_clip_in_liked(hass: HomeAssistant, mock_suno_client: A
     mock_suno_client.get_all_songs.return_value = []
 
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
@@ -172,7 +174,7 @@ async def test_view_finds_clip_in_liked(hass: HomeAssistant, mock_suno_client: A
 async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """GET for a clip not in cache attempts CDN fetch (returns 502 if CDN fails)."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     client = await hass_client()
@@ -194,7 +196,7 @@ async def test_view_wav_url_construction(hass: HomeAssistant, mock_suno_client: 
             CONF_AUDIO_QUALITY: "high",
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
@@ -207,7 +209,6 @@ async def test_view_cache_hit_serves_file(
 ) -> None:
     """When cache has a file, the proxy should serve it directly."""
     from custom_components.suno.const import CONF_CACHE_ENABLED
-    from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
     entry = make_entry(
         options={
@@ -215,7 +216,7 @@ async def test_view_cache_hit_serves_file(
             CONF_CACHE_ENABLED: True,
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Set up a fake cached file
@@ -224,7 +225,7 @@ async def test_view_cache_hit_serves_file(
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=cache_file)
-    hass.data[_SUNO_CACHE_KEY] = mock_cache
+    entry.runtime_data.cache = mock_cache
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -239,7 +240,7 @@ async def test_view_cache_hit_serves_file(
 async def test_find_clip_skips_entries_without_runtime_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Entries with runtime_data=None should be skipped (line 115)."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Add a second entry with no runtime_data to exercise the `continue`
@@ -278,16 +279,15 @@ async def _async_iter(chunks):
 async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """MP3 streaming should inject ID3 header and collect chunks for cache (lines 211-246)."""
     from custom_components.suno.const import CONF_CACHE_ENABLED
-    from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
     entry = make_entry(options={**make_entry().options, CONF_CACHE_ENABLED: True})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock()
-    hass.data[_SUNO_CACHE_KEY] = mock_cache
+    entry.runtime_data.cache = mock_cache
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
@@ -310,7 +310,7 @@ async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
 async def test_stream_mp3_without_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """MP3 streaming without cache should not attempt cache write."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
@@ -332,7 +332,7 @@ async def test_stream_mp3_without_cache(hass: HomeAssistant, mock_suno_client: A
 async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """MP3 streaming should strip existing ID3 from the first upstream chunk."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Build a fake upstream response with an existing ID3 tag
@@ -360,7 +360,6 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
 async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """High quality should transcode WAV to FLAC and write to cache."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY, CONF_CACHE_ENABLED
-    from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
     entry = make_entry(
         options={
@@ -369,13 +368,13 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
             CONF_CACHE_ENABLED: True,
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock()
-    hass.data[_SUNO_CACHE_KEY] = mock_cache
+    entry.runtime_data.cache = mock_cache
 
     wav_data = _make_test_wav()
     mock_response = AsyncMock()
@@ -430,7 +429,7 @@ async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: As
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     wav_data = _make_test_wav()
@@ -453,7 +452,7 @@ async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: As
 async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """Non-200 upstream response should return 502 (lines 173-178)."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_response = AsyncMock()
@@ -475,7 +474,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     wav_data = _make_test_wav()
@@ -498,7 +497,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
 async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """For known MP3 clips, the proxy should use clip.audio_url (line 162)."""
     entry = make_entry()
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 50
@@ -522,16 +521,15 @@ async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: As
 async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """Cache write failure should be silently logged (lines 292-296)."""
     from custom_components.suno.const import CONF_CACHE_ENABLED
-    from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
     entry = make_entry(options={**make_entry().options, CONF_CACHE_ENABLED: True})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
-    hass.data[_SUNO_CACHE_KEY] = mock_cache
+    entry.runtime_data.cache = mock_cache
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 100
     mock_response = AsyncMock()
@@ -553,7 +551,6 @@ async def test_save_to_cache_bytes_failure_is_silent(
 ) -> None:
     """Cache write failure for WAV should be silently logged (lines 301-304)."""
     from custom_components.suno.const import CONF_AUDIO_QUALITY, CONF_CACHE_ENABLED
-    from custom_components.suno.proxy import _SUNO_CACHE_KEY
 
     entry = make_entry(
         options={
@@ -562,13 +559,13 @@ async def test_save_to_cache_bytes_failure_is_silent(
             CONF_CACHE_ENABLED: True,
         }
     )
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
-    hass.data[_SUNO_CACHE_KEY] = mock_cache
+    entry.runtime_data.cache = mock_cache
 
     wav_data = _make_test_wav()
     mock_response = AsyncMock()
@@ -595,7 +592,7 @@ async def test_wav_to_flac_uses_ffmpeg_manager_binary(
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     wav_data = _make_test_wav()
@@ -626,7 +623,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     wav_data = _make_test_wav()
@@ -659,7 +656,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     wav_data = _make_test_wav()
@@ -686,7 +683,7 @@ async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: Asy
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Mock the WAV API: get_wav_url returns URL immediately
@@ -716,7 +713,7 @@ async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client:
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # First call returns None, second returns URL
@@ -746,7 +743,7 @@ async def test_hq_returns_502_when_no_client(hass: HomeAssistant, mock_suno_clie
     from custom_components.suno.const import CONF_AUDIO_QUALITY
 
     entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
-    with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
+    with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     # Remove runtime_data to simulate no client

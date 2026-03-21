@@ -20,6 +20,13 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .audio import (
+    _build_id3_header,
+    _skip_existing_id3,
+    ensure_wav_url,
+    fetch_album_art,
+    wav_to_flac,
+)
 from .const import (
     CDN_BASE_URL,
     CONF_AUDIO_QUALITY,
@@ -30,8 +37,7 @@ from .const import (
     QUALITY_HIGH,
 )
 from .coordinator import SunoCoordinator
-from .helpers import clip_meta_hash, wav_to_flac
-from .models import SunoClip
+from .models import SunoClip, clip_meta_hash
 
 if TYPE_CHECKING:
     from .cache import SunoCache
@@ -39,33 +45,6 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 _SUNO_CACHE_KEY = f"{DOMAIN}_cache"
-
-
-def _build_id3_header(title: str, artist: str) -> bytes:
-    """Build a minimal ID3v2.4 header with title and artist frames."""
-    frames = b""
-    for frame_id, text in [("TIT2", title), ("TPE1", artist)]:
-        text_bytes = b"\x03" + text.encode("utf-8")
-        frame_header = frame_id.encode("ascii") + len(text_bytes).to_bytes(4, "big") + b"\x00\x00"
-        frames += frame_header + text_bytes
-
-    # ID3v2.4 header: "ID3" + version 2.4 + no flags + syncsafe size
-    size = len(frames)
-    syncsafe = (
-        ((size & 0x0FE00000) << 3) | ((size & 0x001FC000) << 2) | ((size & 0x00003F80) << 1) | (size & 0x0000007F)
-    )
-    header = b"ID3\x04\x00\x00" + syncsafe.to_bytes(4, "big")
-    return header + frames
-
-
-def _skip_existing_id3(chunk: bytes) -> bytes:
-    """Strip a leading ID3v2 tag from the first chunk of upstream data."""
-    if len(chunk) < 10 or chunk[:3] != b"ID3":
-        return chunk
-    raw = chunk[6:10]
-    tag_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
-    skip = tag_size + 10
-    return chunk[skip:]
 
 
 class SunoMediaProxyView(HomeAssistantView):
@@ -78,21 +57,33 @@ class SunoMediaProxyView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._wav_locks: dict[str, asyncio.Lock] = {}
+        self._clips_by_id: dict[str, SunoClip] = {}
+        self._clips_generation: int = -1
 
     def _find_clip(self, clip_id: str) -> SunoClip | None:
-        """Look up a clip across all active coordinators."""
+        """Look up a clip across all active coordinators using a cached dict."""
+        # Rebuild the lookup dict when coordinator data has changed
+        generation = 0
         entries = self.hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
             coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
-            if coordinator is None:
-                continue
-            for clip in coordinator.data.clips:
-                if clip.id == clip_id:
-                    return clip
-            for clip in coordinator.data.liked_clips:
-                if clip.id == clip_id:
-                    return clip
-        return None
+            if coordinator is not None:
+                generation += id(coordinator.data)
+
+        if generation != self._clips_generation:
+            lookup: dict[str, SunoClip] = {}
+            for entry in entries:
+                coordinator = getattr(entry, "runtime_data", None)
+                if coordinator is None:
+                    continue
+                for clip in coordinator.data.clips:
+                    lookup[clip.id] = clip
+                for clip in coordinator.data.liked_clips:
+                    lookup.setdefault(clip.id, clip)
+            self._clips_by_id = lookup
+            self._clips_generation = generation
+
+        return self._clips_by_id.get(clip_id)
 
     def _get_entry_options(self) -> dict[str, Any]:
         """Return options from the first loaded config entry."""
@@ -103,8 +94,13 @@ class SunoMediaProxyView(HomeAssistantView):
         return {}
 
     def _get_cache(self) -> SunoCache | None:
-        """Return the shared SunoCache instance if available."""
-        return self.hass.data.get(_SUNO_CACHE_KEY)
+        """Return the SunoCache from the first loaded coordinator that has one."""
+        entries = self.hass.config_entries.async_entries(DOMAIN)
+        for entry in entries:
+            coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
+            if coordinator is not None and coordinator.cache is not None:
+                return coordinator.cache
+        return None
 
     def _get_client(self) -> Any:
         """Return the SunoClient from the first loaded coordinator."""
@@ -247,18 +243,11 @@ class SunoMediaProxyView(HomeAssistantView):
             self._wav_locks[clip_id] = asyncio.Lock()
 
         async with self._wav_locks[clip_id]:
-            wav_url = await client.get_wav_url(clip_id)
-            if not wav_url:
-                try:
-                    await client.request_wav(clip_id)
-                except Exception:
-                    _LOGGER.exception("WAV conversion request failed for %s", clip_id)
-                    return web.Response(status=502, text="WAV conversion failed")
-                for _ in range(24):
-                    await asyncio.sleep(5)
-                    wav_url = await client.get_wav_url(clip_id)
-                    if wav_url:
-                        break
+            try:
+                wav_url = await ensure_wav_url(client, clip_id)
+            except Exception:
+                _LOGGER.exception("WAV conversion request failed for %s", clip_id)
+                return web.Response(status=502, text="WAV conversion failed")
 
         if not wav_url:
             return web.Response(status=502, text="WAV generation timed out")
@@ -283,16 +272,9 @@ class SunoMediaProxyView(HomeAssistantView):
         finally:
             upstream.close()
 
-        # Download album art in parallel (small, ~50-100KB)
-        image_data: bytes | None = None
+        # Download album art
         image_url = clip.image_large_url or clip.image_url if clip else None
-        if image_url:
-            try:
-                async with session.get(image_url) as img_resp:
-                    if img_resp.status == 200:
-                        image_data = await img_resp.read()
-            except Exception:
-                _LOGGER.debug("Failed to download album art for %s", clip_id)
+        image_data = await fetch_album_art(session, image_url) if image_url else None
 
         # Transcode WAV to FLAC with metadata and album art
         flac_data = await wav_to_flac(

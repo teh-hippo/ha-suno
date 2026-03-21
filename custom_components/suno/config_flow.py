@@ -29,7 +29,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .api import SunoClient
+from .auth import ClerkAuth
 from .const import (
     CONF_AUDIO_QUALITY,
     CONF_CACHE_ENABLED,
@@ -67,6 +67,65 @@ from .exceptions import SunoAuthError
 _LOGGER = logging.getLogger(__name__)
 
 
+def _display_schema(opts: dict[str, Any]) -> vol.Schema:
+    """Build the shared schema for display and cache options.
+
+    Used by both async_step_reconfigure and SunoOptionsFlow.async_step_init.
+    """
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_SHOW_PLAYLISTS,
+                default=opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_SHOW_LIKED,
+                default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_SHOW_RECENT,
+                default=opts.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_RECENT_COUNT,
+                default=opts.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
+            ): NumberSelector(NumberSelectorConfig(min=1, max=50, step=1, mode=NumberSelectorMode.SLIDER)),
+            vol.Required(
+                CONF_AUDIO_QUALITY,
+                default=opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value="standard", label="Standard (MP3)"),
+                        SelectOptionDict(value="high", label="High (FLAC)"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_CACHE_TTL,
+                default=opts.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
+            ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
+            vol.Required(
+                CONF_CACHE_ENABLED,
+                default=opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
+            ): BooleanSelector(),
+            vol.Required(
+                CONF_CACHE_MAX_SIZE,
+                default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=100,
+                    max=10000,
+                    step=100,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="MB",
+                )
+            ),
+        }
+    )
+
+
 class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Suno."""
 
@@ -79,10 +138,10 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             cookie = user_input[CONF_COOKIE]
             session = async_get_clientsession(self.hass)
-            client = SunoClient(session, cookie)
+            auth = ClerkAuth(session, cookie)
 
             try:
-                user_id = await client.authenticate()
+                user_id = await auth.authenticate()
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
             except aiohttp.ClientError, TimeoutError:
@@ -132,10 +191,10 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             cookie = user_input[CONF_COOKIE]
             session = async_get_clientsession(self.hass)
-            client = SunoClient(session, cookie)
+            auth = ClerkAuth(session, cookie)
 
             try:
-                await client.authenticate()
+                await auth.authenticate()
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
             except aiohttp.ClientError, TimeoutError:
@@ -164,7 +223,13 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Handle reconfiguration of display options."""
+        """Handle reconfiguration of display options.
+
+        This duplicates the first page of the options flow on purpose:
+        reconfigure is available from the integrations UI without opening
+        the full multi-step options flow, giving users a quick path to
+        tweak display/cache settings.
+        """
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         if not entry:
             return self.async_abort(reason="unknown")
@@ -177,58 +242,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_SHOW_LIKED,
-                        default=entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_SHOW_RECENT,
-                        default=entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_RECENT_COUNT,
-                        default=entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
-                    ): NumberSelector(NumberSelectorConfig(min=5, max=50, step=5, mode=NumberSelectorMode.SLIDER)),
-                    vol.Required(
-                        CONF_SHOW_PLAYLISTS,
-                        default=entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_CACHE_TTL,
-                        default=entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
-                    ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
-                    vol.Required(
-                        CONF_AUDIO_QUALITY,
-                        default=entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
-                    ): SelectSelector(
-                        SelectSelectorConfig(
-                            options=[
-                                SelectOptionDict(value="standard", label="Standard (MP3)"),
-                                SelectOptionDict(value="high", label="High Quality (FLAC)"),
-                            ],
-                            mode=SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_CACHE_ENABLED,
-                        default=entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_CACHE_MAX_SIZE,
-                        default=entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=100,
-                            max=10000,
-                            step=100,
-                            mode=NumberSelectorMode.BOX,
-                            unit_of_measurement="MB",
-                        )
-                    ),
-                }
-            ),
+            data_schema=_display_schema(dict(entry.options)),
         )
 
     @staticmethod
@@ -250,61 +264,9 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             self._options = {**self.config_entry.options, **user_input}
             return await self.async_step_sync()
 
-        opts = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_SHOW_PLAYLISTS,
-                        default=opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_SHOW_LIKED,
-                        default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_SHOW_RECENT,
-                        default=opts.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_RECENT_COUNT,
-                        default=opts.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
-                    ): NumberSelector(NumberSelectorConfig(min=1, max=50, step=1, mode=NumberSelectorMode.SLIDER)),
-                    vol.Required(
-                        CONF_AUDIO_QUALITY,
-                        default=opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
-                    ): SelectSelector(
-                        SelectSelectorConfig(
-                            options=[
-                                SelectOptionDict(value="standard", label="Standard (MP3)"),
-                                SelectOptionDict(value="high", label="High (Lossless)"),
-                            ],
-                            mode=SelectSelectorMode.DROPDOWN,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_CACHE_TTL,
-                        default=opts.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
-                    ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
-                    vol.Required(
-                        CONF_CACHE_ENABLED,
-                        default=opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
-                    ): BooleanSelector(),
-                    vol.Required(
-                        CONF_CACHE_MAX_SIZE,
-                        default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=100,
-                            max=10000,
-                            step=100,
-                            mode=NumberSelectorMode.BOX,
-                            unit_of_measurement="MB",
-                        )
-                    ),
-                }
-            ),
+            data_schema=_display_schema(dict(self.config_entry.options)),
         )
 
     async def async_step_sync(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

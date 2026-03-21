@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +16,15 @@ from custom_components.suno.const import (
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
 )
-from custom_components.suno.sync import SunoSync, _clip_path, _sanitise_filename
+from custom_components.suno.sync import (
+    SunoSync,
+    _clip_path,
+    _purge_trash,
+    _restore_from_trash,
+    _sanitise_filename,
+    _trash_file,
+    _write_file,
+)
 
 # ── Filename sanitisation ───────────────────────────────────────────
 
@@ -274,3 +283,176 @@ async def test_sync_properties(hass: HomeAssistant) -> None:
     assert sync.pending == 0
     assert sync.errors == 0
     assert sync.last_sync is None
+
+
+# ── _write_file ────────────────────────────────────────────────────
+
+
+async def test_write_file_creates_file(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Atomic write creates the target file with correct data."""
+    target = tmp_path / "subdir" / "output.flac"
+    data = b"fLaC" + b"\x00" * 50
+
+    await _write_file(hass, target, data)
+
+    assert target.exists()
+    assert target.read_bytes() == data
+    # No .tmp file should remain
+    assert not target.with_suffix(".tmp").exists()
+
+
+async def test_write_file_failure_cleans_tmp(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Write failure removes the .tmp file."""
+    target = tmp_path / "output.flac"
+
+    with patch.object(Path, "write_bytes", side_effect=OSError("disk full")):
+        try:
+            await _write_file(hass, target, b"data")
+        except OSError:
+            pass
+
+    assert not target.with_suffix(".tmp").exists()
+    assert not target.exists()
+
+
+# ── _trash_file ────────────────────────────────────────────────────
+
+
+async def test_trash_file_moves_to_trash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Trashing moves the file to .trash/ and updates state."""
+    (tmp_path / "2026-03-15").mkdir()
+    source = tmp_path / "2026-03-15" / "song.flac"
+    source.write_bytes(b"fLaC" + b"\x00" * 20)
+
+    entry = {"path": "2026-03-15/song.flac", "title": "Song"}
+    trash_state: dict = {}
+
+    await _trash_file(hass, tmp_path, "clip-1", entry, trash_state)
+
+    assert not source.exists()
+    assert (tmp_path / ".trash" / "song.flac").exists()
+    assert "clip-1" in trash_state
+    assert trash_state["clip-1"]["original_path"] == "2026-03-15/song.flac"
+
+
+# ── _restore_from_trash ───────────────────────────────────────────
+
+
+async def test_restore_from_trash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Restoring moves file from .trash/ back to original path."""
+    trash_dir = tmp_path / ".trash"
+    trash_dir.mkdir()
+    (trash_dir / "song.flac").write_bytes(b"fLaC" + b"\x00" * 20)
+
+    trash_state = {
+        "clip-1": {
+            "path": ".trash/song.flac",
+            "original_path": "2026-03-15/song.flac",
+            "trashed_at": datetime.now(tz=UTC).isoformat(),
+            "title": "Song",
+        }
+    }
+
+    result = await _restore_from_trash(hass, tmp_path, "clip-1", trash_state)
+
+    assert result is not None
+    assert result["path"] == "2026-03-15/song.flac"
+    assert (tmp_path / "2026-03-15" / "song.flac").exists()
+    assert "clip-1" not in trash_state
+
+
+async def test_restore_from_trash_not_in_trash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Returns None when clip is not in trash state."""
+    trash_state: dict = {}
+    result = await _restore_from_trash(hass, tmp_path, "clip-1", trash_state)
+    assert result is None
+
+
+# ── _purge_trash ───────────────────────────────────────────────────
+
+
+async def test_purge_trash_removes_old_entries(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Purges trash entries older than max_days."""
+    trash_dir = tmp_path / ".trash"
+    trash_dir.mkdir()
+    (trash_dir / "old.flac").write_bytes(b"fLaC")
+
+    old_time = (datetime.now(tz=UTC) - timedelta(days=10)).isoformat()
+    trash_state = {
+        "old-clip": {
+            "path": ".trash/old.flac",
+            "original_path": "old.flac",
+            "trashed_at": old_time,
+        }
+    }
+
+    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
+
+    assert "old-clip" not in trash_state
+    assert not (trash_dir / "old.flac").exists()
+
+
+async def test_purge_trash_keeps_recent(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Keeps trash entries newer than max_days."""
+    recent_time = (datetime.now(tz=UTC) - timedelta(days=1)).isoformat()
+    trash_state = {
+        "new-clip": {
+            "path": ".trash/new.flac",
+            "original_path": "new.flac",
+            "trashed_at": recent_time,
+        }
+    }
+
+    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
+
+    assert "new-clip" in trash_state
+
+
+async def test_purge_trash_invalid_date(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Entries with invalid dates are purged."""
+    trash_state = {
+        "bad-clip": {
+            "path": ".trash/bad.flac",
+            "original_path": "bad.flac",
+            "trashed_at": "not-a-date",
+        }
+    }
+
+    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
+
+    assert "bad-clip" not in trash_state
+
+
+# ── _build_desired with API failure ────────────────────────────────
+
+
+async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> None:
+    """Clips from failed API calls are preserved via preserved_ids."""
+    sync = SunoSync(hass, "test_sync_state")
+    sync._state = {
+        "clips": {
+            "clip-liked": {"path": "liked.flac", "sources": ["liked"]},
+            "clip-recent": {"path": "recent.flac", "sources": ["recent"]},
+        },
+        "last_sync": None,
+    }
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(side_effect=Exception("API down"))
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    from custom_components.suno.const import CONF_SYNC_RECENT_COUNT, CONF_SYNC_RECENT_DAYS
+
+    options = {
+        CONF_SYNC_LIKED: True,
+        CONF_SYNC_ALL_PLAYLISTS: False,
+        CONF_SYNC_PLAYLISTS: [],
+        CONF_SYNC_RECENT_COUNT: None,
+        CONF_SYNC_RECENT_DAYS: None,
+    }
+
+    desired, preserved = await sync._build_desired(options, client)
+
+    # clip-liked should be preserved since liked API failed
+    assert "clip-liked" in preserved
