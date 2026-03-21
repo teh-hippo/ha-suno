@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.7.1 (2026-03-21)
+
+### Bug Fixes
+
+- Add song count diagnostics, reduce sync rate limiting
+  ([`6c10213`](https://github.com/teh-hippo/ha-suno/commit/6c102132bfb8015023f81bcd390da1710d87820a))
+
+
 ## v1.7.0 (2026-03-21)
 
 ### Bug Fixes
