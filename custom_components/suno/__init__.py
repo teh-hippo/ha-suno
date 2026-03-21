@@ -140,9 +140,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> Non
     # Remove persisted store files (.storage/suno_*)
     storage_dir = Path(hass.config.path(".storage"))
     if storage_dir.is_dir():
-        for store_file in await hass.async_add_executor_job(
-            lambda: list(storage_dir.glob("suno_*"))
-        ):
+        for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_*"))):
             try:
                 await hass.async_add_executor_job(store_file.unlink)
                 _LOGGER.debug("Removed store file: %s", store_file.name)
