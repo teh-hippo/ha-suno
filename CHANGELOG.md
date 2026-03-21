@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.10.2 (2026-03-21)
+
+### Bug Fixes
+
+- Filter emails from device name and make device_info dynamic
+  ([`d86a4bf`](https://github.com/teh-hippo/ha-suno/commit/d86a4bf4bb79a9b7058fda21589968e14aa1cb11))
+
+### Documentation
+
+- Update README — concise, add audio pipeline and dev setup
+  ([`8a62880`](https://github.com/teh-hippo/ha-suno/commit/8a62880cd5cc4f68181173fccaf65779fa734ea3))
+
+
 ## v1.10.1 (2026-03-21)
 
 ### Bug Fixes
