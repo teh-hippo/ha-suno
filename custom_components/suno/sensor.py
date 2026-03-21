@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -59,9 +60,13 @@ class _SunoSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, key: str) -> None:
         super().__init__(coordinator)
-        self._attr_device_info = coordinator.device_info
         self._attr_unique_id = f"{entry.unique_id}_{key}"
         self._entry = entry
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info from coordinator (picks up name changes)."""
+        return self.coordinator.device_info
 
 
 # ── Credits ─────────────────────────────────────────────────────────

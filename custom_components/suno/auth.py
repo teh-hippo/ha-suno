@@ -157,7 +157,7 @@ class ClerkAuth:
                 last = (user.get("last_name") or "").strip()
                 username = (user.get("username") or "").strip()
 
-                if username:
+                if username and "@" not in username:
                     self._display_name = username
                 elif first and "@" not in first:
                     self._display_name = f"{first} {last}".strip() if last else first
