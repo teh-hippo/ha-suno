@@ -129,7 +129,7 @@ async def test_view_registered_on_setup(hass: HomeAssistant, mock_suno_client: A
     # Check that a route matching our pattern exists
     router = hass.http.app.router  # type: ignore[union-attr]
     route_names = [r.get_info().get("formatter", "") for r in router.routes()]
-    assert any("/api/suno/media/{clip_id}" in name for name in route_names)
+    assert any("/api/suno/media/{clip_id}.{ext}" in name for name in route_names)
 
 
 async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -176,7 +176,7 @@ async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_
         await setup_entry(hass, entry)
 
     client = await hass_client()
-    resp = await client.get("/api/suno/media/nonexistent-clip")
+    resp = await client.get("/api/suno/media/nonexistent-clip.mp3")
     # Proxy tries CDN but it fails for a fake ID
     assert resp.status == 502
 
@@ -227,7 +227,7 @@ async def test_view_cache_hit_serves_file(
     hass.data[_SUNO_CACHE_KEY] = mock_cache
 
     client = await hass_client()
-    resp = await client.get("/api/suno/media/clip-aaa-111")
+    resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
     assert resp.status == 200
     body = await resp.read()
     assert body == b"ID3" + b"\x00" * 100
@@ -298,7 +298,7 @@ async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     assert resp.status == 200
     body = await resp.read()
@@ -322,7 +322,7 @@ async def test_stream_mp3_without_cache(hass: HomeAssistant, mock_suno_client: A
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     assert resp.status == 200
     body = await resp.read()
@@ -350,7 +350,7 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     body = await resp.read()
     assert body[:3] == b"ID3"
@@ -387,7 +387,7 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     body = await resp.read()
@@ -443,7 +443,7 @@ async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: As
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     body = await resp.read()
@@ -463,7 +463,7 @@ async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_clien
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     assert resp.status == 502
     text = await resp.text()
@@ -488,7 +488,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     body = await resp.read()
@@ -511,7 +511,7 @@ async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: As
         mock_get = AsyncMock(return_value=mock_response)
         mock_session.return_value.get = mock_get
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     assert resp.status == 200
     # Should have used the clip's audio_url, not CDN_BASE_URL
@@ -542,7 +542,7 @@ async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_cl
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
     # Should still succeed even though cache write failed
     assert resp.status == 200
@@ -580,7 +580,7 @@ async def test_save_to_cache_bytes_failure_is_silent(
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
 
@@ -611,7 +611,7 @@ async def test_wav_to_flac_uses_ffmpeg_manager_binary(
         mock_ffmpeg_mgr.return_value.binary = "ffmpeg"
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     body = await resp.read()
@@ -647,7 +647,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
         mock_ffmpeg_mgr.return_value.binary = "/usr/bin/ffmpeg"
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 502
 
@@ -676,7 +676,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
         mock_ffmpeg_mgr.return_value.binary = "/nonexistent/ffmpeg"
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 502
 
@@ -702,7 +702,7 @@ async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: Asy
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     body = await resp.read()
@@ -735,7 +735,7 @@ async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client:
     ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
-        resp = await client.get("/api/suno/media/clip-aaa-111")
+        resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
     assert resp.status == 200
     mock_suno_client.request_wav.assert_awaited_once()
@@ -753,5 +753,5 @@ async def test_hq_returns_502_when_no_client(hass: HomeAssistant, mock_suno_clie
     entry.runtime_data = None
 
     client = await hass_client()
-    resp = await client.get("/api/suno/media/clip-aaa-111")
+    resp = await client.get("/api/suno/media/clip-aaa-111.flac")
     assert resp.status == 502

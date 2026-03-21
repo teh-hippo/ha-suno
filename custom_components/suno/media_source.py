@@ -112,8 +112,10 @@ class SunoMediaSource(MediaSource):
 
         # Always resolve via the proxy.  Playlist clips may not be in the
         # coordinator cache, but the proxy can still stream them from CDN.
+        quality = entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
+        ext = "flac" if quality == QUALITY_HIGH else "mp3"
         return PlayMedia(
-            url=f"/api/suno/media/{clip_id}",
+            url=f"/api/suno/media/{clip_id}.{ext}",
             mime_type=self._get_mime_type(entry),
         )
 

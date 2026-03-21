@@ -70,9 +70,9 @@ def _skip_existing_id3(chunk: bytes) -> bytes:
 class SunoMediaProxyView(HomeAssistantView):
     """Proxy Suno CDN audio with injected metadata."""
 
-    url = "/api/suno/media/{clip_id}"
+    url = "/api/suno/media/{clip_id}.{ext}"
     name = "api:suno:media"
-    requires_auth = False
+    requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -114,7 +114,7 @@ class SunoMediaProxyView(HomeAssistantView):
                 return coordinator.client
         return None
 
-    async def get(self, request: web.Request, clip_id: str) -> web.StreamResponse:
+    async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
         clip = self._find_clip(clip_id)
         title = clip.title if clip else "Suno"
