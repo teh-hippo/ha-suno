@@ -1,0 +1,11 @@
+sync_media:
+  name: Sync media
+  description: Trigger a FLAC sync of Suno songs to the configured directory.
+  fields:
+    force:
+      name: Force
+      description: Re-download all files, ignoring sync state.
+      required: false
+      default: false
+      selector:
+        boolean:
