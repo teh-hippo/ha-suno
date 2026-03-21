@@ -72,7 +72,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
     url = "/api/suno/media/{clip_id}"
     name = "api:suno:media"
-    requires_auth = True
+    requires_auth = False
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
