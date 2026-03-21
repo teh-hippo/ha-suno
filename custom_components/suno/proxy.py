@@ -30,6 +30,7 @@ from .const import (
     QUALITY_HIGH,
 )
 from .coordinator import SunoCoordinator
+from .helpers import wav_to_flac
 from .models import SunoClip
 
 if TYPE_CHECKING:
@@ -218,7 +219,7 @@ class SunoMediaProxyView(HomeAssistantView):
             upstream.close()
 
         if cache is not None and collected:
-            await self._save_to_cache(cache, clip_id, "mp3", collected)
+            await self._save_to_cache(cache, clip_id, "mp3", b"".join(collected))
 
         return response
 
@@ -278,74 +279,26 @@ class SunoMediaProxyView(HomeAssistantView):
             upstream.close()
 
         # Transcode WAV to FLAC with metadata via ffmpeg
-        flac_data = await self._wav_to_flac(wav_data, title, artist)
+        flac_data = await wav_to_flac(
+            get_ffmpeg_manager(self.hass).binary,
+            wav_data,
+            title,
+            artist,
+        )
         if flac_data is None:
             return web.Response(status=502, text="FLAC transcode failed")
 
         if cache is not None:
-            await self._save_to_cache_bytes(cache, clip_id, "flac", flac_data)
+            await self._save_to_cache(cache, clip_id, "flac", flac_data)
 
         return web.Response(
             body=flac_data,
             content_type="audio/flac",
         )
 
-    async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
-        """Transcode WAV bytes to FLAC with metadata using ffmpeg."""
-        from .const import SYNC_FFMPEG_TIMEOUT  # noqa: PLC0415
-
-        ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                ffmpeg_binary,
-                "-i",
-                "pipe:0",
-                "-metadata",
-                f"title={title}",
-                "-metadata",
-                f"artist={artist}",
-                "-f",
-                "flac",
-                "-compression_level",
-                "5",
-                "pipe:1",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=wav_data),
-                timeout=SYNC_FFMPEG_TIMEOUT,
-            )
-            if proc.returncode != 0:
-                _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
-                return None
-            return stdout
-        except TimeoutError:
-            _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
-            if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
-            return None
-        except FileNotFoundError:
-            _LOGGER.error("ffmpeg not found.  Install ffmpeg for high quality audio.")
-            return None
-        except Exception:
-            _LOGGER.exception("FLAC transcode error")
-            return None
-
     @staticmethod
-    async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, chunks: list[bytes]) -> None:
-        """Join chunks and write to cache, logging any failure."""
-        data = b"".join(chunks)
-        try:
-            await cache.async_put(clip_id, fmt, data)
-        except Exception:
-            _LOGGER.debug("Cache write failed for %s.%s", clip_id, fmt)
-
-    @staticmethod
-    async def _save_to_cache_bytes(cache: SunoCache, clip_id: str, fmt: str, data: bytes) -> None:
-        """Write raw bytes to cache, logging any failure."""
+    async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, data: bytes) -> None:
+        """Write bytes to cache, logging any failure."""
         try:
             await cache.async_put(clip_id, fmt, data)
         except Exception:

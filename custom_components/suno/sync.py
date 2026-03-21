@@ -37,10 +37,10 @@ from .const import (
     DEFAULT_SYNC_RECENT_DAYS,
     DEFAULT_SYNC_TRASH_DAYS,
     SYNC_DOWNLOAD_DELAY,
-    SYNC_FFMPEG_TIMEOUT,
     SYNC_MAX_DOWNLOADS_BOOTSTRAP,
     SYNC_MAX_DOWNLOADS_PER_RUN,
 )
+from .helpers import wav_to_flac
 from .models import SunoClip
 
 _LOGGER = logging.getLogger(__name__)
@@ -367,7 +367,8 @@ class SunoSync:
                 wav_data = await resp.read()
 
             # Transcode to FLAC
-            flac_data = await self._wav_to_flac(
+            flac_data = await wav_to_flac(
+                get_ffmpeg_manager(self.hass).binary,
                 wav_data,
                 clip.title or "Suno",
                 clip.tags or "Suno",
@@ -385,48 +386,6 @@ class SunoSync:
         except Exception:
             _LOGGER.exception("Failed to download %s", clip.id)
             return False
-
-    async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
-        """Transcode WAV to FLAC with metadata via ffmpeg."""
-        ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                ffmpeg_binary,
-                "-i",
-                "pipe:0",
-                "-metadata",
-                f"title={title}",
-                "-metadata",
-                f"artist={artist}",
-                "-f",
-                "flac",
-                "-compression_level",
-                "5",
-                "pipe:1",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=wav_data),
-                timeout=SYNC_FFMPEG_TIMEOUT,
-            )
-            if proc.returncode != 0:
-                _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
-                return None
-            return stdout
-        except TimeoutError:
-            _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
-            if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
-            return None
-        except FileNotFoundError:
-            _LOGGER.error("ffmpeg not found. Install ffmpeg for FLAC sync.")
-            return None
-        except Exception:
-            _LOGGER.exception("FLAC transcode error")
-            return None
 
     # ── File operations ─────────────────────────────────────────────
 

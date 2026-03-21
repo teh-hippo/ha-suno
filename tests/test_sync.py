@@ -149,10 +149,12 @@ async def test_sync_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> 
     fake_flac = b"fLaC" + b"\x00" * 50
 
     with (
-        patch.object(sync, "_wav_to_flac", return_value=fake_flac),
+        patch("custom_components.suno.sync.wav_to_flac", new_callable=AsyncMock, return_value=fake_flac),
+        patch("custom_components.suno.sync.get_ffmpeg_manager") as mock_ffmpeg,
         patch("custom_components.suno.sync.async_get_clientsession") as mock_session,
         patch.object(sync._store, "async_save"),
     ):
+        mock_ffmpeg.return_value.binary = "ffmpeg"
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.read = AsyncMock(return_value=fake_wav)
