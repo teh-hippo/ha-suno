@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.5.2 (2026-03-21)
+
+### Bug Fixes
+
+- Disable auth on proxy so Sonos can fetch audio
+  ([`20a5cbc`](https://github.com/teh-hippo/ha-suno/commit/20a5cbc3b810f04d42345a3ac49cb6c85421a733))
+
+
 ## v1.5.1 (2026-03-20)
 
 ### Bug Fixes
