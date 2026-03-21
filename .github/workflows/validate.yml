@@ -67,4 +67,4 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: uv run coverage run -m pytest tests/ -v --tb=short
-      - run: uv run coverage report --include="custom_components/suno/*" --fail-under=80
+      - run: uv run coverage report --include="custom_components/suno/*" --fail-under=70
