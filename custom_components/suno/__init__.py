@@ -123,4 +123,5 @@ async def _setup_sync(
 async def async_unload_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
     """Unload a Suno config entry."""
     hass.data.pop(_SYNC_KEY, None)
+    hass.data.pop(_SUNO_CACHE_KEY, None)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
