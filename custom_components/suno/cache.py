@@ -18,7 +18,7 @@ from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
-STORE_VERSION = 2
+STORE_VERSION = 1
 STORE_KEY = "suno_cache_index"
 
 # Magic bytes used to validate cached files
