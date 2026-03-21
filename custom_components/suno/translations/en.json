@@ -106,8 +106,26 @@
       "credits": {
         "name": "Credits"
       },
+      "total_songs": {
+        "name": "Total songs"
+      },
+      "liked_songs": {
+        "name": "Liked songs"
+      },
+      "cache_size": {
+        "name": "Cache size"
+      },
       "sync_status": {
         "name": "Sync status"
+      },
+      "sync_files": {
+        "name": "Synced files"
+      },
+      "sync_pending": {
+        "name": "Pending downloads"
+      },
+      "sync_size": {
+        "name": "Sync library size"
       }
     }
   },

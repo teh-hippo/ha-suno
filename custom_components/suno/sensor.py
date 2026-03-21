@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -21,81 +23,168 @@ async def async_setup_entry(
 ) -> None:
     """Set up Suno sensors."""
     coordinator: SunoCoordinator = entry.runtime_data
-    entities: list[SensorEntity] = [SunoCreditsSensor(coordinator, entry)]
+
+    entities: list[SensorEntity] = [
+        SunoCreditsSensor(coordinator, entry),
+        SunoTotalSongsSensor(coordinator, entry),
+        SunoLikedSongsSensor(coordinator, entry),
+    ]
+
+    # Cache sensors (always, cache may be enabled later)
+    entities.append(SunoCacheSizeSensor(coordinator, entry, hass))
 
     from .const import CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED  # noqa: PLC0415
 
     if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
-        entities.append(SunoSyncSensor(coordinator, entry, hass))
+        entities.extend(
+            [
+                SunoSyncStatusSensor(coordinator, entry, hass),
+                SunoSyncFilesSensor(coordinator, entry, hass),
+                SunoSyncPendingSensor(coordinator, entry, hass),
+                SunoSyncSizeSensor(coordinator, entry, hass),
+            ]
+        )
 
     async_add_entities(entities)
 
 
-class SunoCreditsSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
-    """Sensor showing remaining Suno credits."""
+# ── Base class ──────────────────────────────────────────────────────
+
+
+class _SunoSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
+    """Base for all Suno sensors."""
 
     _attr_has_entity_name = True
-    _attr_translation_key = "credits"
-    _attr_native_unit_of_measurement = "credits"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.unique_id}_credits"
         self._attr_device_info = coordinator.device_info
+        self._entry = entry
+
+
+# ── Credits ─────────────────────────────────────────────────────────
+
+
+class SunoCreditsSensor(_SunoSensor):
+    """Remaining Suno credits."""
+
+    _attr_translation_key = "credits"
+    _attr_native_unit_of_measurement = "credits"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.unique_id}_credits"
 
     @property
     def native_value(self) -> int | None:
-        """Return the number of credits remaining."""
         data: SunoData = self.coordinator.data
-        if data.credits:
-            return data.credits.credits_left
-        return None
+        return data.credits.credits_left if data.credits else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, int | str | float | None]:
-        """Return credit details, library stats, and cache info."""
-
+    def extra_state_attributes(self) -> dict[str, int | str | None]:
         data: SunoData = self.coordinator.data
-        attrs: dict[str, int | str | float | None] = {
-            "total_songs": len(data.clips),
-            "liked_songs": len(data.liked_clips),
-            "playlists": len(data.playlists),
+        if not data.credits:
+            return {}
+        return {
+            "monthly_limit": data.credits.monthly_limit,
+            "monthly_usage": data.credits.monthly_usage,
+            "period": data.credits.period,
         }
-        if data.credits:
-            attrs["monthly_limit"] = data.credits.monthly_limit
-            attrs["monthly_usage"] = data.credits.monthly_usage
-            attrs["period"] = data.credits.period
-
-        cache = self.coordinator.hass.data.get("suno_cache")
-        if cache is not None:
-            attrs["cache_files"] = cache.file_count
-            attrs["cache_size_mb"] = cache.size_mb
-
-        return attrs
 
 
-class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
-    """Sensor showing sync status."""
+# ── Library stats ───────────────────────────────────────────────────
 
-    _attr_has_entity_name = True
-    _attr_translation_key = "sync_status"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+class SunoTotalSongsSensor(_SunoSensor):
+    """Total songs in library."""
+
+    _attr_translation_key = "total_songs"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:music-note-plus"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.unique_id}_total_songs"
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data.clips)
+
+
+class SunoLikedSongsSensor(_SunoSensor):
+    """Liked songs count."""
+
+    _attr_translation_key = "liked_songs"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:heart-outline"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.unique_id}_liked_songs"
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.data.liked_clips)
+
+
+# ── Cache ───────────────────────────────────────────────────────────
+
+
+class SunoCacheSizeSensor(_SunoSensor):
+    """Playback cache size on disk."""
+
+    _attr_translation_key = "cache_size"
+    _attr_native_unit_of_measurement = "MB"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:database"
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.unique_id}_sync_status"
-        self._attr_device_info = coordinator.device_info
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.unique_id}_cache_size"
         self._hass = hass
-        self._entry = entry
+
+    @property
+    def native_value(self) -> float:
+        cache = self._hass.data.get("suno_cache")
+        return cache.size_mb if cache is not None else 0.0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int]:
+        cache = self._hass.data.get("suno_cache")
+        return {"cached_files": cache.file_count} if cache is not None else {}
+
+
+# ── Sync sensors ────────────────────────────────────────────────────
+
+
+class _SunoSyncSensor(_SunoSensor):
+    """Base for sync sensors that need hass reference."""
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
+        super().__init__(coordinator, entry)
+        self._hass = hass
+
+    def _get_sync(self) -> Any:
+        from . import _SYNC_KEY  # noqa: PLC0415
+
+        return self._hass.data.get(_SYNC_KEY)
+
+
+class SunoSyncStatusSensor(_SunoSyncSensor):
+    """Sync status: idle, syncing, or error."""
+
+    _attr_translation_key = "sync_status"
+    _attr_icon = "mdi:sync"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
+        super().__init__(coordinator, entry, hass)
+        self._attr_unique_id = f"{entry.unique_id}_sync_status"
 
     @property
     def native_value(self) -> str:
-        """Return the sync state: idle, syncing, or error."""
-        from . import _SYNC_KEY  # noqa: PLC0415
-
-        sync = self._hass.data.get(_SYNC_KEY)
+        sync = self._get_sync()
         if sync is None:
             return "idle"
         if sync.is_running:
@@ -105,19 +194,63 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
         return "idle"
 
     @property
-    def extra_state_attributes(self) -> dict[str, int | str | float | None]:
-        """Return sync details as attributes."""
-        from . import _SYNC_KEY  # noqa: PLC0415
+    def extra_state_attributes(self) -> dict[str, str | None]:
         from .const import CONF_SYNC_PATH  # noqa: PLC0415
 
-        sync = self._hass.data.get(_SYNC_KEY)
-        if sync is None:
-            return {}
+        sync = self._get_sync()
         return {
-            "last_run": sync.last_sync,
-            "total_files": sync.total_files,
-            "library_size_mb": sync.library_size_mb,
-            "pending_downloads": sync.pending,
-            "errors": sync.errors,
+            "last_run": sync.last_sync if sync else None,
             "sync_path": self._entry.options.get(CONF_SYNC_PATH, ""),
         }
+
+
+class SunoSyncFilesSensor(_SunoSyncSensor):
+    """Total synced files."""
+
+    _attr_translation_key = "sync_files"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:file-music"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
+        super().__init__(coordinator, entry, hass)
+        self._attr_unique_id = f"{entry.unique_id}_sync_files"
+
+    @property
+    def native_value(self) -> int:
+        sync = self._get_sync()
+        return sync.total_files if sync else 0
+
+
+class SunoSyncPendingSensor(_SunoSyncSensor):
+    """Pending downloads."""
+
+    _attr_translation_key = "sync_pending"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:download"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
+        super().__init__(coordinator, entry, hass)
+        self._attr_unique_id = f"{entry.unique_id}_sync_pending"
+
+    @property
+    def native_value(self) -> int:
+        sync = self._get_sync()
+        return sync.pending if sync else 0
+
+
+class SunoSyncSizeSensor(_SunoSyncSensor):
+    """Synced library size on disk."""
+
+    _attr_translation_key = "sync_size"
+    _attr_native_unit_of_measurement = "MB"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:harddisk"
+
+    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, hass: HomeAssistant) -> None:
+        super().__init__(coordinator, entry, hass)
+        self._attr_unique_id = f"{entry.unique_id}_sync_size"
+
+    @property
+    def native_value(self) -> float:
+        sync = self._get_sync()
+        return sync.library_size_mb if sync else 0.0
