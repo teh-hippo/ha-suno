@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v1.6.0 (2026-03-21)
+
+### Bug Fixes
+
+- Add services.yaml for sync_media service
+  ([`a814fe1`](https://github.com/teh-hippo/ha-suno/commit/a814fe192a22512fc9632f781d647be0c2f69796))
+
+- Use parenthesised exception tuples for compatibility
+  ([`564eb8c`](https://github.com/teh-hippo/ha-suno/commit/564eb8c3f6d61c32c60e63b3a687365d8f53a0fb))
+
+### Chores
+
+- Lower coverage threshold to 80% for sync feature
+  ([`85bad3c`](https://github.com/teh-hippo/ha-suno/commit/85bad3c9e29059035431c278edeb9e52afe47375))
+
+### Features
+
+- Add background FLAC sync to local directory
+  ([`4102dfe`](https://github.com/teh-hippo/ha-suno/commit/4102dfed5e56b80901ad1355d29e55cf9e7bf65b))
+
+
 ## v1.5.3 (2026-03-21)
 
 ### Bug Fixes
