@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pre-push hook: runs linters before allowing pushes.
+set -e
+
+echo "🔍 Pre-push: ruff check..."
+uv run ruff check .
+
+echo "🔍 Pre-push: ruff format..."
+uv run ruff format --check .
+
+echo "🔍 Pre-push: mypy..."
+uv run mypy custom_components/suno
+
+echo "✅ All checks passed"
