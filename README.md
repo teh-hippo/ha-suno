@@ -66,13 +66,30 @@ The integration creates a `sensor.suno_credits` entity showing your remaining cr
 
 Available under the integration's options menu:
 
+**Media browser**
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | Show Liked Songs | On | Display the Liked Songs folder |
 | Show Recent | On | Display the Recent folder |
 | Recent count | 20 | Number of songs in the Recent folder |
 | Show Playlists | On | Display playlists |
+| Audio quality | Standard | Standard (MP3) or High (FLAC) |
 | Cache refresh | 30 min | How often the library is refreshed from Suno |
+| Cache enabled | Off | Cache audio files locally for faster playback |
+| Cache max size | 500 MB | Maximum disk space for cached audio |
+
+**Sync settings**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Sync enabled | Off | Download FLAC files to a local directory |
+| Sync path | -- | Directory for downloaded files |
+| Sync liked | On | Include liked songs in sync |
+| Sync all playlists | On | Sync all playlists (or pick specific ones) |
+| Recent count | -- | Limit sync to N most recent songs |
+| Recent days | -- | Limit sync to songs from the last N days |
+| Trash days | 7 | Days before removed files are permanently deleted |
 
 ## Removal
 
@@ -97,7 +114,18 @@ The integration polls the Suno API at a configurable interval (default 30 minute
 
 ## Entities
 
-- `sensor.suno_credits` (diagnostic) -- remaining Suno credits.  Attributes: `monthly_limit`, `monthly_usage`, `period`.
+| Entity | Type | Description |
+|--------|------|-------------|
+| `sensor.suno_credits` | Diagnostic | Remaining credits. Attrs: `monthly_limit`, `monthly_usage`, `period` |
+| `sensor.suno_total_songs` | Diagnostic | Total songs in your library |
+| `sensor.suno_liked_songs` | Diagnostic | Number of liked songs |
+| `sensor.suno_cache_size` | Diagnostic | Local audio cache size in MB |
+| `sensor.suno_sync_status`* | Diagnostic | Sync state: idle / syncing / error |
+| `sensor.suno_sync_files`* | Diagnostic | Number of synced files |
+| `sensor.suno_sync_pending`* | Diagnostic | Clips waiting to download |
+| `sensor.suno_sync_size`* | Diagnostic | Total sync library size in MB |
+
+*Sync sensors only appear when sync is enabled.
 
 ## Media source
 
@@ -107,6 +135,61 @@ The Suno media source provides these folders in the media browser:
 - **Recent** -- your most recently created songs (live data)
 - **Playlists** -- your Suno playlists and their songs
 - **All Songs** -- your complete library (paginated into groups of 50)
+
+## Development
+
+Requires Python 3.14+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/teh-hippo/ha-suno.git
+cd ha-suno
+uv sync --all-groups
+```
+
+### Running checks locally
+
+Run the same checks CI runs before pushing:
+
+```bash
+uv run ruff check .              # lint
+uv run ruff format --check .     # format check
+uv run mypy custom_components/suno  # type check
+uv run pytest tests/ -x -q       # tests
+```
+
+Or all at once:
+
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy custom_components/suno && uv run pytest tests/ -x -q
+```
+
+### Auto-fixing
+
+```bash
+uv run ruff check --fix .   # auto-fix lint issues
+uv run ruff format .        # auto-format
+```
+
+### Project structure
+
+```
+custom_components/suno/
+├── __init__.py       # Entry lifecycle (setup/unload/remove)
+├── api.py            # Suno API client (feeds, playlists, credits)
+├── auth.py           # Clerk authentication (cookie, JWT, session)
+├── audio.py          # Audio processing (ffmpeg, ID3 tags, WAV/FLAC pipeline)
+├── cache.py          # On-disk audio cache with LRU eviction
+├── config_flow.py    # Config and options flows
+├── const.py          # Constants and defaults
+├── coordinator.py    # Data update coordinator
+├── diagnostics.py    # Diagnostics export
+├── exceptions.py     # Custom exceptions
+├── media_source.py   # HA media browser integration
+├── models.py         # Data models (SunoClip, SunoCredits, etc.)
+├── proxy.py          # HTTP proxy for audio streaming with metadata
+├── sensor.py         # Sensor entities
+└── sync.py           # Background FLAC sync to local directory
+```
 
 ## Troubleshooting
 
