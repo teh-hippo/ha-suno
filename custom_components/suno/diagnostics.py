@@ -26,7 +26,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         },
         "library": {
             "total_clips": len(data.clips),
-            "liked_clips": sum(1 for c in data.clips if c.is_liked),
+            "liked_clips": len(data.liked_clips),
             "playlists": len(data.playlists),
         },
         "credits": {

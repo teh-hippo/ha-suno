@@ -406,7 +406,7 @@ class SunoSync:
             raise
         except Exception:
             _LOGGER.exception("Failed to download %s", clip.id)
-            return False
+            return None
 
     # ── File operations ─────────────────────────────────────────────
 
