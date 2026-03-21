@@ -89,6 +89,7 @@ class SunoClient:
         self._jwt_lock = asyncio.Lock()
         self._session_id: str | None = None
         self._user_id: str | None = None
+        self._throttle_until: float = 0
 
     @property
     def user_id(self) -> str | None:
@@ -285,20 +286,28 @@ class SunoClient:
                 raise SunoAuthError(msg)
             return self._jwt
 
-    async def _api_get(self, path: str) -> Any:
-        """Make an authenticated GET request to the Suno API with retry on 429."""
+    async def _api_request(self, method: str, path: str, *, expect_json: bool = True) -> Any:
+        """Make an authenticated request with retry on 429 and adaptive throttling."""
         max_retries = 3
         base_delay = 2.0
 
         for attempt in range(max_retries + 1):
+            # Adaptive throttle: wait if we recently got rate limited
+            if self._throttle_until > 0:
+                wait = self._throttle_until - time.monotonic()
+                if wait > 0:
+                    _LOGGER.debug("Throttling for %.1fs", wait)
+                    await asyncio.sleep(wait)
+
             jwt = await self._ensure_jwt()
             url = f"{SUNO_API_BASE_URL}{path}"
             headers = {"Authorization": f"Bearer {jwt}"}
 
-            _LOGGER.debug("GET %s (attempt %d)", path, attempt + 1)
+            _LOGGER.debug("%s %s (attempt %d)", method, path, attempt + 1)
             try:
-                async with self._session.get(url, headers=headers) as resp:
-                    if resp.status == 401 or resp.status == 403:
+                req = self._session.get if method == "GET" else self._session.post
+                async with req(url, headers=headers) as resp:
+                    if resp.status in (401, 403):
                         msg = f"Suno API auth failed with status {resp.status}"
                         raise SunoAuthError(msg)
                     if resp.status == 429:
@@ -307,6 +316,8 @@ class SunoClient:
                             retry_after = resp.headers.get("Retry-After")
                             if retry_after and retry_after.isdigit():
                                 delay = max(delay, float(retry_after))
+                            # Set global throttle so other calls also wait
+                            self._throttle_until = time.monotonic() + delay
                             _LOGGER.warning(
                                 "Rate limited by Suno API, retrying in %.1fs (attempt %d/%d)",
                                 delay,
@@ -317,11 +328,13 @@ class SunoClient:
                             continue
                         msg = "Rate limited by Suno API after retries"
                         raise SunoApiError(msg)
-                    if resp.status != 200:
-                        text = await resp.text()
-                        msg = f"Suno API returned {resp.status}: {text[:200]}"
-                        raise SunoApiError(msg)
-                    return await resp.json()
+                    if expect_json:
+                        if resp.status != 200:
+                            text = await resp.text()
+                            msg = f"Suno API returned {resp.status}: {text[:200]}"
+                            raise SunoApiError(msg)
+                        return await resp.json()
+                    return resp.status
             except SunoApiError, SunoAuthError:
                 raise
             except Exception as err:
@@ -331,23 +344,14 @@ class SunoClient:
         msg = "Suno API request failed after retries"
         raise SunoApiError(msg)
 
+    async def _api_get(self, path: str) -> Any:
+        """Make an authenticated GET request."""
+        return await self._api_request("GET", path)
+
     async def _api_post(self, path: str) -> int:
         """Make an authenticated POST request and return the status code."""
-        jwt = await self._ensure_jwt()
-        url = f"{SUNO_API_BASE_URL}{path}"
-        headers = {"Authorization": f"Bearer {jwt}"}
-        _LOGGER.debug("POST %s", path)
-        try:
-            async with self._session.post(url, headers=headers) as resp:
-                if resp.status in (401, 403):
-                    msg = f"Suno API auth failed with status {resp.status}"
-                    raise SunoAuthError(msg)
-                return resp.status
-        except SunoApiError, SunoAuthError:
-            raise
-        except Exception as err:
-            msg = f"Suno API POST failed: {err}"
-            raise SunoApiError(msg) from err
+        result = await self._api_request("POST", path, expect_json=False)
+        return int(result)
 
     async def request_wav(self, clip_id: str) -> None:
         """Trigger server-side WAV generation for a clip."""
