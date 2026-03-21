@@ -213,7 +213,7 @@ async def _purge_trash(
             age_days = (now - trashed).total_seconds() / 86400
             if age_days >= max_days:
                 to_purge.append(clip_id)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             to_purge.append(clip_id)
 
     for clip_id in to_purge:
@@ -341,7 +341,7 @@ class SunoSync:
             return None
         if meta_hash and entry.get("meta_hash") and entry["meta_hash"] != meta_hash:
             return None
-        path = Path(self._sync_path) / entry["path"]
+        path = Path(self._sync_path) / str(entry["path"])
         if not path.is_file():
             return None
         return path

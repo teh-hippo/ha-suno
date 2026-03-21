@@ -149,7 +149,7 @@ class SunoMediaProxyView(HomeAssistantView):
                             synced_path,
                             headers={"Content-Type": "audio/flac"},
                         )
-                    except (FileNotFoundError, OSError):
+                    except FileNotFoundError, OSError:
                         _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
 
         cache = self._get_cache() if cache_enabled else None
@@ -277,7 +277,7 @@ class SunoMediaProxyView(HomeAssistantView):
                     asyncio.shield(self._inflight[key]),
                     timeout=150,
                 )
-            except (TimeoutError, asyncio.CancelledError, Exception):
+            except TimeoutError, asyncio.CancelledError, Exception:
                 result = None
 
             if result is not None:
