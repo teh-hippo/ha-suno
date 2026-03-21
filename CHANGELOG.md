@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v1.9.4 (2026-03-21)
+
+### Bug Fixes
+
+- Remove unused Any import in coordinator
+  ([`5d43b1c`](https://github.com/teh-hippo/ha-suno/commit/5d43b1c421d31a27d66e6e053ac648388bf4421d))
+
+- Resolve mypy type errors from refactor
+  ([`fcbef1d`](https://github.com/teh-hippo/ha-suno/commit/fcbef1da3051bb559049270731b8ee409857979b))
+
+### Refactoring
+
+- Major architecture restructuring
+  ([`36bfa69`](https://github.com/teh-hippo/ha-suno/commit/36bfa69066edf7f672310ee694f379a4a6a056e8))
+
+
 ## v1.9.3 (2026-03-21)
 
 ### Bug Fixes
