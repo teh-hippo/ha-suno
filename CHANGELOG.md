@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.9.2 (2026-03-21)
+
+### Bug Fixes
+
+- Correct return type in _download_clip, simplify diagnostics
+  ([`b552b5b`](https://github.com/teh-hippo/ha-suno/commit/b552b5bf1a24b2c62c537581a68b38dc4a21781e))
+
+
 ## v1.9.1 (2026-03-21)
 
 ### Bug Fixes
