@@ -55,15 +55,18 @@ class SunoCreditsSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, int | str | None]:
-        """Return credit details as attributes."""
+        """Return credit details and library stats as attributes."""
         data: SunoData = self.coordinator.data
-        if not data.credits:
-            return {}
-        return {
-            "monthly_limit": data.credits.monthly_limit,
-            "monthly_usage": data.credits.monthly_usage,
-            "period": data.credits.period,
+        attrs: dict[str, int | str | None] = {
+            "total_songs": len(data.clips),
+            "liked_songs": len(data.liked_clips),
+            "playlists": len(data.playlists),
         }
+        if data.credits:
+            attrs["monthly_limit"] = data.credits.monthly_limit
+            attrs["monthly_usage"] = data.credits.monthly_usage
+            attrs["period"] = data.credits.period
+        return attrs
 
 
 class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
@@ -78,6 +81,7 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
         self._attr_unique_id = f"{entry.unique_id}_sync_status"
         self._attr_device_info = coordinator.device_info
         self._hass = hass
+        self._entry = entry
 
     @property
     def native_value(self) -> str:
@@ -97,6 +101,7 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
     def extra_state_attributes(self) -> dict[str, int | str | None]:
         """Return sync details as attributes."""
         from . import _SYNC_KEY  # noqa: PLC0415
+        from .const import CONF_SYNC_PATH  # noqa: PLC0415
 
         sync = self._hass.data.get(_SYNC_KEY)
         if sync is None:
@@ -106,4 +111,5 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
             "total_files": sync.total_files,
             "pending": sync.pending,
             "errors": sync.errors,
+            "sync_path": self._entry.options.get(CONF_SYNC_PATH, ""),
         }
