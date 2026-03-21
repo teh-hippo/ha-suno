@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.5.3 (2026-03-21)
+
+### Bug Fixes
+
+- Add file extension to proxy URL for Sonos MIME detection
+  ([`7f439ba`](https://github.com/teh-hippo/ha-suno/commit/7f439ba4e7c79ae7b5f719732795041fcb0db257))
+
+
 ## v1.5.2 (2026-03-21)
 
 ### Bug Fixes
