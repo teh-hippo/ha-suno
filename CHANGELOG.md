@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.8.0 (2026-03-21)
+
+### Features
+
+- Individual diagnostic sensors for all metrics
+  ([`25c2bf7`](https://github.com/teh-hippo/ha-suno/commit/25c2bf717f8c28bdf2fbab736c6f26883c6a2939))
+
+
 ## v1.7.5 (2026-03-21)
 
 ### Bug Fixes
