@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
 from typing import Any
 
 from .const import CDN_BASE_URL, SYNC_FFMPEG_TIMEOUT
@@ -17,6 +19,12 @@ def _fix_cdn_url(url: str | None) -> str:
     if not url:
         return ""
     return url.replace("cdn2.suno.ai", "cdn1.suno.ai")
+
+
+def clip_meta_hash(clip: SunoClip) -> str:
+    """Compute a short hash of clip metadata for change detection."""
+    key = f"{clip.title}|{clip.tags}|{clip.image_url}"
+    return hashlib.md5(key.encode()).hexdigest()[:12]  # noqa: S324
 
 
 def _sanitise_clip(raw: dict[str, Any]) -> SunoClip:
@@ -46,26 +54,58 @@ def _sanitise_clip(raw: dict[str, Any]) -> SunoClip:
     )
 
 
-async def wav_to_flac(ffmpeg_binary: str, wav_data: bytes, title: str, artist: str) -> bytes | None:
-    """Transcode WAV bytes to FLAC with embedded metadata via ffmpeg."""
+async def wav_to_flac(
+    ffmpeg_binary: str,
+    wav_data: bytes,
+    title: str,
+    artist: str,
+    album: str = "Suno",
+    image_data: bytes | None = None,
+) -> bytes | None:
+    """Transcode WAV bytes to FLAC with metadata and optional album art."""
+    import tempfile  # noqa: PLC0415
+
+    tmp_img_path: str | None = None
+    proc: asyncio.subprocess.Process | None = None
     try:
+        args = [ffmpeg_binary, "-i", "pipe:0"]
+
+        if image_data:
+            fd, tmp_img_path = tempfile.mkstemp(suffix=".jpg")
+            os.write(fd, image_data)
+            os.close(fd)
+            args.extend(["-i", tmp_img_path])
+
+        args.extend(["-map", "0:a:0"])
+
+        if image_data:
+            args.extend(["-map", "1:v:0", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"])
+
+        args.extend(
+            [
+                "-c:a",
+                "flac",
+                "-metadata",
+                f"title={title}",
+                "-metadata",
+                f"artist={artist}",
+                "-metadata",
+                f"album={album}",
+                "-compression_level",
+                "5",
+                "-f",
+                "flac",
+                "pipe:1",
+            ]
+        )
+
         proc = await asyncio.create_subprocess_exec(
-            ffmpeg_binary,
-            "-i",
-            "pipe:0",
-            "-metadata",
-            f"title={title}",
-            "-metadata",
-            f"artist={artist}",
-            "-f",
-            "flac",
-            "-compression_level",
-            "5",
-            "pipe:1",
+            *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(input=wav_data),
             timeout=SYNC_FFMPEG_TIMEOUT,
@@ -76,7 +116,7 @@ async def wav_to_flac(ffmpeg_binary: str, wav_data: bytes, title: str, artist: s
         return stdout
     except TimeoutError:
         _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
-        if proc.returncode is None:
+        if proc and proc.returncode is None:
             proc.kill()
             await proc.wait()
         return None
@@ -86,3 +126,9 @@ async def wav_to_flac(ffmpeg_binary: str, wav_data: bytes, title: str, artist: s
     except Exception:
         _LOGGER.exception("FLAC transcode error")
         return None
+    finally:
+        if tmp_img_path:
+            try:
+                os.unlink(tmp_img_path)
+            except OSError:
+                pass

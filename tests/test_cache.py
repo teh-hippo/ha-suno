@@ -158,7 +158,7 @@ async def test_cache_init_loads_saved_index(hass: HomeAssistant, tmp_path: Path)
     with patch.object(hass.config, "path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
 
-    saved_index = {"clip-saved.mp3": 1000.0}
+    saved_index = {"clip-saved.mp3": {"access": 1000.0, "meta_hash": "abc123"}}
     with patch.object(cache._store, "async_load", return_value=saved_index):
         await cache.async_init()
 

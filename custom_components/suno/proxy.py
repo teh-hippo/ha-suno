@@ -30,7 +30,7 @@ from .const import (
     QUALITY_HIGH,
 )
 from .coordinator import SunoCoordinator
-from .helpers import wav_to_flac
+from .helpers import clip_meta_hash, wav_to_flac
 from .models import SunoClip
 
 if TYPE_CHECKING:
@@ -120,6 +120,7 @@ class SunoMediaProxyView(HomeAssistantView):
         clip = self._find_clip(clip_id)
         title = clip.title if clip else "Suno"
         artist = (clip.tags if clip else None) or "Suno"
+        meta_hash = clip_meta_hash(clip) if clip else ""
 
         opts = self._get_entry_options()
         quality = opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
@@ -132,7 +133,7 @@ class SunoMediaProxyView(HomeAssistantView):
         # Try cache first (HQ cached as FLAC, standard as MP3)
         if cache is not None:
             cache_fmt = "flac" if is_hq else "mp3"
-            cached_path = await cache.async_get(clip_id, cache_fmt)
+            cached_path = await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)
             if cached_path is not None:
                 return web.FileResponse(
                     cached_path,
@@ -143,10 +144,12 @@ class SunoMediaProxyView(HomeAssistantView):
             return await self._handle_hq(
                 request,
                 clip_id,
+                clip,
                 title,
                 artist,
                 content_type,
                 cache,
+                meta_hash,
             )
 
         # Standard quality: stream MP3 from CDN
@@ -227,12 +230,14 @@ class SunoMediaProxyView(HomeAssistantView):
         self,
         request: web.Request,
         clip_id: str,
+        clip: SunoClip | None,
         title: str,
         artist: str,
         content_type: str,
         cache: SunoCache | None,
+        meta_hash: str,
     ) -> web.Response:
-        """Get WAV via Suno API, transcode to FLAC with metadata, return buffered."""
+        """Get WAV via Suno API, transcode to FLAC with metadata and art."""
         client = self._get_client()
         if client is None:
             return web.Response(status=502, text="Suno client not available")
@@ -278,18 +283,30 @@ class SunoMediaProxyView(HomeAssistantView):
         finally:
             upstream.close()
 
-        # Transcode WAV to FLAC with metadata via ffmpeg
+        # Download album art in parallel (small, ~50-100KB)
+        image_data: bytes | None = None
+        image_url = clip.image_large_url or clip.image_url if clip else None
+        if image_url:
+            try:
+                async with session.get(image_url) as img_resp:
+                    if img_resp.status == 200:
+                        image_data = await img_resp.read()
+            except Exception:
+                _LOGGER.debug("Failed to download album art for %s", clip_id)
+
+        # Transcode WAV to FLAC with metadata and album art
         flac_data = await wav_to_flac(
             get_ffmpeg_manager(self.hass).binary,
             wav_data,
             title,
             artist,
+            image_data=image_data,
         )
         if flac_data is None:
             return web.Response(status=502, text="FLAC transcode failed")
 
         if cache is not None:
-            await self._save_to_cache(cache, clip_id, "flac", flac_data)
+            await self._save_to_cache(cache, clip_id, "flac", flac_data, meta_hash)
 
         return web.Response(
             body=flac_data,
@@ -297,9 +314,9 @@ class SunoMediaProxyView(HomeAssistantView):
         )
 
     @staticmethod
-    async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, data: bytes) -> None:
+    async def _save_to_cache(cache: SunoCache, clip_id: str, fmt: str, data: bytes, meta_hash: str = "") -> None:
         """Write bytes to cache, logging any failure."""
         try:
-            await cache.async_put(clip_id, fmt, data)
+            await cache.async_put(clip_id, fmt, data, meta_hash=meta_hash)
         except Exception:
             _LOGGER.debug("Cache write failed for %s.%s", clip_id, fmt)

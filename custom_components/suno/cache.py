@@ -11,13 +11,14 @@ import logging
 import os
 from pathlib import Path
 from time import time
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 STORE_KEY = "suno_cache_index"
 
 # Magic bytes used to validate cached files
@@ -33,9 +34,8 @@ class SunoCache:
         self._hass = hass
         self._max_bytes = max_size_mb * 1024 * 1024
         self._cache_dir = Path(hass.config.path("suno_cache"))
-        self._store: Store[dict[str, float]] = Store(hass, STORE_VERSION, STORE_KEY)
-        # filename -> last access epoch
-        self._index: dict[str, float] = {}
+        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
+        self._index: dict[str, Any] = {}  # filename -> {access: epoch, meta_hash: str}
 
     @property
     def cache_dir(self) -> Path:
@@ -63,7 +63,25 @@ class SunoCache:
         await self._hass.async_add_executor_job(self._init_dir)
         saved = await self._store.async_load()
         if saved is not None:
-            self._index = saved
+            # Detect old schema (values were plain floats, now dicts)
+            if saved and any(isinstance(v, (int, float)) for v in saved.values()):
+                _LOGGER.info("Cache index has old schema, wiping cache")
+                await self._hass.async_add_executor_job(self._wipe_cache_files)
+                self._index = {}
+                await self._store.async_save(self._index)
+            else:
+                self._index = saved
+
+    def _wipe_cache_files(self) -> None:
+        """Remove all cached audio files (runs in executor)."""
+        if not self._cache_dir.exists():
+            return
+        for f in self._cache_dir.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
 
     def _init_dir(self) -> None:
         """Create cache dir and remove stale .tmp files (runs in executor)."""
@@ -74,10 +92,20 @@ class SunoCache:
             except OSError:
                 _LOGGER.warning("Could not remove stale temp file: %s", tmp)
 
-    async def async_get(self, clip_id: str, fmt: str) -> Path | None:
-        """Return the cached file path if valid, otherwise None."""
+    async def async_get(self, clip_id: str, fmt: str, meta_hash: str | None = None) -> Path | None:
+        """Return the cached file path if valid, otherwise None.
+
+        If meta_hash is provided, invalidates the entry when stale.
+        """
         filename = f"{clip_id}.{fmt}"
-        if filename not in self._index:
+        entry = self._index.get(filename)
+        if entry is None:
+            return None
+
+        # Check metadata staleness
+        if meta_hash and isinstance(entry, dict) and entry.get("meta_hash") != meta_hash:
+            _LOGGER.debug("Cache stale for %s (meta changed), invalidating", clip_id)
+            await self.async_invalidate(clip_id, fmt)
             return None
 
         path = self._cache_dir / filename
@@ -87,11 +115,15 @@ class SunoCache:
             await self._store.async_save(self._index)
             return None
 
-        self._index[filename] = time()
+        # Update access time
+        if isinstance(entry, dict):
+            entry["access"] = time()
+        else:
+            self._index[filename] = {"access": time(), "meta_hash": ""}
         await self._store.async_save(self._index)
         return path
 
-    async def async_put(self, clip_id: str, fmt: str, data: bytes) -> Path | None:
+    async def async_put(self, clip_id: str, fmt: str, data: bytes, meta_hash: str = "") -> Path | None:
         """Write data to cache atomically.  Returns the final path or None."""
         filename = f"{clip_id}.{fmt}"
         final_path = self._cache_dir / filename
@@ -106,9 +138,20 @@ class SunoCache:
             _LOGGER.warning("Failed to write cache file %s, skipping", filename)
             return None
 
-        self._index[filename] = time()
+        self._index[filename] = {"access": time(), "meta_hash": meta_hash}
         await self._store.async_save(self._index)
         return final_path
+
+    async def async_invalidate(self, clip_id: str, fmt: str) -> None:
+        """Remove a cached file and its index entry."""
+        filename = f"{clip_id}.{fmt}"
+        self._index.pop(filename, None)
+        path = self._cache_dir / filename
+        try:
+            await self._hass.async_add_executor_job(path.unlink, True)
+        except OSError:
+            pass
+        await self._store.async_save(self._index)
 
     async def async_evict(self, needed_bytes: int) -> None:
         """Remove oldest entries until there is room for needed_bytes."""
@@ -118,7 +161,11 @@ class SunoCache:
             return
 
         # Sort by access time ascending (oldest first)
-        by_age = sorted(self._index.items(), key=lambda kv: kv[1])
+        def _access_time(kv: tuple[str, Any]) -> float:
+            entry = kv[1]
+            return entry.get("access", 0) if isinstance(entry, dict) else float(entry)
+
+        by_age = sorted(self._index.items(), key=_access_time)
         for filename, _ in by_age:
             if current <= target:
                 break

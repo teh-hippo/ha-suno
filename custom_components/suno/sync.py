@@ -40,7 +40,7 @@ from .const import (
     SYNC_MAX_DOWNLOADS_BOOTSTRAP,
     SYNC_MAX_DOWNLOADS_PER_RUN,
 )
-from .helpers import wav_to_flac
+from .helpers import clip_meta_hash, wav_to_flac
 from .models import SunoClip
 
 _LOGGER = logging.getLogger(__name__)
@@ -232,6 +232,7 @@ class SunoSync:
                     "created": clip.created_at[:10] if clip.created_at else None,
                     "sources": next((srcs for c, _, _, srcs in desired if c.id == clip.id), []),
                     "size": file_size,
+                    "meta_hash": clip_meta_hash(clip),
                 }
                 downloaded += 1
             else:
@@ -374,12 +375,24 @@ class SunoSync:
                     return None
                 wav_data = await resp.read()
 
-            # Transcode to FLAC
+            # Download album art
+            image_data: bytes | None = None
+            image_url = clip.image_large_url or clip.image_url
+            if image_url:
+                try:
+                    async with session.get(image_url) as img_resp:
+                        if img_resp.status == 200:
+                            image_data = await img_resp.read()
+                except Exception:
+                    _LOGGER.debug("Failed to download album art")
+
+            # Transcode to FLAC with metadata and album art
             flac_data = await wav_to_flac(
                 get_ffmpeg_manager(self.hass).binary,
                 wav_data,
                 clip.title or "Suno",
                 clip.tags or "Suno",
+                image_data=image_data,
             )
             if flac_data is None:
                 return None
