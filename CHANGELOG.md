@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.9.0 (2026-03-21)
+
+### Features
+
+- Embed album art in FLAC with metadata change detection
+  ([`cad798c`](https://github.com/teh-hippo/ha-suno/commit/cad798c2a6832d517df0856ec94f0bea1ecbb781))
+
+
 ## v1.8.0 (2026-03-21)
 
 ### Features
