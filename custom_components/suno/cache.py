@@ -42,6 +42,22 @@ class SunoCache:
         """Return the cache directory path."""
         return self._cache_dir
 
+    @property
+    def file_count(self) -> int:
+        """Number of files in the cache."""
+        return len(self._index)
+
+    @property
+    def size_mb(self) -> float:
+        """Total cache size in MB (from disk)."""
+        try:
+            total = sum(
+                f.stat().st_size for f in self._cache_dir.iterdir() if f.is_file() and not f.name.startswith(".")
+            )
+        except OSError:
+            return 0.0
+        return round(total / 1048576, 1)
+
     async def async_init(self) -> None:
         """Create the cache directory, clean temp files, and load the index."""
         await self._hass.async_add_executor_job(self._init_dir)

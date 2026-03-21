@@ -108,6 +108,13 @@ class SunoSync:
         return self._errors
 
     @property
+    def library_size_mb(self) -> float:
+        """Total size of synced files in MB."""
+        clips: dict[str, Any] = self._state.get("clips", {})
+        total: int = sum(int(entry.get("size", 0)) for entry in clips.values())
+        return round(total / 1048576, 1)
+
+    @property
     def is_running(self) -> bool:
         """Whether a sync is currently in progress."""
         return self._running
@@ -217,13 +224,14 @@ class SunoSync:
                 break
 
             rel_path = _clip_path(clip, index)
-            success = await self._download_clip(client, clip, base, rel_path)
-            if success:
+            file_size = await self._download_clip(client, clip, base, rel_path)
+            if file_size is not None:
                 clips_state[clip.id] = {
                     "path": rel_path,
                     "title": clip.title,
                     "created": clip.created_at[:10] if clip.created_at else None,
                     "sources": next((srcs for c, _, _, srcs in desired if c.id == clip.id), []),
+                    "size": file_size,
                 }
                 downloaded += 1
             else:
@@ -334,12 +342,12 @@ class SunoSync:
 
     # ── Download ────────────────────────────────────────────────────
 
-    async def _download_clip(self, client: Any, clip: SunoClip, base: Path, rel_path: str) -> bool:
-        """Download a single clip as FLAC. Returns True on success."""
+    async def _download_clip(self, client: Any, clip: SunoClip, base: Path, rel_path: str) -> int | None:
+        """Download a single clip as FLAC. Returns file size on success, None on failure."""
         target = base / rel_path
         if await self.hass.async_add_executor_job(target.exists):
-            _LOGGER.debug("Already exists: %s", rel_path)
-            return True
+            size = await self.hass.async_add_executor_job(lambda: target.stat().st_size)
+            return size
 
         _LOGGER.info("Downloading: %s", clip.title)
 
@@ -356,14 +364,14 @@ class SunoSync:
 
             if not wav_url:
                 _LOGGER.warning("WAV generation timed out for %s", clip.id)
-                return False
+                return None
 
             # Download WAV
             session = async_get_clientsession(self.hass)
             async with session.get(wav_url) as resp:
                 if resp.status != 200:
                     _LOGGER.warning("WAV download failed for %s: %d", clip.id, resp.status)
-                    return False
+                    return None
                 wav_data = await resp.read()
 
             # Transcode to FLAC
@@ -374,12 +382,12 @@ class SunoSync:
                 clip.tags or "Suno",
             )
             if flac_data is None:
-                return False
+                return None
 
             # Atomic write
             await self._write_file(target, flac_data)
             _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(flac_data))
-            return True
+            return len(flac_data)
 
         except asyncio.CancelledError:
             raise
@@ -469,10 +477,10 @@ class SunoSync:
         trash_path = trash_entry.get("path", "")
         original_path = trash_entry.get("original_path", "")
 
-        def _restore(b: Path, tp: str, op: str) -> bool:
+        def _restore(b: Path, tp: str, op: str) -> bool | None:
             source = b / tp
             if not source.exists():
-                return False
+                return None
             dest = b / op
             dest.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -481,7 +489,7 @@ class SunoSync:
                 return True
             except OSError:
                 _LOGGER.warning("Failed to restore: %s", tp)
-                return False
+                return None
 
         restored = await self.hass.async_add_executor_job(_restore, base, trash_path, original_path)
         if restored:

@@ -54,10 +54,11 @@ class SunoCreditsSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
         return None
 
     @property
-    def extra_state_attributes(self) -> dict[str, int | str | None]:
-        """Return credit details and library stats as attributes."""
+    def extra_state_attributes(self) -> dict[str, int | str | float | None]:
+        """Return credit details, library stats, and cache info."""
+
         data: SunoData = self.coordinator.data
-        attrs: dict[str, int | str | None] = {
+        attrs: dict[str, int | str | float | None] = {
             "total_songs": len(data.clips),
             "liked_songs": len(data.liked_clips),
             "playlists": len(data.playlists),
@@ -66,6 +67,12 @@ class SunoCreditsSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
             attrs["monthly_limit"] = data.credits.monthly_limit
             attrs["monthly_usage"] = data.credits.monthly_usage
             attrs["period"] = data.credits.period
+
+        cache = self.coordinator.hass.data.get("suno_cache")
+        if cache is not None:
+            attrs["cache_files"] = cache.file_count
+            attrs["cache_size_mb"] = cache.size_mb
+
         return attrs
 
 
@@ -98,7 +105,7 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
         return "idle"
 
     @property
-    def extra_state_attributes(self) -> dict[str, int | str | None]:
+    def extra_state_attributes(self) -> dict[str, int | str | float | None]:
         """Return sync details as attributes."""
         from . import _SYNC_KEY  # noqa: PLC0415
         from .const import CONF_SYNC_PATH  # noqa: PLC0415
@@ -109,7 +116,8 @@ class SunoSyncSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
         return {
             "last_run": sync.last_sync,
             "total_files": sync.total_files,
-            "pending": sync.pending,
+            "library_size_mb": sync.library_size_mb,
+            "pending_downloads": sync.pending,
             "errors": sync.errors,
             "sync_path": self._entry.options.get(CONF_SYNC_PATH, ""),
         }
