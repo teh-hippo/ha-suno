@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.7.2 (2026-03-21)
+
+### Bug Fixes
+
+- Unified API request handler with adaptive throttling
+  ([`575cb65`](https://github.com/teh-hippo/ha-suno/commit/575cb65d9d88fd5cd23f819bbcc0f62c4902de09))
+
+### Chores
+
+- **deps**: Bump pyopenssl in the uv group across 1 directory
+  ([`cb77454`](https://github.com/teh-hippo/ha-suno/commit/cb774546feb5ccfd3d0f47877f1b4e9532715ac2))
+
+
 ## v1.7.1 (2026-03-21)
 
 ### Bug Fixes
