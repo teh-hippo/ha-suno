@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.9.3 (2026-03-21)
+
+### Bug Fixes
+
+- Resilient cache storage, faster setup, parallel refresh, dynamic device name
+  ([`736f66f`](https://github.com/teh-hippo/ha-suno/commit/736f66fc8a367d200b3cb936d5cbc2d42040623f))
+
+### Code Style
+
+- Fix ruff formatting in __init__.py
+  ([`7bf6259`](https://github.com/teh-hippo/ha-suno/commit/7bf6259fbca527d00bd2ab831e8753a36164aee1))
+
+
 ## v1.9.2 (2026-03-21)
 
 ### Bug Fixes
