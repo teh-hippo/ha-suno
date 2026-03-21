@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.7.4 (2026-03-21)
+
+### Bug Fixes
+
+- Platinum quality - proper unload cleanup, quality_scale manifest
+  ([`88f53f5`](https://github.com/teh-hippo/ha-suno/commit/88f53f5ccb044dee4a77b1ea496e4ea2af01debf))
+
+
 ## v1.7.3 (2026-03-21)
 
 ### Bug Fixes
