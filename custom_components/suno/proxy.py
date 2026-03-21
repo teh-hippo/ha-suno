@@ -41,6 +41,7 @@ from .models import SunoClip, clip_meta_hash
 
 if TYPE_CHECKING:
     from .cache import SunoCache
+    from .sync import SunoSync
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._wav_locks: dict[str, asyncio.Lock] = {}
+        self._inflight: dict[str, asyncio.Future[bytes | None]] = {}
         self._clips_by_id: dict[str, SunoClip] = {}
         self._clips_generation: int = -1
 
@@ -104,6 +105,17 @@ class SunoMediaProxyView(HomeAssistantView):
                 return runtime_data.cache
         return None
 
+    def _get_sync(self) -> SunoSync | None:
+        """Return the SunoSync from the first loaded coordinator that has one."""
+        entries = self.hass.config_entries.async_entries(DOMAIN)
+        for entry in entries:
+            runtime_data = getattr(entry, "runtime_data", None)
+            if not isinstance(runtime_data, SunoCoordinator):
+                continue
+            if runtime_data.sync is not None:
+                return runtime_data.sync
+        return None
+
     def _get_client(self) -> Any:
         """Return the SunoClient from the first loaded coordinator."""
         entries = self.hass.config_entries.async_entries(DOMAIN)
@@ -126,9 +138,23 @@ class SunoMediaProxyView(HomeAssistantView):
         is_hq = quality == QUALITY_HIGH
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
+        # For HQ: check sync directory first (FLAC files ready to serve)
+        if is_hq:
+            sync = self._get_sync()
+            if sync is not None:
+                synced_path = sync.get_synced_path(clip_id, meta_hash)
+                if synced_path is not None:
+                    try:
+                        return web.FileResponse(
+                            synced_path,
+                            headers={"Content-Type": "audio/flac"},
+                        )
+                    except (FileNotFoundError, OSError):
+                        _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
+
         cache = self._get_cache() if cache_enabled else None
 
-        # Try cache first (HQ cached as FLAC, standard as MP3)
+        # Try cache (HQ cached as FLAC, standard as MP3)
         if cache is not None:
             cache_fmt = "flac" if is_hq else "mp3"
             cached_path = await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)
@@ -174,6 +200,7 @@ class SunoMediaProxyView(HomeAssistantView):
             artist,
             content_type,
             cache,
+            meta_hash,
         )
 
     async def _handle_mp3(
@@ -185,6 +212,7 @@ class SunoMediaProxyView(HomeAssistantView):
         artist: str,
         content_type: str,
         cache: SunoCache | None,
+        meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
         id3_header = _build_id3_header(title=title, artist=artist)
@@ -220,7 +248,7 @@ class SunoMediaProxyView(HomeAssistantView):
             upstream.close()
 
         if cache is not None and collected:
-            await self._save_to_cache(cache, clip_id, "mp3", b"".join(collected))
+            await self._save_to_cache(cache, clip_id, "mp3", b"".join(collected), meta_hash)
 
         return response
 
@@ -235,57 +263,44 @@ class SunoMediaProxyView(HomeAssistantView):
         cache: SunoCache | None,
         meta_hash: str,
     ) -> web.Response:
-        """Get WAV via Suno API, transcode to FLAC with metadata and art."""
-        client = self._get_client()
-        if client is None:
-            return web.Response(status=502, text="Suno client not available")
+        """Get WAV via Suno API, transcode to FLAC with metadata and art.
 
-        # Serialise WAV generation per clip to avoid duplicate API calls
-        if clip_id not in self._wav_locks:
-            self._wav_locks[clip_id] = asyncio.Lock()
+        Uses request coalescing: if another request for the same clip is
+        already in flight, wait for it to finish and serve from cache.
+        """
+        key = f"{clip_id}.flac"
 
-        async with self._wav_locks[clip_id]:
+        # If another request is already processing this clip, wait for it
+        if key in self._inflight:
             try:
-                wav_url = await ensure_wav_url(client, clip_id)
-            except Exception:
-                _LOGGER.exception("WAV conversion request failed for %s", clip_id)
-                return web.Response(status=502, text="WAV conversion failed")
+                result = await asyncio.wait_for(
+                    asyncio.shield(self._inflight[key]),
+                    timeout=150,
+                )
+            except (TimeoutError, asyncio.CancelledError, Exception):
+                result = None
 
-        if not wav_url:
-            return web.Response(status=502, text="WAV generation timed out")
+            if result is not None:
+                return web.Response(body=result, content_type=content_type)
+            # Leader failed or timed out — fall through to our own attempt
 
-        # Fetch WAV from CDN
-        session = async_get_clientsession(self.hass)
-        try:
-            upstream = await session.get(wav_url)
-        except Exception:
-            _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
-            return web.Response(status=502, text="WAV fetch failed")
-
-        if upstream.status != 200:
-            upstream.close()
-            return web.Response(status=502, text=f"WAV upstream returned {upstream.status}")
+        # We are the leader: run the pipeline
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bytes | None] = loop.create_future()
+        self._inflight[key] = fut
 
         try:
-            wav_data = await upstream.read()
-        except Exception:
-            _LOGGER.exception("Failed to read WAV for %s", clip_id)
-            return web.Response(status=502, text="WAV read failed")
+            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist)
+            fut.set_result(flac_data)
+        except BaseException as exc:
+            fut.set_result(None)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            _LOGGER.exception("HQ pipeline failed for %s", clip_id)
+            return web.Response(status=502, text="HQ pipeline failed")
         finally:
-            upstream.close()
+            self._inflight.pop(key, None)
 
-        # Download album art
-        image_url = clip.image_large_url or clip.image_url if clip else None
-        image_data = await fetch_album_art(session, image_url) if image_url else None
-
-        # Transcode WAV to FLAC with metadata and album art
-        flac_data = await wav_to_flac(
-            get_ffmpeg_manager(self.hass).binary,
-            wav_data,
-            title,
-            artist,
-            image_data=image_data,
-        )
         if flac_data is None:
             return web.Response(status=502, text="FLAC transcode failed")
 
@@ -294,7 +309,55 @@ class SunoMediaProxyView(HomeAssistantView):
 
         return web.Response(
             body=flac_data,
-            content_type="audio/flac",
+            content_type=content_type,
+        )
+
+    async def _run_hq_pipeline(
+        self,
+        clip_id: str,
+        clip: SunoClip | None,
+        title: str,
+        artist: str,
+    ) -> bytes | None:
+        """Execute the full WAV→FLAC pipeline. Returns FLAC bytes or None."""
+        client = self._get_client()
+        if client is None:
+            return None
+
+        wav_url = await ensure_wav_url(client, clip_id)
+        if not wav_url:
+            _LOGGER.warning("WAV generation timed out for %s", clip_id)
+            return None
+
+        session = async_get_clientsession(self.hass)
+        try:
+            upstream = await session.get(wav_url)
+        except Exception:
+            _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
+            return None
+
+        if upstream.status != 200:
+            upstream.close()
+            _LOGGER.warning("WAV upstream returned %d for %s", upstream.status, clip_id)
+            return None
+
+        try:
+            wav_data = await upstream.read()
+        except Exception:
+            _LOGGER.exception("Failed to read WAV for %s", clip_id)
+            return None
+        finally:
+            upstream.close()
+
+        image_url = clip.image_large_url or clip.image_url if clip else None
+        image_data = await fetch_album_art(session, image_url) if image_url else None
+
+        return await wav_to_flac(
+            get_ffmpeg_manager(self.hass).binary,
+            wav_data,
+            title,
+            artist,
+            image_data=image_data,
         )
 
     @staticmethod

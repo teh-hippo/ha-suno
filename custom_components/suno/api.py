@@ -167,7 +167,7 @@ class SunoClient:
                             raise SunoApiError(msg)
                         return await resp.json()
                     return resp.status
-            except SunoApiError, SunoAuthError:
+            except (SunoApiError, SunoAuthError):
                 raise
             except Exception as err:
                 msg = f"Suno API request failed: {err}"

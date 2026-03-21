@@ -213,7 +213,7 @@ async def _purge_trash(
             age_days = (now - trashed).total_seconds() / 86400
             if age_days >= max_days:
                 to_purge.append(clip_id)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             to_purge.append(clip_id)
 
     for clip_id in to_purge:
@@ -236,6 +236,7 @@ class SunoSync:
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
         self._state: dict[str, Any] = {"clips": {}, "last_sync": None}
         self._cache: SunoCache | None = None
+        self._sync_path: str = ""
         self._running = False
         self._errors = 0
         self._pending = 0
@@ -257,6 +258,7 @@ class SunoSync:
         """Create, initialise, and wire up sync."""
         sync = cls(hass, f"suno_sync_{entry.entry_id}")
         sync._cache = coordinator.cache
+        sync._sync_path = entry.options.get(CONF_SYNC_PATH, "")
         await sync.async_init()
 
         sync_path = entry.options.get(CONF_SYNC_PATH, "")
@@ -325,6 +327,24 @@ class SunoSync:
     def is_running(self) -> bool:
         """Whether a sync is currently in progress."""
         return self._running
+
+    def get_synced_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
+        """Return the absolute path to a synced FLAC if it exists and is fresh.
+
+        Returns None if the clip isn't synced, the file is missing on disk,
+        or the metadata hash indicates stale embedded tags.
+        """
+        if not self._sync_path:
+            return None
+        entry = self._state.get("clips", {}).get(clip_id)
+        if entry is None:
+            return None
+        if meta_hash and entry.get("meta_hash") and entry["meta_hash"] != meta_hash:
+            return None
+        path = Path(self._sync_path) / entry["path"]
+        if not path.is_file():
+            return None
+        return path
 
     # ── Main sync entry point ───────────────────────────────────────
 
@@ -613,13 +633,6 @@ class SunoSync:
             # Atomic write
             await _write_file(self.hass, target, flac_data)
             _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(flac_data))
-
-            # Populate audio cache so proxy doesn't re-download
-            if self._cache is not None:
-                try:
-                    await self._cache.async_put(clip.id, "flac", flac_data, clip_meta_hash(clip))
-                except Exception:
-                    _LOGGER.debug("Could not populate cache for %s", clip.id)
 
             return len(flac_data)
 
