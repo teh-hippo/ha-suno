@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.10.0 (2026-03-21)
+
+### Documentation
+
+- Add development section to README, update entities and options
+  ([`0f0d636`](https://github.com/teh-hippo/ha-suno/commit/0f0d636237c9d8c9640d1fa9f77980749d99ade2))
+
+### Features
+
+- Cache/sync clear buttons, fix username and recent bugs, cache from sync
+  ([`9c7a060`](https://github.com/teh-hippo/ha-suno/commit/9c7a060b276f7d14354728174453d3bbacc116aa))
+
+
 ## v1.9.4 (2026-03-21)
 
 ### Bug Fixes
