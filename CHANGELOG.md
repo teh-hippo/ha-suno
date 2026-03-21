@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.7.3 (2026-03-21)
+
+### Bug Fixes
+
+- Refactor - extract shared wav_to_flac, remove duplicates
+  ([`270b836`](https://github.com/teh-hippo/ha-suno/commit/270b83605afa6e71c77e30fbc5e9d8f887f4c485))
+
+
 ## v1.7.2 (2026-03-21)
 
 ### Bug Fixes
