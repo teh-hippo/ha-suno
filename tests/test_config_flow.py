@@ -319,12 +319,13 @@ async def test_options_flow_shows_form(hass: HomeAssistant, mock_suno_client: As
 
 
 async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Options flow saves updated values."""
+    """Options flow saves updated values across steps."""
     entry = make_entry()
     with patch("custom_components.suno.SunoClient", return_value=mock_suno_client):
         await setup_entry(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    # Step 1: media browser + cache
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -338,6 +339,29 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
             CONF_CACHE_MAX_SIZE: 2000,
         },
     )
+    # Should advance to sync step
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "sync"
+
+    # Step 2: sync options (all defaults, sync disabled)
+    from custom_components.suno.const import (
+        CONF_SYNC_ALL_PLAYLISTS,
+        CONF_SYNC_ENABLED,
+        CONF_SYNC_LIKED,
+        CONF_SYNC_ORGANISE,
+        CONF_SYNC_PATH,
+    )
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_SYNC_ENABLED: False,
+            CONF_SYNC_PATH: "/media/suno",
+            CONF_SYNC_ORGANISE: "date",
+            CONF_SYNC_LIKED: True,
+            CONF_SYNC_ALL_PLAYLISTS: True,
+        },
+    )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SHOW_LIKED] is False
@@ -346,3 +370,4 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
     assert result["data"][CONF_AUDIO_QUALITY] == "high"
     assert result["data"][CONF_CACHE_ENABLED] is True
     assert result["data"][CONF_CACHE_MAX_SIZE] == 2000
+    assert result["data"][CONF_SYNC_ENABLED] is False

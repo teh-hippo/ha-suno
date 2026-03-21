@@ -35,6 +35,28 @@ DEFAULT_AUDIO_QUALITY = "standard"
 DEFAULT_CACHE_ENABLED = False
 DEFAULT_CACHE_MAX_SIZE = 500
 
+# Sync config keys
+CONF_SYNC_ENABLED = "sync_enabled"
+CONF_SYNC_PATH = "sync_path"
+CONF_SYNC_ORGANISE = "sync_organise"
+CONF_SYNC_LIKED = "sync_liked"
+CONF_SYNC_ALL_PLAYLISTS = "sync_all_playlists"
+CONF_SYNC_PLAYLISTS = "sync_playlists"
+CONF_SYNC_RECENT_COUNT = "sync_recent_count"
+CONF_SYNC_RECENT_DAYS = "sync_recent_days"
+
+# Sync defaults
+DEFAULT_SYNC_ENABLED = False
+DEFAULT_SYNC_ORGANISE = "date"
+DEFAULT_SYNC_LIKED = True
+DEFAULT_SYNC_ALL_PLAYLISTS = True
+DEFAULT_SYNC_RECENT_COUNT = None
+DEFAULT_SYNC_RECENT_DAYS = None
+
+# Sync limits
+SYNC_MAX_DOWNLOADS_PER_RUN = 20
+SYNC_DOWNLOAD_DELAY = 5  # seconds between downloads
+
 # Audio quality options
 QUALITY_HIGH = "high"
 

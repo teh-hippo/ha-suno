@@ -1,0 +1,464 @@
+"""Background FLAC sync for the Suno integration.
+
+Downloads FLAC files from Suno into a local directory, organised by date,
+playlist, or flat.  Tracks sync state via HA Store and writes a co-located
+manifest for external tools.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from homeassistant.components.ffmpeg import get_ffmpeg_manager
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
+
+from .const import (
+    CONF_SYNC_ALL_PLAYLISTS,
+    CONF_SYNC_ENABLED,
+    CONF_SYNC_LIKED,
+    CONF_SYNC_ORGANISE,
+    CONF_SYNC_PATH,
+    CONF_SYNC_PLAYLISTS,
+    CONF_SYNC_RECENT_COUNT,
+    CONF_SYNC_RECENT_DAYS,
+    DEFAULT_SYNC_ALL_PLAYLISTS,
+    DEFAULT_SYNC_ENABLED,
+    DEFAULT_SYNC_LIKED,
+    DEFAULT_SYNC_ORGANISE,
+    DEFAULT_SYNC_RECENT_COUNT,
+    DEFAULT_SYNC_RECENT_DAYS,
+    SYNC_DOWNLOAD_DELAY,
+    SYNC_MAX_DOWNLOADS_PER_RUN,
+)
+from .models import SunoClip
+
+_LOGGER = logging.getLogger(__name__)
+
+STORE_VERSION = 1
+_MANIFEST_FILENAME = ".suno_sync.json"
+_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitise_filename(name: str, max_len: int = 200) -> str:
+    """Make a string safe for use as a filename."""
+    safe = _UNSAFE_CHARS.sub("_", name).strip(". ")
+    return safe[:max_len] if safe else "untitled"
+
+
+def _clip_path(clip: SunoClip, index: int, organise: str, collection: str) -> str:
+    """Build the relative file path for a clip."""
+    title = _sanitise_filename(clip.title or "untitled")
+    num = f"{index + 1:02d}"
+
+    if organise == "date":
+        date_str = clip.created_at[:10] if clip.created_at else "unknown"
+        return f"{date_str}/{num} - {title}.flac"
+    if organise == "playlist":
+        folder = _sanitise_filename(collection)
+        return f"{folder}/{num} - {title}.flac"
+    # flat
+    return f"{num} - {title}.flac"
+
+
+class SunoSync:
+    """Manages background FLAC sync to a local directory."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        store_key: str,
+    ) -> None:
+        self.hass = hass
+        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
+        self._state: dict[str, Any] = {"clips": {}, "last_sync": None}
+        self._running = False
+        self._errors = 0
+        self._pending = 0
+
+    async def async_init(self) -> None:
+        """Load persisted sync state."""
+        data = await self._store.async_load()
+        if data and isinstance(data, dict):
+            self._state = data
+
+    # ── Public status ───────────────────────────────────────────────
+
+    @property
+    def last_sync(self) -> str | None:
+        """ISO timestamp of last completed sync."""
+        return self._state.get("last_sync")
+
+    @property
+    def total_files(self) -> int:
+        """Number of synced files."""
+        return len(self._state.get("clips", {}))
+
+    @property
+    def pending(self) -> int:
+        """Number of clips pending download in current/last run."""
+        return self._pending
+
+    @property
+    def errors(self) -> int:
+        """Number of errors in current/last run."""
+        return self._errors
+
+    @property
+    def is_running(self) -> bool:
+        """Whether a sync is currently in progress."""
+        return self._running
+
+    # ── Main sync entry point ───────────────────────────────────────
+
+    async def async_sync(self, options: dict[str, Any], client: Any, force: bool = False) -> None:
+        """Run a full sync cycle."""
+        if self._running:
+            _LOGGER.debug("Sync already running, skipping")
+            return
+
+        if not options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
+            return
+
+        sync_path = options.get(CONF_SYNC_PATH)
+        if not sync_path:
+            _LOGGER.warning("Sync enabled but no sync_path configured")
+            return
+
+        self._running = True
+        self._errors = 0
+        self._pending = 0
+
+        try:
+            await self._run_sync(options, client, sync_path, force)
+        except asyncio.CancelledError:
+            _LOGGER.info("Sync cancelled")
+            raise
+        except Exception:
+            _LOGGER.exception("Sync failed")
+            self._errors += 1
+        finally:
+            self._running = False
+
+    async def _run_sync(
+        self,
+        options: dict[str, Any],
+        client: Any,
+        sync_path: str,
+        force: bool,
+    ) -> None:
+        """Core sync logic: build desired state, diff, download, cleanup."""
+        organise = options.get(CONF_SYNC_ORGANISE, DEFAULT_SYNC_ORGANISE)
+
+        # Build desired clips with sources
+        desired = await self._build_desired(options, client)
+
+        clips_state: dict[str, Any] = dict(self._state.get("clips", {}))
+
+        # Determine what to download and what to delete
+        to_download: list[tuple[SunoClip, int, str]] = []
+        to_delete: list[str] = []
+        seen_ids: set[str] = set()
+
+        for clip, index, collection, sources in desired:
+            seen_ids.add(clip.id)
+            if clip.id not in clips_state or force:
+                to_download.append((clip, index, collection))
+            # Update sources regardless
+            if clip.id in clips_state:
+                clips_state[clip.id]["sources"] = sources
+
+        for clip_id in list(clips_state.keys()):
+            if clip_id not in seen_ids:
+                to_delete.append(clip_id)
+
+        self._pending = len(to_download)
+        _LOGGER.info(
+            "Sync: %d to download, %d to delete, %d current",
+            len(to_download),
+            len(to_delete),
+            len(seen_ids),
+        )
+
+        # Ensure sync directory exists
+        base = Path(sync_path)
+        await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
+
+        # Download new clips (rate limited)
+        downloaded = 0
+        for clip, index, collection in to_download:
+            if downloaded >= SYNC_MAX_DOWNLOADS_PER_RUN:
+                _LOGGER.info("Reached max downloads per run (%d), will continue next sync", SYNC_MAX_DOWNLOADS_PER_RUN)
+                break
+
+            rel_path = _clip_path(clip, index, organise, collection)
+            success = await self._download_clip(client, clip, base, rel_path)
+            if success:
+                clips_state[clip.id] = {
+                    "path": rel_path,
+                    "title": clip.title,
+                    "created": clip.created_at[:10] if clip.created_at else None,
+                    "sources": next((srcs for c, _, _, srcs in desired if c.id == clip.id), []),
+                }
+                downloaded += 1
+            else:
+                self._errors += 1
+
+            if downloaded < len(to_download):
+                await asyncio.sleep(SYNC_DOWNLOAD_DELAY)
+
+        # Cleanup orphaned files
+        for clip_id in to_delete:
+            entry = clips_state.pop(clip_id, None)
+            if entry and entry.get("path"):
+                await self._delete_file(base, entry["path"])
+
+        # Update state
+        self._state["clips"] = clips_state
+        self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
+        self._pending = max(0, len(to_download) - downloaded)
+        await self._save_state(base)
+
+    # ── Desired state builder ───────────────────────────────────────
+
+    async def _build_desired(
+        self,
+        options: dict[str, Any],
+        client: Any,
+    ) -> list[tuple[SunoClip, int, str, list[str]]]:
+        """Build list of (clip, index, collection_name, sources)."""
+        clip_map: dict[str, tuple[SunoClip, str, list[str]]] = {}
+
+        # Liked songs
+        if options.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED):
+            try:
+                liked = await client.get_liked_songs()
+                for clip in liked:
+                    if clip.id in clip_map:
+                        clip_map[clip.id][2].append("liked")
+                    else:
+                        clip_map[clip.id] = (clip, "Liked Songs", ["liked"])
+            except Exception:
+                _LOGGER.warning("Failed to fetch liked songs for sync")
+
+        # Playlists
+        sync_all = options.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS)
+        selected_ids = options.get(CONF_SYNC_PLAYLISTS, []) or []
+
+        if sync_all or selected_ids:
+            try:
+                playlists = await client.get_playlists()
+                for pl in playlists:
+                    if not sync_all and pl.id not in selected_ids:
+                        continue
+                    try:
+                        clips = await client.get_playlist_clips(pl.id)
+                        for clip in clips:
+                            source = f"playlist:{pl.id}"
+                            if clip.id in clip_map:
+                                clip_map[clip.id][2].append(source)
+                            else:
+                                clip_map[clip.id] = (clip, pl.name, [source])
+                    except Exception:
+                        _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
+            except Exception:
+                _LOGGER.warning("Failed to fetch playlists for sync")
+
+        # Recent songs
+        recent_count = options.get(CONF_SYNC_RECENT_COUNT, DEFAULT_SYNC_RECENT_COUNT)
+        recent_days = options.get(CONF_SYNC_RECENT_DAYS, DEFAULT_SYNC_RECENT_DAYS)
+
+        if recent_count or recent_days:
+            try:
+                all_clips = await client.get_all_songs()
+                recent_set: set[str] = set()
+
+                if recent_count:
+                    for clip in all_clips[: int(recent_count)]:
+                        recent_set.add(clip.id)
+
+                if recent_days:
+                    cutoff = datetime.now(tz=UTC).timestamp() - (int(recent_days) * 86400)
+                    for clip in all_clips:
+                        if clip.created_at:
+                            try:
+                                created = datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))
+                                if created.timestamp() >= cutoff:
+                                    recent_set.add(clip.id)
+                            except ValueError:
+                                pass
+
+                for clip in all_clips:
+                    if clip.id in recent_set:
+                        if clip.id in clip_map:
+                            clip_map[clip.id][2].append("recent")
+                        else:
+                            clip_map[clip.id] = (clip, "Recent", ["recent"])
+            except Exception:
+                _LOGGER.warning("Failed to fetch recent songs for sync")
+
+        # Convert to indexed list
+        result: list[tuple[SunoClip, int, str, list[str]]] = []
+        for i, (_clip_id, (clip, collection, sources)) in enumerate(clip_map.items()):
+            result.append((clip, i, collection, sources))
+        return result
+
+    # ── Download ────────────────────────────────────────────────────
+
+    async def _download_clip(self, client: Any, clip: SunoClip, base: Path, rel_path: str) -> bool:
+        """Download a single clip as FLAC. Returns True on success."""
+        target = base / rel_path
+        if await self.hass.async_add_executor_job(target.exists):
+            _LOGGER.debug("Already exists: %s", rel_path)
+            return True
+
+        _LOGGER.info("Downloading: %s", clip.title)
+
+        try:
+            # Get WAV URL (may need to trigger generation)
+            wav_url = await client.get_wav_url(clip.id)
+            if not wav_url:
+                await client.request_wav(clip.id)
+                for _ in range(24):
+                    await asyncio.sleep(5)
+                    wav_url = await client.get_wav_url(clip.id)
+                    if wav_url:
+                        break
+
+            if not wav_url:
+                _LOGGER.warning("WAV generation timed out for %s", clip.id)
+                return False
+
+            # Download WAV
+            session = async_get_clientsession(self.hass)
+            async with session.get(wav_url) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("WAV download failed for %s: %d", clip.id, resp.status)
+                    return False
+                wav_data = await resp.read()
+
+            # Transcode to FLAC
+            flac_data = await self._wav_to_flac(
+                wav_data,
+                clip.title or "Suno",
+                clip.tags or "Suno",
+            )
+            if flac_data is None:
+                return False
+
+            # Atomic write
+            await self._write_file(target, flac_data)
+            _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(flac_data))
+            return True
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.exception("Failed to download %s", clip.id)
+            return False
+
+    async def _wav_to_flac(self, wav_data: bytes, title: str, artist: str) -> bytes | None:
+        """Transcode WAV to FLAC with metadata via ffmpeg."""
+        ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg_binary,
+                "-i",
+                "pipe:0",
+                "-metadata",
+                f"title={title}",
+                "-metadata",
+                f"artist={artist}",
+                "-f",
+                "flac",
+                "-compression_level",
+                "5",
+                "pipe:1",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate(input=wav_data)
+            if proc.returncode != 0:
+                _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
+                return None
+            return stdout
+        except FileNotFoundError:
+            _LOGGER.error("ffmpeg not found. Install ffmpeg for FLAC sync.")
+            return None
+        except Exception:
+            _LOGGER.exception("FLAC transcode error")
+            return None
+
+    # ── File operations ─────────────────────────────────────────────
+
+    async def _write_file(self, target: Path, data: bytes) -> None:
+        """Atomically write data to target path."""
+
+        def _write(t: Path, d: bytes) -> None:
+            t.parent.mkdir(parents=True, exist_ok=True)
+            tmp = t.with_suffix(".tmp")
+            try:
+                tmp.write_bytes(d)
+                os.replace(str(tmp), str(t))
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+
+        await self.hass.async_add_executor_job(_write, target, data)
+
+    async def _delete_file(self, base: Path, rel_path: str) -> None:
+        """Delete a synced file and remove empty parent directories."""
+
+        def _delete(b: Path, r: str) -> None:
+            target = b / r
+            if target.exists():
+                target.unlink()
+                _LOGGER.info("Removed: %s", r)
+                # Clean up empty parent dirs (but not the base)
+                parent = target.parent
+                while parent != b:
+                    try:
+                        parent.rmdir()
+                        parent = parent.parent
+                    except OSError:
+                        break
+
+        await self.hass.async_add_executor_job(_delete, base, rel_path)
+
+    async def cleanup_tmp_files(self, sync_path: str) -> None:
+        """Remove stale .tmp files from the sync directory."""
+
+        def _cleanup(p: str) -> None:
+            base = Path(p)
+            if not base.exists():
+                return
+            for tmp in base.rglob("*.tmp"):
+                tmp.unlink(missing_ok=True)
+                _LOGGER.debug("Cleaned up: %s", tmp)
+
+        await self.hass.async_add_executor_job(_cleanup, sync_path)
+
+    # ── State persistence ───────────────────────────────────────────
+
+    async def _save_state(self, base: Path) -> None:
+        """Save sync state to HA Store and write co-located manifest."""
+        await self._store.async_save(self._state)
+
+        # Write manifest for external tools (not read back)
+        def _write_manifest(b: Path, state: dict[str, Any]) -> None:
+            manifest = b / _MANIFEST_FILENAME
+            try:
+                manifest.write_text(json.dumps(state, indent=2))
+            except OSError:
+                pass  # Non-critical
+
+        await self.hass.async_add_executor_job(_write_manifest, base, self._state)

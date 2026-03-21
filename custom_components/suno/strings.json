@@ -53,7 +53,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Suno settings",
+        "title": "Media browser & cache",
         "data": {
           "show_liked": "Show Liked Songs folder",
           "show_recent": "Show Recent folder",
@@ -69,13 +69,45 @@
           "cache_enabled": "Cache audio files locally for faster playback.",
           "cache_max_size_mb": "Maximum disk space for cached audio files in megabytes."
         }
+      },
+      "sync": {
+        "title": "FLAC sync",
+        "description": "Sync FLAC files to a local directory for offline playback, Jellyfin, or backup.",
+        "data": {
+          "sync_enabled": "Enable FLAC sync",
+          "sync_path": "Sync directory",
+          "sync_organise": "File organisation",
+          "sync_liked": "Sync liked songs",
+          "sync_all_playlists": "Sync all playlists",
+          "sync_recent_count": "Recent songs to keep",
+          "sync_recent_days": "Recent days to keep"
+        },
+        "data_description": {
+          "sync_path": "Full path to the directory where FLAC files will be saved.  Can be any mounted path (e.g. NAS, OneDrive).",
+          "sync_organise": "How to organise files: by creation date, by playlist, or all in one folder.",
+          "sync_all_playlists": "When disabled, you can choose specific playlists on the next page.",
+          "sync_recent_count": "Leave empty to disable.  Keeps the N most recent songs synced.",
+          "sync_recent_days": "Leave empty to disable.  Keeps songs from the last N days synced."
+        }
+      },
+      "sync_playlists": {
+        "title": "Select playlists to sync",
+        "data": {
+          "sync_playlists": "Playlists"
+        }
       }
+    },
+    "error": {
+      "invalid_sync_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission."
     }
   },
   "entity": {
     "sensor": {
       "credits": {
         "name": "Credits"
+      },
+      "sync_status": {
+        "name": "Sync status"
       }
     }
   },
