@@ -74,7 +74,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
-            except aiohttp.ClientError, TimeoutError:
+            except (aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno authentication")
@@ -128,7 +128,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 await client.get_feed(0)
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
-            except aiohttp.ClientError, TimeoutError:
+            except (aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno re-authentication")
