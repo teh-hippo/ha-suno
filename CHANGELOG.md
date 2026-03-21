@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.9.1 (2026-03-21)
+
+### Bug Fixes
+
+- Keep cache Store version 1 to avoid migration error
+  ([`e28007d`](https://github.com/teh-hippo/ha-suno/commit/e28007d38f3f576400b11adadb25ccd9f21efe4f))
+
+
 ## v1.9.0 (2026-03-21)
 
 ### Features
