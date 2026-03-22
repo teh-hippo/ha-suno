@@ -22,7 +22,6 @@ from .const import (
     JWT_REFRESH_BUFFER,
 )
 from .exceptions import SunoAuthError, SunoConnectionError
-from .models import SunoUser
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,11 +74,6 @@ class ClerkAuth:
         self._display_name: str | None = None
 
     @property
-    def jwt(self) -> str | None:
-        """Return the current JWT token."""
-        return self._jwt
-
-    @property
     def user_id(self) -> str | None:
         """The Suno user ID from the Clerk session."""
         return self._user_id
@@ -88,14 +82,6 @@ class ClerkAuth:
     def display_name(self) -> str:
         """Return the user's display name."""
         return self._display_name or "Suno"
-
-    @property
-    def user(self) -> SunoUser:
-        """Return a SunoUser for the authenticated user."""
-        return SunoUser(
-            id=self._user_id or "",
-            display_name=self.display_name,
-        )
 
     async def authenticate(self) -> str:
         """Authenticate with Clerk and return the user ID.
