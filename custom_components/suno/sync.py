@@ -63,19 +63,20 @@ def _write_m3u8_playlists(
     base: Path, clips_state: dict[str, Any], desired: list[tuple[Any, int, str, list[str]]]
 ) -> None:
     """Write M3U8 playlist files for Jellyfin/media player compatibility."""
-    # Build playlist_name → [(rel_path, title)] from sources
-    playlists: dict[str, list[tuple[str, str]]] = {}
+    # Build playlist_name → [(abs_path, title, duration)] from sources
+    playlists: dict[str, list[tuple[str, str, int]]] = {}
     for clip, _idx, collection, sources in desired:
         entry = clips_state.get(clip.id)
         if not entry or not entry.get("path"):
             continue
-        rel_path = entry["path"]
+        abs_path = str(base / entry["path"])
         title = entry.get("title") or clip.title or "Untitled"
+        duration = int(clip.duration) if clip.duration else -1
         for source in sources:
             if source == "liked":
-                playlists.setdefault("Liked Songs", []).append((rel_path, title))
+                playlists.setdefault("Liked Songs", []).append((abs_path, title, duration))
             elif source.startswith("playlist:"):
-                playlists.setdefault(collection, []).append((rel_path, title))
+                playlists.setdefault(collection, []).append((abs_path, title, duration))
 
     # Write M3U8 files
     written: set[str] = set()
@@ -83,8 +84,8 @@ def _write_m3u8_playlists(
         filename = f"{_sanitise_filename(name)}.m3u8"
         written.add(filename)
         lines = [f"#EXTM3U\n#PLAYLIST:{name}"]
-        for rel_path, title in tracks:
-            lines.append(f"#EXTINF:-1,{title}\n./{rel_path}")
+        for abs_path, title, duration in tracks:
+            lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
         try:
             (base / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
         except OSError:

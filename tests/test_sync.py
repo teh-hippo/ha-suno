@@ -24,6 +24,7 @@ from custom_components.suno.sync import (
     _sanitise_filename,
     _trash_file,
     _write_file,
+    _write_m3u8_playlists,
 )
 
 # ── Filename sanitisation ───────────────────────────────────────────
@@ -456,3 +457,92 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
 
     # clip-liked should be preserved since liked API failed
     assert "clip-liked" in preserved
+
+
+# ── M3U8 playlist writing ──────────────────────────────────────────
+
+
+class TestWriteM3u8Playlists:
+    def _make_clip(self, clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
+        clip = MagicMock()
+        clip.id = clip_id
+        clip.title = title
+        clip.duration = duration
+        return clip
+
+    def test_writes_absolute_paths(self, tmp_path: Path) -> None:
+        """Playlist entries must use absolute paths for Jellyfin compatibility."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "2026-03-15/01 - Test Song.flac", "title": "Test Song"}}
+        desired = [(clip, 0, "Liked Songs", ["liked"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        assert "./" not in content
+        assert str(tmp_path / "2026-03-15/01 - Test Song.flac") in content
+
+    def test_uses_clip_duration(self, tmp_path: Path) -> None:
+        """Duration in #EXTINF should come from clip metadata, not hardcoded -1."""
+        clip = self._make_clip(duration=95.7)
+        clips_state = {"clip1": {"path": "2026-03-15/01 - Test Song.flac", "title": "Test Song"}}
+        desired = [(clip, 0, "Liked Songs", ["liked"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        assert "#EXTINF:95," in content
+
+    def test_duration_fallback_when_zero(self, tmp_path: Path) -> None:
+        """Duration falls back to -1 when clip has no duration."""
+        clip = self._make_clip(duration=0)
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [(clip, 0, "Liked Songs", ["liked"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        assert "#EXTINF:-1," in content
+
+    def test_header_format(self, tmp_path: Path) -> None:
+        """M3U8 files must start with #EXTM3U and include #PLAYLIST tag."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [(clip, 0, "My Playlist", ["playlist:pl1"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
+        assert content.startswith("#EXTM3U\n")
+        assert "#PLAYLIST:My Playlist\n" in content
+
+    def test_liked_and_playlist_sources(self, tmp_path: Path) -> None:
+        """Clips with both liked and playlist sources appear in both M3U8 files."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [(clip, 0, "Favourites", ["liked", "playlist:pl1"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        assert (tmp_path / "Liked Songs.m3u8").exists()
+        assert (tmp_path / "Favourites.m3u8").exists()
+
+    def test_cleans_stale_m3u8(self, tmp_path: Path) -> None:
+        """Stale M3U8 files from previous runs are removed."""
+        stale = tmp_path / "Old Playlist.m3u8"
+        stale.write_text("#EXTM3U\n", encoding="utf-8")
+
+        _write_m3u8_playlists(tmp_path, {}, [])
+
+        assert not stale.exists()
+
+    def test_skips_clips_without_path(self, tmp_path: Path) -> None:
+        """Clips missing a path in state are excluded from playlists."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"title": "Song"}}  # no "path" key
+        desired = [(clip, 0, "Liked Songs", ["liked"])]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        # No M3U8 written since the only clip had no path
+        assert not list(tmp_path.glob("*.m3u8"))
