@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.10.3 (2026-03-22)
+
+### Bug Fixes
+
+- Rate limiting, metadata tags, force resync, share coordinator data
+  ([`2350a04`](https://github.com/teh-hippo/ha-suno/commit/2350a04edba55aa50c5ab5197c60f1fac7803af0))
+
+
 ## v1.10.2 (2026-03-21)
 
 ### Bug Fixes
