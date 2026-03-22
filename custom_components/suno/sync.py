@@ -48,7 +48,7 @@ from .models import SunoClip, clip_meta_hash
 if TYPE_CHECKING:
     from .api import SunoClient
     from .cache import SunoCache
-    from .coordinator import SunoCoordinator
+    from .coordinator import SunoCoordinator, SunoData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -270,7 +270,7 @@ class SunoSync:
             if sync.is_running:
                 return
             hass.async_create_task(
-                sync.async_sync(dict(entry.options), client),
+                sync.async_sync(dict(entry.options), client, coordinator_data=coordinator.data),
                 f"suno_sync_refresh_{entry.entry_id}",
             )
 
@@ -348,7 +348,13 @@ class SunoSync:
 
     # ── Main sync entry point ───────────────────────────────────────
 
-    async def async_sync(self, options: dict[str, Any], client: Any, force: bool = False) -> None:
+    async def async_sync(
+        self,
+        options: dict[str, Any],
+        client: Any,
+        force: bool = False,
+        coordinator_data: SunoData | None = None,
+    ) -> None:
         """Run a full sync cycle."""
         if self._running:
             _LOGGER.debug("Sync already running, skipping")
@@ -367,7 +373,7 @@ class SunoSync:
         self._pending = 0
 
         try:
-            await self._run_sync(options, client, sync_path, force)
+            await self._run_sync(options, client, sync_path, force, coordinator_data)
         except asyncio.CancelledError:
             _LOGGER.info("Sync cancelled")
             raise
@@ -383,6 +389,7 @@ class SunoSync:
         client: Any,
         sync_path: str,
         force: bool,
+        coordinator_data: SunoData | None = None,
     ) -> None:
         """Core sync logic: build desired state, diff, download, cleanup."""
         trash_days = options.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)
@@ -394,7 +401,7 @@ class SunoSync:
             await _purge_trash(self.hass, base, trash_state, int(trash_days))
 
         # Build desired clips with sources (preserved_ids protects against transient API failures)
-        desired, preserved_ids = await self._build_desired(options, client)
+        desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
 
         clips_state: dict[str, Any] = dict(self._state.get("clips", {}))
 
@@ -490,12 +497,17 @@ class SunoSync:
         self,
         options: dict[str, Any],
         client: Any,
+        coordinator_data: SunoData | None = None,
     ) -> tuple[list[tuple[SunoClip, int, str, list[str]]], set[str]]:
         """Build list of (clip, index, collection_name, sources).
 
         Returns (desired_list, preserved_ids) where preserved_ids contains clip
         IDs from the previous sync state whose source API call failed.  These
         IDs must not be deleted, since the failure may be transient.
+
+        When coordinator_data is provided, uses it for liked/all_songs/playlists
+        instead of making duplicate API calls.  Per-playlist clip fetches still
+        hit the API (not available from coordinator).
         """
         clip_map: dict[str, tuple[SunoClip, str, list[str]]] = {}
         preserved: set[str] = set()
@@ -504,7 +516,7 @@ class SunoSync:
         # Liked songs
         if options.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED):
             try:
-                liked = await client.get_liked_songs()
+                liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
                 for clip in liked:
                     if clip.id in clip_map:
                         clip_map[clip.id][2].append("liked")
@@ -522,7 +534,7 @@ class SunoSync:
 
         if sync_all or selected_ids:
             try:
-                playlists = await client.get_playlists()
+                playlists = coordinator_data.playlists if coordinator_data else await client.get_playlists()
                 for pl in playlists:
                     if not sync_all and pl.id not in selected_ids:
                         continue
@@ -552,7 +564,7 @@ class SunoSync:
 
         if recent_count or recent_days:
             try:
-                all_clips = await client.get_all_songs()
+                all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
                 recent_set: set[str] = set()
 
                 if recent_count:
@@ -624,7 +636,7 @@ class SunoSync:
                 get_ffmpeg_manager(self.hass).binary,
                 wav_data,
                 clip.title or "Suno",
-                clip.tags or "Suno",
+                genre=clip.tags or "",
                 image_data=image_data,
             )
             if flac_data is None:

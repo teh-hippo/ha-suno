@@ -129,7 +129,8 @@ class SunoMediaProxyView(HomeAssistantView):
         """Stream audio with injected metadata tags."""
         clip = self._find_clip(clip_id)
         title = clip.title if clip else "Suno"
-        artist = (clip.tags if clip else None) or "Suno"
+        artist = "Suno"
+        genre = (clip.tags if clip else None) or ""
         meta_hash = clip_meta_hash(clip) if clip else ""
 
         opts = self._get_entry_options()
@@ -171,6 +172,7 @@ class SunoMediaProxyView(HomeAssistantView):
                 clip,
                 title,
                 artist,
+                genre,
                 content_type,
                 cache,
                 meta_hash,
@@ -198,6 +200,7 @@ class SunoMediaProxyView(HomeAssistantView):
             clip_id,
             title,
             artist,
+            genre,
             content_type,
             cache,
             meta_hash,
@@ -210,12 +213,13 @@ class SunoMediaProxyView(HomeAssistantView):
         clip_id: str,
         title: str,
         artist: str,
+        genre: str,
         content_type: str,
         cache: SunoCache | None,
         meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
-        id3_header = _build_id3_header(title=title, artist=artist)
+        id3_header = _build_id3_header(title=title, artist=artist, genre=genre)
         collected: list[bytes] = [id3_header] if cache is not None else []
 
         response = web.StreamResponse(
@@ -259,6 +263,7 @@ class SunoMediaProxyView(HomeAssistantView):
         clip: SunoClip | None,
         title: str,
         artist: str,
+        genre: str,
         content_type: str,
         cache: SunoCache | None,
         meta_hash: str,
@@ -290,7 +295,7 @@ class SunoMediaProxyView(HomeAssistantView):
         self._inflight[key] = fut
 
         try:
-            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist)
+            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, genre)
             fut.set_result(flac_data)
         except BaseException as exc:
             fut.set_result(None)
@@ -318,6 +323,7 @@ class SunoMediaProxyView(HomeAssistantView):
         clip: SunoClip | None,
         title: str,
         artist: str,
+        genre: str,
     ) -> bytes | None:
         """Execute the full WAV→FLAC pipeline. Returns FLAC bytes or None."""
         client = self._get_client()
@@ -357,6 +363,7 @@ class SunoMediaProxyView(HomeAssistantView):
             wav_data,
             title,
             artist,
+            genre=genre,
             image_data=image_data,
         )
 

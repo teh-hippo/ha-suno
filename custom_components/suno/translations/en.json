@@ -109,7 +109,7 @@
         "name": "Clear cache"
       },
       "clear_sync_library": {
-        "name": "Clear sync library"
+        "name": "Force re-sync"
       }
     }
   },

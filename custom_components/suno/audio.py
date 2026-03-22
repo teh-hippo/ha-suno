@@ -19,10 +19,13 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _build_id3_header(title: str, artist: str) -> bytes:
-    """Build a minimal ID3v2.4 header with title and artist frames."""
+def _build_id3_header(title: str, artist: str, genre: str = "") -> bytes:
+    """Build a minimal ID3v2.4 header with title, artist, and genre frames."""
+    tag_fields = [("TIT2", title), ("TPE1", artist)]
+    if genre:
+        tag_fields.append(("TCON", genre))
     frames = b""
-    for frame_id, text in [("TIT2", title), ("TPE1", artist)]:
+    for frame_id, text in tag_fields:
         text_bytes = b"\x03" + text.encode("utf-8")
         frame_header = frame_id.encode("ascii") + len(text_bytes).to_bytes(4, "big") + b"\x00\x00"
         frames += frame_header + text_bytes
@@ -50,8 +53,9 @@ async def wav_to_flac(
     ffmpeg_binary: str,
     wav_data: bytes,
     title: str,
-    artist: str,
+    artist: str = "Suno",
     album: str = "Suno",
+    genre: str = "",
     image_data: bytes | None = None,
 ) -> bytes | None:
     """Transcode WAV bytes to FLAC with metadata and optional album art."""
@@ -73,23 +77,20 @@ async def wav_to_flac(
         if image_data:
             args.extend(["-map", "1:v:0", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"])
 
-        args.extend(
-            [
-                "-c:a",
-                "flac",
-                "-metadata",
-                f"title={title}",
-                "-metadata",
-                f"artist={artist}",
-                "-metadata",
-                f"album={album}",
-                "-compression_level",
-                "5",
-                "-f",
-                "flac",
-                "pipe:1",
-            ]
-        )
+        meta = [
+            "-c:a",
+            "flac",
+            "-metadata",
+            f"title={title}",
+            "-metadata",
+            f"artist={artist}",
+            "-metadata",
+            f"album={album}",
+        ]
+        if genre:
+            meta.extend(["-metadata", f"genre={genre}"])
+        meta.extend(["-compression_level", "5", "-f", "flac", "pipe:1"])
+        args.extend(meta)
 
         proc = await asyncio.create_subprocess_exec(
             *args,

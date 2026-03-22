@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
-from pathlib import Path
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
@@ -14,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SunoConfigEntry
-from .const import CONF_SYNC_ENABLED, CONF_SYNC_PATH, DEFAULT_SYNC_ENABLED
+from .const import CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED
 from .coordinator import SunoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,7 +64,7 @@ class SunoClearCacheButton(_SunoButton):
 
 
 class SunoClearSyncButton(_SunoButton):
-    """Clear the synced media library."""
+    """Trigger a forced full re-sync of the media library."""
 
     _attr_translation_key = "clear_sync_library"
     _attr_entity_registry_enabled_default = False
@@ -75,15 +73,11 @@ class SunoClearSyncButton(_SunoButton):
         super().__init__(coordinator, entry, key="clear_sync_library")
 
     async def async_press(self) -> None:
-        """Reset sync state and remove synced files."""
+        """Force a full re-sync (re-evaluates all clips, cleans up orphans)."""
         if self.coordinator.sync is None:
             return
-        self.coordinator.sync._state = {"clips": {}, "last_sync": None}
-        await self.coordinator.sync._store.async_save(self.coordinator.sync._state)
-        sync_path = self._entry.options.get(CONF_SYNC_PATH, "")
-        if sync_path and Path(sync_path).is_dir():
-            await self.coordinator.hass.async_add_executor_job(shutil.rmtree, sync_path, True)
-        _LOGGER.info("Suno sync library cleared")
+        await self.coordinator.sync.async_sync(dict(self._entry.options), self.coordinator.client, force=True)
+        _LOGGER.info("Suno force re-sync triggered")
 
 
 # ── Setup ───────────────────────────────────────────────────────────
