@@ -1,12 +1,4 @@
-"""HTTP proxy that injects metadata into Suno audio streams.
-
-Suno's CDN serves audio files with no tags, so media players (e.g. Sonos)
-display the filename instead of the song title.  This view sits in front of
-the CDN and prepends metadata before streaming the audio data to the client.
-
-Supports MP3 (ID3v2.4 header injection) and high-quality mode which downloads
-WAV from the CDN and transcodes to FLAC via ffmpeg with embedded metadata.
-"""
+"""HTTP proxy that injects metadata into Suno audio streams."""
 
 from __future__ import annotations
 
@@ -20,13 +12,7 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .audio import (
-    _build_id3_header,
-    _skip_existing_id3,
-    ensure_wav_url,
-    fetch_album_art,
-    wav_to_flac,
-)
+from .audio import _build_id3_header, _skip_existing_id3, ensure_wav_url, fetch_album_art, wav_to_flac
 from .const import (
     CDN_BASE_URL,
     CONF_AUDIO_QUALITY,
@@ -62,20 +48,16 @@ class SunoMediaProxyView(HomeAssistantView):
         self._clips_generation: int = -1
 
     def _find_clip(self, clip_id: str) -> SunoClip | None:
-        """Look up a clip across all active coordinators using a cached dict."""
-        # Rebuild the lookup dict when coordinator data has changed
+        """Look up a clip across all active coordinators."""
         generation = 0
         entries = self.hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
-            coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
-            if coordinator is not None:
+            if (coordinator := getattr(entry, "runtime_data", None)) is not None:
                 generation += id(coordinator.data)
-
         if generation != self._clips_generation:
             lookup: dict[str, SunoClip] = {}
             for entry in entries:
-                coordinator = getattr(entry, "runtime_data", None)
-                if coordinator is None:
+                if (coordinator := getattr(entry, "runtime_data", None)) is None:
                     continue
                 for clip in coordinator.data.clips:
                     lookup[clip.id] = clip
@@ -83,36 +65,30 @@ class SunoMediaProxyView(HomeAssistantView):
                     lookup.setdefault(clip.id, clip)
             self._clips_by_id = lookup
             self._clips_generation = generation
-
         return self._clips_by_id.get(clip_id)
 
     def _first_coordinator(self) -> SunoCoordinator | None:
         """Return the first loaded coordinator."""
         for entry in self.hass.config_entries.async_entries(DOMAIN):
-            coord = getattr(entry, "runtime_data", None)
-            if isinstance(coord, SunoCoordinator):
+            if isinstance(coord := getattr(entry, "runtime_data", None), SunoCoordinator):
                 return coord
         return None
 
     def _get_entry_options(self) -> dict[str, Any]:
-        """Return options from the first loaded config entry."""
-        coord = self._first_coordinator()
-        return dict(coord.config_entry.options) if coord else {}
+        """Return options from the first config entry."""
+        return dict(c.config_entry.options) if (c := self._first_coordinator()) else {}
 
     def _get_cache(self) -> SunoCache | None:
-        """Return the SunoCache from the first loaded coordinator."""
-        coord = self._first_coordinator()
-        return coord.cache if coord else None
+        """Return the SunoCache from the first coordinator."""
+        return c.cache if (c := self._first_coordinator()) else None
 
     def _get_sync(self) -> SunoSync | None:
-        """Return the SunoSync from the first loaded coordinator."""
-        coord = self._first_coordinator()
-        return coord.sync if coord else None
+        """Return the SunoSync from the first coordinator."""
+        return c.sync if (c := self._first_coordinator()) else None
 
     def _get_client(self) -> Any:
-        """Return the SunoClient from the first loaded coordinator."""
-        coord = self._first_coordinator()
-        return coord.client if coord else None
+        """Return the SunoClient from the first coordinator."""
+        return c.client if (c := self._first_coordinator()) else None
 
     async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
@@ -128,46 +104,22 @@ class SunoMediaProxyView(HomeAssistantView):
         is_hq = quality == QUALITY_HIGH
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
-        # For HQ: check sync directory first (FLAC files ready to serve)
-        if is_hq:
-            sync = self._get_sync()
-            if sync is not None:
-                synced_path = sync.get_synced_path(clip_id, meta_hash)
-                if synced_path is not None:
-                    try:
-                        return web.FileResponse(
-                            synced_path,
-                            headers={"Content-Type": "audio/flac"},
-                        )
-                    except FileNotFoundError, OSError:
-                        _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
+        if is_hq and (sync := self._get_sync()) is not None:
+            if (synced_path := sync.get_synced_path(clip_id, meta_hash)) is not None:
+                try:
+                    return web.FileResponse(synced_path, headers={"Content-Type": "audio/flac"})
+                except FileNotFoundError, OSError:
+                    _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
 
         cache = self._get_cache() if cache_enabled else None
-
-        # Try cache (HQ cached as FLAC, standard as MP3)
         if cache is not None:
             cache_fmt = "flac" if is_hq else "mp3"
-            cached_path = await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)
-            if cached_path is not None:
-                return web.FileResponse(
-                    cached_path,
-                    headers={"Content-Type": content_type},
-                )
+            if (cached_path := await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)) is not None:
+                return web.FileResponse(cached_path, headers={"Content-Type": content_type})
 
         if is_hq:
-            return await self._handle_hq(
-                request,
-                clip_id,
-                clip,
-                title,
-                artist,
-                genre,
-                content_type,
-                cache,
-                meta_hash,
-            )
+            return await self._handle_hq(request, clip_id, clip, title, artist, genre, content_type, cache, meta_hash)
 
-        # Standard quality: stream MP3 from CDN
         audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
         try:
@@ -178,22 +130,9 @@ class SunoMediaProxyView(HomeAssistantView):
 
         if upstream.status != 200:
             upstream.close()
-            return web.Response(
-                status=502,
-                text=f"Upstream returned {upstream.status}",
-            )
+            return web.Response(status=502, text=f"Upstream returned {upstream.status}")
 
-        return await self._handle_mp3(
-            request,
-            upstream,
-            clip_id,
-            title,
-            artist,
-            genre,
-            content_type,
-            cache,
-            meta_hash,
-        )
+        return await self._handle_mp3(request, upstream, clip_id, title, artist, genre, content_type, cache, meta_hash)
 
     async def _handle_mp3(
         self,
@@ -210,20 +149,13 @@ class SunoMediaProxyView(HomeAssistantView):
         """Stream MP3 with ID3 header injection and optional caching."""
         id3_header = _build_id3_header(title=title, artist=artist, genre=genre)
         collected: list[bytes] = [id3_header] if cache is not None else []
-
         response = web.StreamResponse(
             status=200,
-            headers={
-                "Content-Type": content_type,
-                "Accept-Ranges": "none",
-                "Cache-Control": "no-cache",
-            },
+            headers={"Content-Type": content_type, "Accept-Ranges": "none", "Cache-Control": "no-cache"},
         )
         await response.prepare(request)
-
         try:
             await response.write(id3_header)
-
             first_chunk = True
             async for chunk in upstream.content.iter_chunked(64 * 1024):
                 if first_chunk:
@@ -239,10 +171,8 @@ class SunoMediaProxyView(HomeAssistantView):
             collected.clear()
         finally:
             upstream.close()
-
         if cache is not None and collected:
             await self._save_to_cache(cache, clip_id, "mp3", b"".join(collected), meta_hash)
-
         return response
 
     async def _handle_hq(
@@ -257,32 +187,18 @@ class SunoMediaProxyView(HomeAssistantView):
         cache: SunoCache | None,
         meta_hash: str,
     ) -> web.Response:
-        """Get WAV via Suno API, transcode to FLAC with metadata and art.
-
-        Uses request coalescing: if another request for the same clip is
-        already in flight, wait for it to finish and serve from cache.
-        """
+        """Transcode WAV to FLAC with metadata, using request coalescing."""
         key = f"{clip_id}.flac"
-
-        # If another request is already processing this clip, wait for it
         if key in self._inflight:
             try:
-                result = await asyncio.wait_for(
-                    asyncio.shield(self._inflight[key]),
-                    timeout=150,
-                )
+                result = await asyncio.wait_for(asyncio.shield(self._inflight[key]), timeout=150)
             except TimeoutError, asyncio.CancelledError, Exception:
                 result = None
-
             if result is not None:
                 return web.Response(body=result, content_type=content_type)
-            # Leader failed or timed out — fall through to our own attempt
 
-        # We are the leader: run the pipeline
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[bytes | None] = loop.create_future()
+        fut: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._inflight[key] = fut
-
         try:
             flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, genre)
             fut.set_result(flac_data)
@@ -294,48 +210,31 @@ class SunoMediaProxyView(HomeAssistantView):
             return web.Response(status=502, text="HQ pipeline failed")
         finally:
             self._inflight.pop(key, None)
-
         if flac_data is None:
             return web.Response(status=502, text="FLAC transcode failed")
-
         if cache is not None:
             await self._save_to_cache(cache, clip_id, "flac", flac_data, meta_hash)
-
-        return web.Response(
-            body=flac_data,
-            content_type=content_type,
-        )
+        return web.Response(body=flac_data, content_type=content_type)
 
     async def _run_hq_pipeline(
-        self,
-        clip_id: str,
-        clip: SunoClip | None,
-        title: str,
-        artist: str,
-        genre: str,
+        self, clip_id: str, clip: SunoClip | None, title: str, artist: str, genre: str
     ) -> bytes | None:
-        """Execute the full WAV→FLAC pipeline. Returns FLAC bytes or None."""
-        client = self._get_client()
-        if client is None:
+        """Execute the full WAV-to-FLAC pipeline."""
+        if (client := self._get_client()) is None:
             return None
-
-        wav_url = await ensure_wav_url(client, clip_id)
-        if not wav_url:
+        if not (wav_url := await ensure_wav_url(client, clip_id)):
             _LOGGER.warning("WAV generation timed out for %s", clip_id)
             return None
-
         session = async_get_clientsession(self.hass)
         try:
             upstream = await session.get(wav_url)
         except Exception:
             _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
             return None
-
         if upstream.status != 200:
             upstream.close()
             _LOGGER.warning("WAV upstream returned %d for %s", upstream.status, clip_id)
             return None
-
         try:
             wav_data = await upstream.read()
         except Exception:
@@ -343,17 +242,10 @@ class SunoMediaProxyView(HomeAssistantView):
             return None
         finally:
             upstream.close()
-
         image_url = clip.image_large_url or clip.image_url if clip else None
         image_data = await fetch_album_art(session, image_url) if image_url else None
-
         return await wav_to_flac(
-            get_ffmpeg_manager(self.hass).binary,
-            wav_data,
-            title,
-            artist,
-            genre=genre,
-            image_data=image_data,
+            get_ffmpeg_manager(self.hass).binary, wav_data, title, artist, genre=genre, image_data=image_data
         )
 
     @staticmethod
