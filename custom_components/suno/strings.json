@@ -63,7 +63,8 @@
           "sync_all_playlists": "Sync all playlists",
           "sync_recent_count": "Keep most recent songs",
           "sync_recent_days": "Keep songs from last N days",
-          "sync_trash_days": "Days to keep removed files"
+          "sync_trash_days": "Days to keep removed files",
+          "sync_playlists_m3u": "Create playlist files (M3U8)"
         }
       },
       "sync_playlists": {

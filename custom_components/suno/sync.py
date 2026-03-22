@@ -24,6 +24,7 @@ from .const import (
     CONF_SYNC_LIKED,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
+    CONF_SYNC_PLAYLISTS_M3U,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
     CONF_SYNC_TRASH_DAYS,
@@ -56,6 +57,43 @@ _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 def _sanitise_filename(name: str, max_len: int = 200) -> str:
     safe = _UNSAFE_CHARS.sub("_", name).strip(". ")
     return safe[:max_len] if safe else "untitled"
+
+
+def _write_m3u8_playlists(
+    base: Path, clips_state: dict[str, Any], desired: list[tuple[Any, int, str, list[str]]]
+) -> None:
+    """Write M3U8 playlist files for Jellyfin/media player compatibility."""
+    # Build playlist_name → [(rel_path, title)] from sources
+    playlists: dict[str, list[tuple[str, str]]] = {}
+    for clip, _idx, collection, sources in desired:
+        entry = clips_state.get(clip.id)
+        if not entry or not entry.get("path"):
+            continue
+        rel_path = entry["path"]
+        title = entry.get("title") or clip.title or "Untitled"
+        for source in sources:
+            if source == "liked":
+                playlists.setdefault("Liked Songs", []).append((rel_path, title))
+            elif source.startswith("playlist:"):
+                playlists.setdefault(collection, []).append((rel_path, title))
+
+    # Write M3U8 files
+    written: set[str] = set()
+    for name, tracks in playlists.items():
+        filename = f"{_sanitise_filename(name)}.m3u8"
+        written.add(filename)
+        lines = [f"#EXTM3U\n#PLAYLIST:{name}"]
+        for rel_path, title in tracks:
+            lines.append(f"#EXTINF:-1,{title}\n./{rel_path}")
+        try:
+            (base / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    # Clean up stale M3U8 files
+    for existing in base.glob("*.m3u8"):
+        if existing.name not in written:
+            existing.unlink(missing_ok=True)
 
 
 def _clip_path(clip: SunoClip, index: int) -> str:
@@ -367,6 +405,8 @@ class SunoSync:
         self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
         await self._save_state(base)
+        if options.get(CONF_SYNC_PLAYLISTS_M3U):
+            await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)
 
     async def _build_desired(
         self,

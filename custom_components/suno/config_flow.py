@@ -45,6 +45,7 @@ from .const import (
     CONF_SYNC_LIKED,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
+    CONF_SYNC_PLAYLISTS_M3U,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
     CONF_SYNC_TRASH_DAYS,
@@ -59,6 +60,7 @@ from .const import (
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
+    DEFAULT_SYNC_PLAYLISTS_M3U,
     DEFAULT_SYNC_TRASH_DAYS,
     DOMAIN,
 )
@@ -285,6 +287,10 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                 CONF_SYNC_TRASH_DAYS,
                 description={"suggested_value": opts.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)},
             ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
+            vol.Required(
+                CONF_SYNC_PLAYLISTS_M3U,
+                default=opts.get(CONF_SYNC_PLAYLISTS_M3U, DEFAULT_SYNC_PLAYLISTS_M3U),
+            ): BooleanSelector(),
         }
         return self.async_show_form(step_id="sync", data_schema=vol.Schema(schema), errors=errors)
 
