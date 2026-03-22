@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v1.12.0 (2026-03-22)
+
+### Features
+
+- Generate M3U8 playlist files for Jellyfin compatibility
+  ([`7fb9d82`](https://github.com/teh-hippo/ha-suno/commit/7fb9d82911e6515c98c3052cbceef18597dd1235))
+
+### Refactoring
+
+- Aggressive code reduction across 7 files
+  ([`7309c69`](https://github.com/teh-hippo/ha-suno/commit/7309c69b965f7b762a2db463620ed0fdea9540d6))
+
+- Aggressive reduction — sync, proxy, cache, media, audio
+  ([`be641c3`](https://github.com/teh-hippo/ha-suno/commit/be641c35874a0fb1bb30ab270b59cf26b31fed2e))
+
+- Consolidate sensors, proxy helpers, auth HTTP wrapper
+  ([`3d044ad`](https://github.com/teh-hippo/ha-suno/commit/3d044ad6c5c2faec8dd3656995f4fc6fa472f448))
+
+
 ## v1.11.0 (2026-03-22)
 
 ### Chores
