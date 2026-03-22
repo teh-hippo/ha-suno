@@ -12,7 +12,9 @@ from custom_components.suno.sensor import (
     _CACHE_SENSORS,
     _SYNC_SENSORS,
     SunoSyncStatusSensor,
+    _parse_last_sync,
     _SimpleSensor,
+    _sync_files_breakdown,
 )
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
@@ -177,14 +179,14 @@ def test_sync_files_returns_total() -> None:
     """Returns total_files count from sync."""
     sync = MagicMock()
     sync.total_files = 42
-    _, _, value_fn, _ = _SYNC_SENSORS[0]  # sync_files
+    value_fn = _SYNC_SENSORS[0][2]  # sync_files
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 42
 
 
 def test_sync_files_zero_when_no_sync() -> None:
     """Returns 0 when sync is None."""
-    _, _, value_fn, _ = _SYNC_SENSORS[0]
+    value_fn = _SYNC_SENSORS[0][2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
@@ -193,14 +195,14 @@ def test_sync_remaining_returns_count() -> None:
     """Returns pending count from sync."""
     sync = MagicMock()
     sync.pending = 5
-    _, _, value_fn, _ = _SYNC_SENSORS[1]  # sync_remaining
+    value_fn = _SYNC_SENSORS[1][2]  # sync_remaining
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 5
 
 
 def test_sync_remaining_zero_when_no_sync() -> None:
     """Returns 0 when sync is None."""
-    _, _, value_fn, _ = _SYNC_SENSORS[1]
+    value_fn = _SYNC_SENSORS[1][2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
@@ -209,14 +211,14 @@ def test_sync_size_returns_mb() -> None:
     """Returns library_size_mb from sync."""
     sync = MagicMock()
     sync.library_size_mb = 123.4
-    _, _, value_fn, _ = _SYNC_SENSORS[2]  # sync_size
+    value_fn = _SYNC_SENSORS[2][2]  # sync_size
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 123.4
 
 
 def test_sync_size_zero_when_no_sync() -> None:
     """Returns 0.0 when sync is None."""
-    _, _, value_fn, _ = _SYNC_SENSORS[2]
+    value_fn = _SYNC_SENSORS[2][2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0.0
 
@@ -241,14 +243,14 @@ def test_cached_files_returns_count() -> None:
     """Returns file_count from cache."""
     cache = MagicMock()
     cache.file_count = 15
-    _, _, value_fn, _ = _CACHE_SENSORS[0]  # cached_files
+    value_fn = _CACHE_SENSORS[0][2]  # cached_files
     sensor = _make_cache_sensor(cache_mock=cache, value_fn=value_fn)
     assert sensor.native_value == 15
 
 
 def test_cached_files_zero_when_no_cache() -> None:
     """Returns 0 when cache is None."""
-    _, _, value_fn, _ = _CACHE_SENSORS[0]
+    value_fn = _CACHE_SENSORS[0][2]
     sensor = _make_cache_sensor(cache_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
@@ -256,18 +258,23 @@ def test_cached_files_zero_when_no_cache() -> None:
 # ── Sync last_run and result sensors ───────────────────────────────
 
 
-def test_sync_last_run_returns_timestamp() -> None:
-    """Returns last_sync timestamp from sync."""
+def test_sync_last_run_returns_datetime() -> None:
+    """Returns parsed datetime from sync.last_sync."""
+    from datetime import datetime
+
     sync = MagicMock()
     sync.last_sync = "2026-03-22T08:00:00+00:00"
-    _, _, value_fn, _ = _SYNC_SENSORS[3]  # sync_last_run
+    value_fn = _SYNC_SENSORS[3][2]  # sync_last_run
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
-    assert sensor.native_value == "2026-03-22T08:00:00+00:00"
+    result = sensor.native_value
+    assert isinstance(result, datetime)
+    assert result.year == 2026
+    assert result.tzinfo is not None
 
 
 def test_sync_last_run_none_when_no_sync() -> None:
     """Returns None when sync is None."""
-    _, _, value_fn, _ = _SYNC_SENSORS[3]
+    value_fn = _SYNC_SENSORS[3][2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value is None
 
@@ -276,13 +283,68 @@ def test_sync_result_returns_summary() -> None:
     """Returns last_result string from sync."""
     sync = MagicMock()
     sync.last_result = "3 new songs, 1 removal"
-    _, _, value_fn, _ = _SYNC_SENSORS[4]  # sync_result
+    value_fn = _SYNC_SENSORS[4][2]  # sync_result
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == "3 new songs, 1 removal"
 
 
 def test_sync_result_empty_when_no_sync() -> None:
     """Returns empty string when sync is None."""
-    _, _, value_fn, _ = _SYNC_SENSORS[4]
+    value_fn = _SYNC_SENSORS[4][2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == ""
+
+
+# ── Source breakdown + sensor device/state class ───────────────────
+
+
+def test_sync_files_breakdown_returns_source_counts() -> None:
+    """sync_files attr_fn returns source counts from sync."""
+    sync = MagicMock()
+    sync.source_breakdown = {"liked": 10, "recent": 50, "playlist:abc": 5}
+    coordinator = MagicMock(spec=SunoCoordinator)
+    coordinator.sync = sync
+    assert _sync_files_breakdown(coordinator) == {"liked": 10, "recent": 50, "playlist:abc": 5}
+
+
+def test_sync_files_breakdown_empty_when_no_sync() -> None:
+    """Returns empty dict when sync is None."""
+    coordinator = MagicMock(spec=SunoCoordinator)
+    coordinator.sync = None
+    assert _sync_files_breakdown(coordinator) == {}
+
+
+def test_parse_last_sync_returns_datetime() -> None:
+    """Parses ISO string to datetime."""
+    from datetime import datetime
+
+    coordinator = MagicMock(spec=SunoCoordinator)
+    sync = MagicMock()
+    sync.last_sync = "2026-03-22T10:00:00+00:00"
+    coordinator.sync = sync
+    result = _parse_last_sync(coordinator)
+    assert isinstance(result, datetime)
+
+
+def test_parse_last_sync_none_when_no_sync() -> None:
+    """Returns None when sync is None."""
+    coordinator = MagicMock(spec=SunoCoordinator)
+    coordinator.sync = None
+    assert _parse_last_sync(coordinator) is None
+
+
+def test_sync_last_run_has_no_state_class() -> None:
+    """sync_last_run should NOT have state_class=MEASUREMENT."""
+    from homeassistant.components.sensor import SensorDeviceClass
+
+    cfg = _SYNC_SENSORS[3]  # sync_last_run
+    # Tuple: (key, icon, value_fn, unit, state_class, device_class)
+    assert cfg[4] is None  # state_class
+    assert cfg[5] is SensorDeviceClass.TIMESTAMP  # device_class
+
+
+def test_sync_result_has_no_state_class() -> None:
+    """sync_result should NOT have state_class=MEASUREMENT."""
+    cfg = _SYNC_SENSORS[4]  # sync_result
+    # Tuple: (key, icon, value_fn, unit, state_class)
+    assert cfg[4] is None  # state_class

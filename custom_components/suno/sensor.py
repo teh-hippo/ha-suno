@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -49,18 +50,31 @@ class _SimpleSensor(_SunoSensor):
         icon: str,
         value_fn: Callable[[SunoCoordinator], Any],
         unit: str | None = None,
+        state_class: SensorStateClass | None = SensorStateClass.MEASUREMENT,
+        device_class: SensorDeviceClass | None = None,
+        attr_fn: Callable[[SunoCoordinator], dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(coordinator, entry, key)
         self._attr_translation_key = key
         self._attr_icon = icon
-        self._attr_state_class = SensorStateClass.MEASUREMENT
+        if state_class is not None:
+            self._attr_state_class = state_class
+        if device_class is not None:
+            self._attr_device_class = device_class
         if unit:
             self._attr_native_unit_of_measurement = unit
         self._value_fn = value_fn
+        self._attr_fn = attr_fn
 
     @property
     def native_value(self) -> Any:
         return self._value_fn(self.coordinator)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self._attr_fn:
+            return self._attr_fn(self.coordinator)
+        return None
 
 
 # ── Sensor definitions ──────────────────────────────────────────────
@@ -70,12 +84,36 @@ _LIBRARY_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | N
     ("liked_songs", "mdi:heart-outline", lambda c: len(c.data.liked_clips), None),
 ]
 
-_SYNC_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | None]] = [
-    ("sync_files", "mdi:file-music", lambda c: c.sync.total_files if c.sync else 0, None),
+
+def _sync_files_breakdown(c: SunoCoordinator) -> dict[str, int]:
+    """Source breakdown for sync_files attributes."""
+    return c.sync.source_breakdown if c.sync else {}
+
+
+def _parse_last_sync(c: SunoCoordinator) -> datetime | None:
+    """Parse last_sync ISO string to datetime for TIMESTAMP sensor."""
+    if c.sync and c.sync.last_sync:
+        try:
+            return datetime.fromisoformat(c.sync.last_sync)
+        except ValueError:
+            return None
+    return None
+
+
+_SYNC_SENSORS: list[tuple[Any, ...]] = [
+    (
+        "sync_files",
+        "mdi:file-music",
+        lambda c: c.sync.total_files if c.sync else 0,
+        None,
+        SensorStateClass.MEASUREMENT,
+        None,
+        _sync_files_breakdown,
+    ),
     ("sync_remaining", "mdi:download", lambda c: c.sync.pending if c.sync else 0, None),
     ("sync_size", "mdi:harddisk", lambda c: c.sync.library_size_mb if c.sync else 0.0, "MB"),
-    ("sync_last_run", "mdi:clock-check-outline", lambda c: c.sync.last_sync if c.sync else None, None),
-    ("sync_result", "mdi:text-box-check-outline", lambda c: c.sync.last_result if c.sync else "", None),
+    ("sync_last_run", "mdi:clock-check-outline", _parse_last_sync, None, None, SensorDeviceClass.TIMESTAMP),
+    ("sync_result", "mdi:text-box-check-outline", lambda c: c.sync.last_result if c.sync else "", None, None),
 ]
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,10 +19,7 @@ from custom_components.suno.sync import (
     SunoSync,
     _build_sync_summary,
     _clip_path,
-    _purge_trash,
-    _restore_from_trash,
     _sanitise_filename,
-    _trash_file,
     _write_file,
     _write_m3u8_playlists,
 )
@@ -317,112 +313,31 @@ async def test_write_file_failure_cleans_tmp(hass: HomeAssistant, tmp_path: Path
     assert not target.exists()
 
 
-# ── _trash_file ────────────────────────────────────────────────────
+# ── source_breakdown ──────────────────────────────────────────────
 
 
-async def test_trash_file_moves_to_trash(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Trashing moves the file to .trash/ and updates state."""
-    (tmp_path / "2026-03-15").mkdir()
-    source = tmp_path / "2026-03-15" / "song.flac"
-    source.write_bytes(b"fLaC" + b"\x00" * 20)
-
-    entry = {"path": "2026-03-15/song.flac", "title": "Song"}
-    trash_state: dict = {}
-
-    await _trash_file(hass, tmp_path, "clip-1", entry, trash_state)
-
-    assert not source.exists()
-    assert (tmp_path / ".trash" / "song.flac").exists()
-    assert "clip-1" in trash_state
-    assert trash_state["clip-1"]["original_path"] == "2026-03-15/song.flac"
+async def test_source_breakdown_empty(hass: HomeAssistant) -> None:
+    """Empty state returns empty breakdown."""
+    sync = SunoSync(hass, "test_sync")
+    assert sync.source_breakdown == {}
 
 
-# ── _restore_from_trash ───────────────────────────────────────────
-
-
-async def test_restore_from_trash(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Restoring moves file from .trash/ back to original path."""
-    trash_dir = tmp_path / ".trash"
-    trash_dir.mkdir()
-    (trash_dir / "song.flac").write_bytes(b"fLaC" + b"\x00" * 20)
-
-    trash_state = {
-        "clip-1": {
-            "path": ".trash/song.flac",
-            "original_path": "2026-03-15/song.flac",
-            "trashed_at": datetime.now(tz=UTC).isoformat(),
-            "title": "Song",
-        }
+async def test_source_breakdown_counts_sources(hass: HomeAssistant) -> None:
+    """Counts clips per source tag."""
+    sync = SunoSync(hass, "test_sync")
+    sync._state = {
+        "clips": {
+            "c1": {"sources": ["liked"]},
+            "c2": {"sources": ["liked", "playlist:abc"]},
+            "c3": {"sources": ["recent"]},
+            "c4": {"sources": ["playlist:abc"]},
+        },
+        "last_sync": None,
     }
-
-    result = await _restore_from_trash(hass, tmp_path, "clip-1", trash_state)
-
-    assert result is not None
-    assert result["path"] == "2026-03-15/song.flac"
-    assert (tmp_path / "2026-03-15" / "song.flac").exists()
-    assert "clip-1" not in trash_state
-
-
-async def test_restore_from_trash_not_in_trash(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Returns None when clip is not in trash state."""
-    trash_state: dict = {}
-    result = await _restore_from_trash(hass, tmp_path, "clip-1", trash_state)
-    assert result is None
-
-
-# ── _purge_trash ───────────────────────────────────────────────────
-
-
-async def test_purge_trash_removes_old_entries(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Purges trash entries older than max_days."""
-    trash_dir = tmp_path / ".trash"
-    trash_dir.mkdir()
-    (trash_dir / "old.flac").write_bytes(b"fLaC")
-
-    old_time = (datetime.now(tz=UTC) - timedelta(days=10)).isoformat()
-    trash_state = {
-        "old-clip": {
-            "path": ".trash/old.flac",
-            "original_path": "old.flac",
-            "trashed_at": old_time,
-        }
-    }
-
-    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
-
-    assert "old-clip" not in trash_state
-    assert not (trash_dir / "old.flac").exists()
-
-
-async def test_purge_trash_keeps_recent(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Keeps trash entries newer than max_days."""
-    recent_time = (datetime.now(tz=UTC) - timedelta(days=1)).isoformat()
-    trash_state = {
-        "new-clip": {
-            "path": ".trash/new.flac",
-            "original_path": "new.flac",
-            "trashed_at": recent_time,
-        }
-    }
-
-    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
-
-    assert "new-clip" in trash_state
-
-
-async def test_purge_trash_invalid_date(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Entries with invalid dates are purged."""
-    trash_state = {
-        "bad-clip": {
-            "path": ".trash/bad.flac",
-            "original_path": "bad.flac",
-            "trashed_at": "not-a-date",
-        }
-    }
-
-    await _purge_trash(hass, tmp_path, trash_state, max_days=7)
-
-    assert "bad-clip" not in trash_state
+    breakdown = sync.source_breakdown
+    assert breakdown["liked"] == 2
+    assert breakdown["playlist:abc"] == 2
+    assert breakdown["recent"] == 1
 
 
 # ── _build_desired with API failure ────────────────────────────────

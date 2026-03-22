@@ -48,7 +48,6 @@ from .const import (
     CONF_SYNC_PLAYLISTS_M3U,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
-    CONF_SYNC_TRASH_DAYS,
     DEFAULT_AUDIO_QUALITY,
     DEFAULT_CACHE_ENABLED,
     DEFAULT_CACHE_MAX_SIZE,
@@ -61,7 +60,6 @@ from .const import (
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
     DEFAULT_SYNC_PLAYLISTS_M3U,
-    DEFAULT_SYNC_TRASH_DAYS,
     DOMAIN,
 )
 from .exceptions import SunoAuthError
@@ -282,10 +280,6 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             ): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode=NumberSelectorMode.BOX)),
             vol.Optional(
                 CONF_SYNC_RECENT_DAYS, description={"suggested_value": opts.get(CONF_SYNC_RECENT_DAYS)}
-            ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
-            vol.Optional(
-                CONF_SYNC_TRASH_DAYS,
-                description={"suggested_value": opts.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)},
             ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
             vol.Required(
                 CONF_SYNC_PLAYLISTS_M3U,

@@ -27,13 +27,11 @@ from .const import (
     CONF_SYNC_PLAYLISTS_M3U,
     CONF_SYNC_RECENT_COUNT,
     CONF_SYNC_RECENT_DAYS,
-    CONF_SYNC_TRASH_DAYS,
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
     DEFAULT_SYNC_RECENT_COUNT,
     DEFAULT_SYNC_RECENT_DAYS,
-    DEFAULT_SYNC_TRASH_DAYS,
     DOMAIN,
     SYNC_DOWNLOAD_DELAY,
     SYNC_MAX_DOWNLOADS_BOOTSTRAP,
@@ -166,75 +164,6 @@ async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
     await hass.async_add_executor_job(_delete, base, rel_path)
 
 
-async def _trash_file(
-    hass: HomeAssistant, base: Path, clip_id: str, entry: dict[str, Any], trash_state: dict[str, Any],
-) -> None:
-    rel_path = entry.get("path", "")
-    def _move_to_trash(b: Path, r: str) -> str | None:
-        source = b / r
-        if not source.exists():
-            return None
-        trash_dir = b / ".trash"
-        trash_dir.mkdir(parents=True, exist_ok=True)
-        dest = trash_dir / source.name
-        try:
-            os.replace(str(source), str(dest))
-            _LOGGER.info("Trashed: %s", r)
-            _cleanup_empty_dirs(b, source)
-            return f".trash/{source.name}"
-        except OSError:
-            _LOGGER.warning("Failed to trash: %s", r)
-            return None
-    if trash_path := await hass.async_add_executor_job(_move_to_trash, base, rel_path):
-        trash_state[clip_id] = {
-            "path": trash_path, "original_path": rel_path, "trashed_at": datetime.now(tz=UTC).isoformat(),
-        }
-
-
-async def _restore_from_trash(
-    hass: HomeAssistant, base: Path, clip_id: str, trash_state: dict[str, Any],
-) -> dict[str, Any] | None:
-    if not (trash_entry := trash_state.get(clip_id)):
-        return None
-    trash_path, original_path = trash_entry.get("path", ""), trash_entry.get("original_path", "")
-    def _restore(b: Path, tp: str, op: str) -> bool | None:
-        source = b / tp
-        if not source.exists():
-            return None
-        dest = b / op
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(str(source), str(dest))
-            _LOGGER.info("Restored from trash: %s", op)
-            return True
-        except OSError:
-            _LOGGER.warning("Failed to restore: %s", tp)
-            return None
-    if await hass.async_add_executor_job(_restore, base, trash_path, original_path):
-        trash_state.pop(clip_id, None)
-        return {
-            "path": original_path, "title": trash_entry.get("title", ""),
-            "created": trash_entry.get("created"), "sources": [],
-        }
-    return None
-# fmt: on
-
-
-async def _purge_trash(hass: HomeAssistant, base: Path, trash_state: dict[str, Any], max_days: int) -> None:
-    now = datetime.now(tz=UTC)
-    to_purge: list[str] = []
-    for clip_id, entry in trash_state.items():
-        try:
-            if (now - datetime.fromisoformat(entry.get("trashed_at", ""))).total_seconds() / 86400 >= max_days:
-                to_purge.append(clip_id)
-        except ValueError, TypeError:
-            to_purge.append(clip_id)
-    for clip_id in to_purge:
-        entry = trash_state.pop(clip_id)
-        if path := entry.get("path", ""):
-            await _delete_file(hass, base, path)
-        _LOGGER.debug("Purged from trash: %s", clip_id)
-
 
 class SunoSync:
     """Manages background FLAC sync to a local directory."""
@@ -249,6 +178,7 @@ class SunoSync:
         self._running = False
         self._errors = self._pending = 0
         self._last_result = ""
+        self._updating_sensors = False
 
     async def async_init(self) -> None:
         """Load persisted sync state."""
@@ -269,7 +199,7 @@ class SunoSync:
             await sync.cleanup_tmp_files(sync_path)
 
         def _on_coordinator_update() -> None:
-            if not sync.is_running:
+            if not sync.is_running and not sync._updating_sensors:
                 hass.async_create_task(
                     sync.async_sync(dict(entry.options), client, coordinator_data=coordinator.data),
                     f"suno_sync_refresh_{entry.entry_id}",
@@ -310,6 +240,17 @@ class SunoSync:
     def library_size_mb(self) -> float:
         """Total size of synced files in MB."""
         return round(sum(int(e.get("size", 0)) for e in self._state.get("clips", {}).values()) / 1048576, 1)
+
+    @property
+    def source_breakdown(self) -> dict[str, int]:
+        """Count synced clips per source tag."""
+        from collections import Counter  # noqa: PLC0415
+
+        counts: Counter[str] = Counter()
+        for entry in self._state.get("clips", {}).values():
+            for src in entry.get("sources", []):
+                counts[src] += 1
+        return dict(counts)
 
     def get_synced_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return absolute path to a synced FLAC if it exists and is fresh."""
@@ -354,9 +295,11 @@ class SunoSync:
             self._notify_coordinator()
 
     def _notify_coordinator(self) -> None:
-        """Push sensor updates via the coordinator."""
+        """Push sensor updates via the coordinator without re-triggering sync."""
         if self._coordinator and self._coordinator.data:
+            self._updating_sensors = True
             self._coordinator.async_set_updated_data(self._coordinator.data)
+            self._updating_sensors = False
 
     async def _run_sync(
         self,
@@ -366,11 +309,15 @@ class SunoSync:
         force: bool,
         coordinator_data: SunoData | None = None,
     ) -> None:
-        trash_days = options.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)
         base = Path(sync_path)
-        trash_state = dict(self._state.get("trash", {}))
-        if trash_days:
-            await _purge_trash(self.hass, base, trash_state, int(trash_days))
+        # Clean up legacy .trash directory if it exists
+        trash_dir = base / ".trash"
+        if await self.hass.async_add_executor_job(trash_dir.is_dir):
+            import shutil  # noqa: PLC0415
+
+            await self.hass.async_add_executor_job(shutil.rmtree, str(trash_dir), True)
+            _LOGGER.info("Removed legacy .trash directory")
+        self._state.pop("trash", None)
         desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[tuple[SunoClip, int]] = []
@@ -379,11 +326,6 @@ class SunoSync:
         for clip, index, _collection, sources in desired:
             seen_ids.add(clip.id)
             if clip.id not in clips_state or force:
-                if clip.id in trash_state:
-                    if restored := await _restore_from_trash(self.hass, base, clip.id, trash_state):
-                        clips_state[clip.id] = restored
-                        clips_state[clip.id]["sources"] = sources
-                        continue
                 to_download.append((clip, index))
             elif clip.id in clips_state:
                 existing = clips_state[clip.id]
@@ -394,10 +336,9 @@ class SunoSync:
                     existing["meta_hash"] = new_hash
                     existing["title"] = clip.title
                     meta_updates += 1
-            if clip.id in clips_state and clip.id not in seen_ids:
-                clips_state[clip.id]["sources"] = sources
         to_delete = [cid for cid in clips_state if cid not in seen_ids and cid not in preserved_ids]
         self._pending = len(to_download)
+        self._notify_coordinator()
         _LOGGER.info("Sync: %d to download, %d to remove, %d current", len(to_download), len(to_delete), len(seen_ids))
         try:
             await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
@@ -425,18 +366,16 @@ class SunoSync:
                     "meta_hash": clip_meta_hash(clip),
                 }
                 downloaded += 1
+                self._pending = max(0, len(to_download) - downloaded)
             else:
                 self._errors += 1
             if downloaded < len(to_download):
+                self._notify_coordinator()
                 await asyncio.sleep(SYNC_DOWNLOAD_DELAY)
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
-                if trash_days:
-                    await _trash_file(self.hass, base, clip_id, entry, trash_state)
-                else:
-                    await _delete_file(self.hass, base, entry["path"])
+                await _delete_file(self.hass, base, entry["path"])
         self._state["clips"] = clips_state
-        self._state["trash"] = trash_state
         self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
         self._last_result = _build_sync_summary(downloaded, len(to_delete), meta_updates)
