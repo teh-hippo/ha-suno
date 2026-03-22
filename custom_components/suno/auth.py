@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import time
+from typing import Any
 
 from aiohttp import ClientSession
 
@@ -119,23 +120,26 @@ class ClerkAuth:
                 raise SunoAuthError(msg)
             return self._jwt
 
-    async def _get_session_id(self) -> None:
-        """Get a Clerk session ID using the browser cookie."""
-        url = f"{CLERK_BASE_URL}/v1/client?_clerk_js_version={CLERK_JS_VERSION}"
-        headers = {"Cookie": self._cookie}
-        _LOGGER.debug("Fetching Clerk session ID")
-
+    async def _clerk_request(self, method: str, url: str) -> dict[str, Any]:
+        """Make a Clerk API request with standard error handling."""
         try:
-            async with self._session.get(url, headers=headers) as resp:
+            req = self._session.get if method == "GET" else self._session.post
+            async with req(url, headers={"Cookie": self._cookie}) as resp:
                 if resp.status != 200:
-                    msg = f"Clerk session request failed with status {resp.status}"
+                    msg = f"Clerk request failed with status {resp.status}"
                     raise SunoAuthError(msg)
-                data = await resp.json()
+                result: dict[str, Any] = await resp.json()
+                return result
         except SunoAuthError:
             raise
         except Exception as err:
-            msg = "Could not connect to Clerk"
-            raise SunoConnectionError(msg) from err
+            raise SunoConnectionError(f"Could not connect to Clerk: {err}") from err
+
+    async def _get_session_id(self) -> None:
+        """Get a Clerk session ID using the browser cookie."""
+        url = f"{CLERK_BASE_URL}/v1/client?_clerk_js_version={CLERK_JS_VERSION}"
+        _LOGGER.debug("Fetching Clerk session ID")
+        data = await self._clerk_request("GET", url)
 
         response = data.get("response")
         if not response:
@@ -147,9 +151,7 @@ class ClerkAuth:
             msg = "No active session found.  Cookie may be expired."
             raise SunoAuthError(msg)
 
-        # Extract user ID from session data
-        sessions = response.get("sessions", [])
-        for session in sessions:
+        for session in response.get("sessions", []):
             if session.get("id") == self._session_id:
                 user = session.get("user", {})
                 self._user_id = user.get("id")
@@ -173,19 +175,7 @@ class ClerkAuth:
         url = (
             f"{CLERK_BASE_URL}/v1/client/sessions/{self._session_id}/tokens?_clerk_js_version={CLERK_TOKEN_JS_VERSION}"
         )
-        headers = {"Cookie": self._cookie}
-
-        try:
-            async with self._session.post(url, headers=headers) as resp:
-                if resp.status != 200:
-                    msg = f"JWT refresh failed with status {resp.status}"
-                    raise SunoAuthError(msg)
-                data = await resp.json()
-        except SunoAuthError:
-            raise
-        except Exception as err:
-            msg = "Could not refresh JWT"
-            raise SunoConnectionError(msg) from err
+        data = await self._clerk_request("POST", url)
 
         jwt = data.get("jwt")
         if not jwt:

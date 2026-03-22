@@ -9,10 +9,9 @@ from homeassistant.core import HomeAssistant
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.models import SunoCredits
 from custom_components.suno.sensor import (
-    SunoSyncFilesSensor,
-    SunoSyncPendingSensor,
-    SunoSyncSizeSensor,
+    _SYNC_SENSORS,
     SunoSyncStatusSensor,
+    _SimpleSensor,
 )
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
@@ -122,15 +121,21 @@ async def test_sensor_unique_ids(hass: HomeAssistant, mock_suno_client: AsyncMoc
 # ── Sync sensor unit tests ─────────────────────────────────────────
 
 
-def _make_sync_sensor(sensor_cls, sync_mock=None):
+def _make_sync_sensor(sensor_cls, sync_mock=None, **kwargs):
     """Create a sync sensor with a mocked coordinator."""
     coordinator = MagicMock(spec=SunoCoordinator)
     coordinator.sync = sync_mock
     coordinator.data = SunoData()
     entry = make_entry()
-    sensor = sensor_cls.__new__(sensor_cls)
-    sensor.coordinator = coordinator
-    sensor._entry = entry
+    if sensor_cls is _SimpleSensor:
+        sensor = _SimpleSensor.__new__(_SimpleSensor)
+        sensor.coordinator = coordinator
+        sensor._entry = entry
+        sensor._value_fn = kwargs["value_fn"]
+    else:
+        sensor = sensor_cls.__new__(sensor_cls)
+        sensor.coordinator = coordinator
+        sensor._entry = entry
     return sensor
 
 
@@ -171,13 +176,15 @@ def test_sync_files_returns_total() -> None:
     """Returns total_files count from sync."""
     sync = MagicMock()
     sync.total_files = 42
-    sensor = _make_sync_sensor(SunoSyncFilesSensor, sync_mock=sync)
+    _, _, value_fn, _ = _SYNC_SENSORS[0]  # sync_files
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 42
 
 
 def test_sync_files_zero_when_no_sync() -> None:
     """Returns 0 when sync is None."""
-    sensor = _make_sync_sensor(SunoSyncFilesSensor, sync_mock=None)
+    _, _, value_fn, _ = _SYNC_SENSORS[0]
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
 
@@ -185,13 +192,15 @@ def test_sync_pending_returns_count() -> None:
     """Returns pending count from sync."""
     sync = MagicMock()
     sync.pending = 5
-    sensor = _make_sync_sensor(SunoSyncPendingSensor, sync_mock=sync)
+    _, _, value_fn, _ = _SYNC_SENSORS[1]  # sync_pending
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 5
 
 
 def test_sync_pending_zero_when_no_sync() -> None:
     """Returns 0 when sync is None."""
-    sensor = _make_sync_sensor(SunoSyncPendingSensor, sync_mock=None)
+    _, _, value_fn, _ = _SYNC_SENSORS[1]
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
 
@@ -199,11 +208,13 @@ def test_sync_size_returns_mb() -> None:
     """Returns library_size_mb from sync."""
     sync = MagicMock()
     sync.library_size_mb = 123.4
-    sensor = _make_sync_sensor(SunoSyncSizeSensor, sync_mock=sync)
+    _, _, value_fn, _ = _SYNC_SENSORS[2]  # sync_size
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 123.4
 
 
 def test_sync_size_zero_when_no_sync() -> None:
     """Returns 0.0 when sync is None."""
-    sensor = _make_sync_sensor(SunoSyncSizeSensor, sync_mock=None)
+    _, _, value_fn, _ = _SYNC_SENSORS[2]
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0.0

@@ -17,7 +17,7 @@ from custom_components.suno.auth import (
     _decode_jwt_exp,
     _normalise_token,
 )
-from custom_components.suno.exceptions import SunoApiError, SunoAuthError
+from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
 from custom_components.suno.models import (
     SunoClip,
     _fix_cdn_url,
@@ -341,7 +341,7 @@ async def test_refresh_jwt_http_error() -> None:
     auth = ClerkAuth(session, "cookie")
     auth._session_id = "sess-123"
 
-    with pytest.raises(SunoAuthError, match="JWT refresh failed"):
+    with pytest.raises(SunoAuthError, match="Clerk request failed"):
         await auth._refresh_jwt()
 
 
@@ -369,7 +369,7 @@ async def test_refresh_jwt_connection_error() -> None:
     auth = ClerkAuth(session, "cookie")
     auth._session_id = "sess-123"
 
-    with pytest.raises(SunoAuthError, match="Could not refresh JWT"):
+    with pytest.raises(SunoConnectionError, match="Could not connect to Clerk"):
         await auth._refresh_jwt()
 
 

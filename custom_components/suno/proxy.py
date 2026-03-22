@@ -86,44 +86,33 @@ class SunoMediaProxyView(HomeAssistantView):
 
         return self._clips_by_id.get(clip_id)
 
+    def _first_coordinator(self) -> SunoCoordinator | None:
+        """Return the first loaded coordinator."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            coord = getattr(entry, "runtime_data", None)
+            if isinstance(coord, SunoCoordinator):
+                return coord
+        return None
+
     def _get_entry_options(self) -> dict[str, Any]:
         """Return options from the first loaded config entry."""
-        entries = self.hass.config_entries.async_entries(DOMAIN)
-        for entry in entries:
-            if getattr(entry, "runtime_data", None) is not None:
-                return dict(entry.options)
-        return {}
+        coord = self._first_coordinator()
+        return dict(coord.config_entry.options) if coord else {}
 
     def _get_cache(self) -> SunoCache | None:
-        """Return the SunoCache from the first loaded coordinator that has one."""
-        entries = self.hass.config_entries.async_entries(DOMAIN)
-        for entry in entries:
-            runtime_data = getattr(entry, "runtime_data", None)
-            if not isinstance(runtime_data, SunoCoordinator):
-                continue
-            if runtime_data.cache is not None:
-                return runtime_data.cache
-        return None
+        """Return the SunoCache from the first loaded coordinator."""
+        coord = self._first_coordinator()
+        return coord.cache if coord else None
 
     def _get_sync(self) -> SunoSync | None:
-        """Return the SunoSync from the first loaded coordinator that has one."""
-        entries = self.hass.config_entries.async_entries(DOMAIN)
-        for entry in entries:
-            runtime_data = getattr(entry, "runtime_data", None)
-            if not isinstance(runtime_data, SunoCoordinator):
-                continue
-            if runtime_data.sync is not None:
-                return runtime_data.sync
-        return None
+        """Return the SunoSync from the first loaded coordinator."""
+        coord = self._first_coordinator()
+        return coord.sync if coord else None
 
     def _get_client(self) -> Any:
         """Return the SunoClient from the first loaded coordinator."""
-        entries = self.hass.config_entries.async_entries(DOMAIN)
-        for entry in entries:
-            coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
-            if coordinator is not None:
-                return coordinator.client
-        return None
+        coord = self._first_coordinator()
+        return coord.client if coord else None
 
     async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
