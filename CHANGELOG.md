@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.13.1 (2026-03-22)
+
+### Bug Fixes
+
+- Broken sync sensors, infinite sync loop, remove trash feature
+  ([`32c0ed9`](https://github.com/teh-hippo/ha-suno/commit/32c0ed99db0500d995ae5ed0656faa22917f8e04))
+
+
 ## v1.13.0 (2026-03-22)
 
 ### Features
