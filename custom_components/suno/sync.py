@@ -59,6 +59,18 @@ def _sanitise_filename(name: str, max_len: int = 200) -> str:
     return safe[:max_len] if safe else "untitled"
 
 
+def _build_sync_summary(downloaded: int, removed: int, meta_updates: int) -> str:
+    """Build a human-readable summary of sync results."""
+    parts: list[str] = []
+    if downloaded:
+        parts.append(f"{downloaded} new song{'s' if downloaded != 1 else ''}")
+    if meta_updates:
+        parts.append(f"{meta_updates} metadata update{'s' if meta_updates != 1 else ''}")
+    if removed:
+        parts.append(f"{removed} removal{'s' if removed != 1 else ''}")
+    return ", ".join(parts) if parts else "No change"
+
+
 def _write_m3u8_playlists(
     base: Path, clips_state: dict[str, Any], desired: list[tuple[Any, int, str, list[str]]]
 ) -> None:
@@ -232,9 +244,11 @@ class SunoSync:
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
         self._state: dict[str, Any] = {"clips": {}, "last_sync": None}
         self._cache: SunoCache | None = None
+        self._coordinator: SunoCoordinator | None = None
         self._sync_path = ""
         self._running = False
         self._errors = self._pending = 0
+        self._last_result = ""
 
     async def async_init(self) -> None:
         """Load persisted sync state."""
@@ -248,6 +262,7 @@ class SunoSync:
         """Create, initialise, and wire up sync."""
         sync = cls(hass, f"suno_sync_{entry.entry_id}")
         sync._cache = coordinator.cache
+        sync._coordinator = coordinator
         sync._sync_path = entry.options.get(CONF_SYNC_PATH, "")
         await sync.async_init()
         if sync_path := entry.options.get(CONF_SYNC_PATH, ""):
@@ -279,6 +294,8 @@ class SunoSync:
     # fmt: off
     @property
     def last_sync(self) -> str | None: return self._state.get("last_sync")
+    @property
+    def last_result(self) -> str: return self._last_result
     @property
     def total_files(self) -> int: return len(self._state.get("clips", {}))
     @property
@@ -323,6 +340,7 @@ class SunoSync:
             return
         self._running = True
         self._errors = self._pending = 0
+        self._notify_coordinator()
         try:
             await self._run_sync(options, client, sync_path, force, coordinator_data)
         except asyncio.CancelledError:
@@ -333,6 +351,12 @@ class SunoSync:
             self._errors += 1
         finally:
             self._running = False
+            self._notify_coordinator()
+
+    def _notify_coordinator(self) -> None:
+        """Push sensor updates via the coordinator."""
+        if self._coordinator and self._coordinator.data:
+            self._coordinator.async_set_updated_data(self._coordinator.data)
 
     async def _run_sync(
         self,
@@ -350,6 +374,7 @@ class SunoSync:
         desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[tuple[SunoClip, int]] = []
+        meta_updates = 0
         seen_ids: set[str] = set()
         for clip, index, _collection, sources in desired:
             seen_ids.add(clip.id)
@@ -360,7 +385,16 @@ class SunoSync:
                         clips_state[clip.id]["sources"] = sources
                         continue
                 to_download.append((clip, index))
-            if clip.id in clips_state:
+            elif clip.id in clips_state:
+                existing = clips_state[clip.id]
+                existing["sources"] = sources
+                old_hash = existing.get("meta_hash", "")
+                new_hash = clip_meta_hash(clip)
+                if old_hash and new_hash != old_hash:
+                    existing["meta_hash"] = new_hash
+                    existing["title"] = clip.title
+                    meta_updates += 1
+            if clip.id in clips_state and clip.id not in seen_ids:
                 clips_state[clip.id]["sources"] = sources
         to_delete = [cid for cid in clips_state if cid not in seen_ids and cid not in preserved_ids]
         self._pending = len(to_download)
@@ -405,6 +439,7 @@ class SunoSync:
         self._state["trash"] = trash_state
         self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
+        self._last_result = _build_sync_summary(downloaded, len(to_delete), meta_updates)
         await self._save_state(base)
         if options.get(CONF_SYNC_PLAYLISTS_M3U):
             await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)

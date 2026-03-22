@@ -18,6 +18,7 @@ from custom_components.suno.const import (
 )
 from custom_components.suno.sync import (
     SunoSync,
+    _build_sync_summary,
     _clip_path,
     _purge_trash,
     _restore_from_trash,
@@ -546,3 +547,37 @@ class TestWriteM3u8Playlists:
 
         # No M3U8 written since the only clip had no path
         assert not list(tmp_path.glob("*.m3u8"))
+
+
+# ── Sync summary ───────────────────────────────────────────────────
+
+
+class TestBuildSyncSummary:
+    def test_no_change(self) -> None:
+        assert _build_sync_summary(0, 0, 0) == "No change"
+
+    def test_single_new_song(self) -> None:
+        assert _build_sync_summary(1, 0, 0) == "1 new song"
+
+    def test_multiple_new_songs(self) -> None:
+        assert _build_sync_summary(8, 0, 0) == "8 new songs"
+
+    def test_single_removal(self) -> None:
+        assert _build_sync_summary(0, 1, 0) == "1 removal"
+
+    def test_multiple_removals(self) -> None:
+        assert _build_sync_summary(0, 3, 0) == "3 removals"
+
+    def test_single_metadata_update(self) -> None:
+        assert _build_sync_summary(0, 0, 1) == "1 metadata update"
+
+    def test_multiple_metadata_updates(self) -> None:
+        assert _build_sync_summary(0, 0, 2) == "2 metadata updates"
+
+    def test_combined(self) -> None:
+        result = _build_sync_summary(1, 2, 1)
+        assert result == "1 new song, 1 metadata update, 2 removals"
+
+    def test_all_plural(self) -> None:
+        result = _build_sync_summary(3, 4, 5)
+        assert result == "3 new songs, 5 metadata updates, 4 removals"

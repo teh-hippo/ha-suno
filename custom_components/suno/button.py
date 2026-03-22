@@ -41,9 +41,7 @@ class SunoClearCacheButton(_SunoButton):
 
     async def async_press(self) -> None:
         if self.coordinator.cache:
-            await self.coordinator.hass.async_add_executor_job(self.coordinator.cache._wipe_cache_files)
-            self.coordinator.cache._index = {}
-            await self.coordinator.cache._store.async_save(self.coordinator.cache._index)
+            await self.coordinator.cache.async_clear()
             _LOGGER.info("Suno audio cache cleared")
 
 

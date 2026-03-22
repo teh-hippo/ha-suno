@@ -72,8 +72,15 @@ _LIBRARY_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | N
 
 _SYNC_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | None]] = [
     ("sync_files", "mdi:file-music", lambda c: c.sync.total_files if c.sync else 0, None),
-    ("sync_pending", "mdi:download", lambda c: c.sync.pending if c.sync else 0, None),
+    ("sync_remaining", "mdi:download", lambda c: c.sync.pending if c.sync else 0, None),
     ("sync_size", "mdi:harddisk", lambda c: c.sync.library_size_mb if c.sync else 0.0, "MB"),
+    ("sync_last_run", "mdi:clock-check-outline", lambda c: c.sync.last_sync if c.sync else None, None),
+    ("sync_result", "mdi:text-box-check-outline", lambda c: c.sync.last_result if c.sync else "", None),
+]
+
+
+_CACHE_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | None]] = [
+    ("cached_files", "mdi:file-multiple", lambda c: c.cache.file_count if c.cache else 0, None),
 ]
 
 
@@ -155,9 +162,7 @@ class SunoSyncStatusSensor(_SunoSensor):
     def extra_state_attributes(self) -> dict[str, str | None]:
         from .const import CONF_SYNC_PATH  # noqa: PLC0415
 
-        sync = self.coordinator.sync
         return {
-            "last_run": sync.last_sync if sync else None,
             "sync_path": self._entry.options.get(CONF_SYNC_PATH, ""),
         }
 
@@ -177,7 +182,15 @@ async def async_setup_entry(
     entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _LIBRARY_SENSORS)
     entities.append(SunoCacheSizeSensor(coordinator, entry))
 
-    from .const import CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED  # noqa: PLC0415
+    from .const import (  # noqa: PLC0415
+        CONF_CACHE_ENABLED,
+        CONF_SYNC_ENABLED,
+        DEFAULT_CACHE_ENABLED,
+        DEFAULT_SYNC_ENABLED,
+    )
+
+    if entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED):
+        entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _CACHE_SENSORS)
 
     if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
         entities.append(SunoSyncStatusSensor(coordinator, entry))

@@ -304,3 +304,20 @@ async def test_cache_get_file_deleted_from_disk(hass: HomeAssistant, tmp_path: P
     result = await cache.async_get("clip-del", "mp3")
     assert result is None
     assert "clip-del.mp3" not in cache._index
+
+
+async def test_cache_async_clear(hass: HomeAssistant, tmp_path: Path) -> None:
+    """async_clear should remove all cached files and reset the index."""
+    cache_dir = str(tmp_path / "suno_cache")
+    with patch.object(hass.config, "path", return_value=cache_dir):
+        cache = SunoCache(hass, max_size_mb=10)
+        await cache.async_init()
+
+    await cache.async_put("clip-a", "mp3", _mp3_bytes())
+    await cache.async_put("clip-b", "flac", _flac_bytes())
+    assert cache.file_count == 2
+
+    await cache.async_clear()
+
+    assert cache.file_count == 0
+    assert not list(cache.cache_dir.iterdir())

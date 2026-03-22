@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.models import SunoCredits
 from custom_components.suno.sensor import (
+    _CACHE_SENSORS,
     _SYNC_SENSORS,
     SunoSyncStatusSensor,
     _SimpleSensor,
@@ -188,16 +189,16 @@ def test_sync_files_zero_when_no_sync() -> None:
     assert sensor.native_value == 0
 
 
-def test_sync_pending_returns_count() -> None:
+def test_sync_remaining_returns_count() -> None:
     """Returns pending count from sync."""
     sync = MagicMock()
     sync.pending = 5
-    _, _, value_fn, _ = _SYNC_SENSORS[1]  # sync_pending
+    _, _, value_fn, _ = _SYNC_SENSORS[1]  # sync_remaining
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
     assert sensor.native_value == 5
 
 
-def test_sync_pending_zero_when_no_sync() -> None:
+def test_sync_remaining_zero_when_no_sync() -> None:
     """Returns 0 when sync is None."""
     _, _, value_fn, _ = _SYNC_SENSORS[1]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
@@ -218,3 +219,70 @@ def test_sync_size_zero_when_no_sync() -> None:
     _, _, value_fn, _ = _SYNC_SENSORS[2]
     sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0.0
+
+
+# ── Cache sensor unit tests ────────────────────────────────────────
+
+
+def _make_cache_sensor(cache_mock=None, **kwargs):
+    """Create a cache sensor with a mocked coordinator."""
+    coordinator = MagicMock(spec=SunoCoordinator)
+    coordinator.cache = cache_mock
+    coordinator.data = SunoData()
+    entry = make_entry()
+    sensor = _SimpleSensor.__new__(_SimpleSensor)
+    sensor.coordinator = coordinator
+    sensor._entry = entry
+    sensor._value_fn = kwargs["value_fn"]
+    return sensor
+
+
+def test_cached_files_returns_count() -> None:
+    """Returns file_count from cache."""
+    cache = MagicMock()
+    cache.file_count = 15
+    _, _, value_fn, _ = _CACHE_SENSORS[0]  # cached_files
+    sensor = _make_cache_sensor(cache_mock=cache, value_fn=value_fn)
+    assert sensor.native_value == 15
+
+
+def test_cached_files_zero_when_no_cache() -> None:
+    """Returns 0 when cache is None."""
+    _, _, value_fn, _ = _CACHE_SENSORS[0]
+    sensor = _make_cache_sensor(cache_mock=None, value_fn=value_fn)
+    assert sensor.native_value == 0
+
+
+# ── Sync last_run and result sensors ───────────────────────────────
+
+
+def test_sync_last_run_returns_timestamp() -> None:
+    """Returns last_sync timestamp from sync."""
+    sync = MagicMock()
+    sync.last_sync = "2026-03-22T08:00:00+00:00"
+    _, _, value_fn, _ = _SYNC_SENSORS[3]  # sync_last_run
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+    assert sensor.native_value == "2026-03-22T08:00:00+00:00"
+
+
+def test_sync_last_run_none_when_no_sync() -> None:
+    """Returns None when sync is None."""
+    _, _, value_fn, _ = _SYNC_SENSORS[3]
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+    assert sensor.native_value is None
+
+
+def test_sync_result_returns_summary() -> None:
+    """Returns last_result string from sync."""
+    sync = MagicMock()
+    sync.last_result = "3 new songs, 1 removal"
+    _, _, value_fn, _ = _SYNC_SENSORS[4]  # sync_result
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+    assert sensor.native_value == "3 new songs, 1 removal"
+
+
+def test_sync_result_empty_when_no_sync() -> None:
+    """Returns empty string when sync is None."""
+    _, _, value_fn, _ = _SYNC_SENSORS[4]
+    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+    assert sensor.native_value == ""

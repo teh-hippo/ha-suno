@@ -98,11 +98,20 @@
       "sync_files": {
         "name": "Synced files"
       },
-      "sync_pending": {
-        "name": "Pending downloads"
+      "sync_remaining": {
+        "name": "Sync items remaining"
+      },
+      "cached_files": {
+        "name": "Cached files"
       },
       "sync_size": {
         "name": "Sync library size"
+      },
+      "sync_last_run": {
+        "name": "Last sync"
+      },
+      "sync_result": {
+        "name": "Last sync result"
       }
     },
     "button": {

@@ -81,6 +81,12 @@ class SunoCache:
             self._save_pending = False
             await self._store.async_save(self._index)
 
+    async def async_clear(self) -> None:
+        """Clear all cached files and reset the index."""
+        await self._hass.async_add_executor_job(self._wipe_cache_files)
+        self._index = {}
+        await self._store.async_save(self._index)
+
     async def async_init(self) -> None:
         """Create the cache directory, clean temp files, and load the index."""
         await self._hass.async_add_executor_job(self._init_dir)
