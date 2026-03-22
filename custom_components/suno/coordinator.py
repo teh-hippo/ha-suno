@@ -1,4 +1,4 @@
-"""Data coordinator for the Suno integration."""
+"""Data coordinator for Suno integration."""
 
 from __future__ import annotations
 
@@ -31,8 +31,6 @@ _STORE_VERSION = 1
 
 @dataclass
 class SunoData:
-    """Holds all cached Suno data."""
-
     clips: list[SunoClip] = field(default_factory=list)
     liked_clips: list[SunoClip] = field(default_factory=list)
     playlists: list[SunoPlaylist] = field(default_factory=list)
@@ -41,17 +39,14 @@ class SunoData:
 
 
 class SunoCoordinator(DataUpdateCoordinator[SunoData]):
-    """Fetches and caches Suno library data."""
-
     config_entry: ConfigEntry
 
     def __init__(self, hass: HomeAssistant, client: SunoClient, entry: ConfigEntry) -> None:
-        ttl = entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL)
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=ttl),
+            update_interval=timedelta(minutes=entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL)),
             config_entry=entry,
         )
         self.client = client
@@ -60,13 +55,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
 
     async def async_load_stored_data(self) -> SunoData | None:
-        """Load persisted library data from HA Store.
-
-        Returns SunoData if stored data exists, None otherwise.
-        Sets self.data so the media browser works immediately.
-        """
-        saved = await self._store.async_load()
-        if not saved or not isinstance(saved, dict):
+        """Load persisted library from HA Store."""
+        if not (saved := await self._store.async_load()) or not isinstance(saved, dict):
             return None
         try:
             data = SunoData(
@@ -78,7 +68,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 },
             )
         except Exception:
-            _LOGGER.warning("Stored library data is corrupt, ignoring")
+            _LOGGER.warning("Stored library corrupt, ignoring")
             return None
         self.data = data
         _LOGGER.info("Loaded stored library: %d clips", len(data.clips))
@@ -86,7 +76,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return shared device info for all Suno entities."""
         return DeviceInfo(
             identifiers={(DOMAIN, self.config_entry.unique_id or self.config_entry.entry_id)},
             name=self.client.display_name,
@@ -97,16 +86,12 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
 
     async def _async_update_data(self) -> SunoData:
-        """Fetch library, liked songs, playlists, and credits from Suno."""
         try:
             await self.client._auth.ensure_jwt()
         except SunoConnectionError as err:
             raise UpdateFailed(f"Cannot reach Suno: {err}") from err
         except SunoAuthError as err:
-            raise ConfigEntryAuthFailed(
-                translation_domain=DOMAIN,
-                translation_key="auth_failed",
-            ) from err
+            raise ConfigEntryAuthFailed(translation_domain=DOMAIN, translation_key="auth_failed") from err
 
         results = await asyncio.gather(
             self.client.get_all_songs(),
@@ -116,45 +101,28 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             return_exceptions=True,
         )
 
-        # Songs must succeed
         if isinstance(results[0], BaseException):
             if isinstance(results[0], SunoAuthError):
-                raise ConfigEntryAuthFailed(
-                    translation_domain=DOMAIN,
-                    translation_key="auth_failed",
-                ) from results[0]
+                raise ConfigEntryAuthFailed(translation_domain=DOMAIN, translation_key="auth_failed") from results[0]
             raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="update_failed",
                 translation_placeholders={"error": str(results[0])},
             ) from results[0]
         clips = results[0]
-        _LOGGER.debug("Fetched %d clips from Suno library", len(clips))
+        _LOGGER.debug("Fetched %d clips", len(clips))
 
-        # Liked songs - fallback to empty on failure
+        liked_clips = [] if isinstance(results[1], BaseException) else results[1]
+        playlists = [] if isinstance(results[2], BaseException) else results[2]
+        credits = None if isinstance(results[3], BaseException) else results[3]
+
         if isinstance(results[1], BaseException):
-            _LOGGER.warning("Could not fetch liked songs, skipping", exc_info=results[1])
-            liked_clips: list[SunoClip] = []
-        else:
-            liked_clips = results[1]
-            _LOGGER.debug("Fetched %d liked clips", len(liked_clips))
-
-        # Playlists - fallback to empty on failure
+            _LOGGER.warning("Could not fetch liked songs", exc_info=results[1])
         if isinstance(results[2], BaseException):
-            _LOGGER.warning("Could not fetch playlists, skipping", exc_info=results[2])
-            playlists: list[SunoPlaylist] = []
-        else:
-            playlists = results[2]
-            _LOGGER.debug("Fetched %d playlists", len(playlists))
-
-        # Credits - fallback to None on failure
+            _LOGGER.warning("Could not fetch playlists", exc_info=results[2])
         if isinstance(results[3], BaseException):
-            _LOGGER.warning("Could not fetch credits, skipping", exc_info=results[3])
-            credits: SunoCredits | None = None
-        else:
-            credits = results[3]
+            _LOGGER.warning("Could not fetch credits", exc_info=results[3])
 
-        # Playlist clips (exempt from rate limiting)
         playlist_clips: dict[str, list[SunoClip]] = {}
         for pl in playlists:
             try:
@@ -163,14 +131,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 _LOGGER.debug("Could not fetch clips for playlist %s", pl.name)
 
         data = SunoData(
-            clips=clips,
-            liked_clips=liked_clips,
-            playlists=playlists,
-            playlist_clips=playlist_clips,
-            credits=credits,
+            clips=clips, liked_clips=liked_clips, playlists=playlists, playlist_clips=playlist_clips, credits=credits
         )
-
-        # Persist for offline startup (excludes credits — ephemeral)
         self.hass.async_create_task(
             self._store.async_save(
                 {
@@ -182,5 +144,4 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             ),
             f"suno_store_save_{self.config_entry.entry_id}",
         )
-
         return data

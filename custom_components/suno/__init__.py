@@ -36,44 +36,39 @@ type SunoConfigEntry = ConfigEntry[SunoCoordinator]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
-    """Set up Suno from a config entry."""
     session = async_get_clientsession(hass)
     auth = ClerkAuth(session, entry.data[CONF_COOKIE])
     client = SunoClient(auth)
 
-    # Create coordinator and load stored data first (instant, no network)
     coordinator = SunoCoordinator(hass, client, entry)
     stored_data = await coordinator.async_load_stored_data()
 
-    # Try auth — soft-fail if we have stored data and it's a connection issue
     auth_ok = False
     try:
         await auth.authenticate()
         auth_ok = True
     except SunoConnectionError as err:
-        if stored_data is None:
+        if not stored_data:
             raise ConfigEntryNotReady("Cannot reach Suno (no stored data)") from err
-        _LOGGER.warning("Cannot reach Suno, using stored library data")
+        _LOGGER.warning("Cannot reach Suno, using stored library")
     except SunoAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:
-        if stored_data is None:
-            raise ConfigEntryNotReady(f"Could not connect to Suno: {err}") from err
-        _LOGGER.warning("Cannot reach Suno, using stored library data")
+        if not stored_data:
+            raise ConfigEntryNotReady(f"Could not connect: {err}") from err
+        _LOGGER.warning("Cannot reach Suno, using stored library")
 
-    # Try first refresh — soft-fail if we have stored data
     if auth_ok:
         try:
             await coordinator.async_config_entry_first_refresh()
         except ConfigEntryNotReady:
-            if stored_data is None:
+            if not stored_data:
                 raise
-            _LOGGER.warning("First refresh failed, using stored library data")
+            _LOGGER.warning("First refresh failed, using stored library")
             coordinator.last_update_success = False
 
     entry.runtime_data = coordinator
 
-    # Initialise local audio cache if enabled
     if entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED):
         from .cache import SunoCache  # noqa: PLC0415
 
@@ -85,7 +80,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
         hass.http.register_view(SunoMediaProxyView(hass))
         hass.data[DATA_VIEW_REGISTERED] = True
 
-    # Initialise background sync if enabled
     if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
         from .sync import SunoSync  # noqa: PLC0415
 
@@ -96,19 +90,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
-    """Unload a Suno config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> None:
-    """Clean up cache files and stored data when the integration is removed."""
-    # Remove cached audio files
+    """Clean up cache and stored data on removal."""
     cache_dir = Path(hass.config.path("suno_cache"))
     if cache_dir.is_dir():
         await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
         _LOGGER.debug("Removed cache directory: %s", cache_dir)
 
-    # Remove persisted store files (.storage/suno_*)
     storage_dir = Path(hass.config.path(".storage"))
     if storage_dir.is_dir():
         for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_*"))):

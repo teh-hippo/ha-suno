@@ -890,7 +890,7 @@ wheels = [
 
 [[package]]
 name = "ha-suno"
-version = "1.10.3"
+version = "1.11.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]

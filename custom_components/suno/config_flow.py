@@ -68,10 +68,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _display_schema(opts: dict[str, Any]) -> vol.Schema:
-    """Build the shared schema for display and cache options.
-
-    Used by both async_step_reconfigure and SunoOptionsFlow.async_step_init.
-    """
+    """Build schema for display and cache options."""
     return vol.Schema(
         {
             vol.Required(
@@ -223,32 +220,17 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Handle reconfiguration of display options.
-
-        This duplicates the first page of the options flow on purpose:
-        reconfigure is available from the integrations UI without opening
-        the full multi-step options flow, giving users a quick path to
-        tweak display/cache settings.
-        """
+        """Handle reconfiguration of display options."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         if not entry:
             return self.async_abort(reason="unknown")
-
         if user_input is not None:
-            return self.async_update_reload_and_abort(
-                entry,
-                options={**entry.options, **user_input},
-            )
-
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=_display_schema(dict(entry.options)),
-        )
+            return self.async_update_reload_and_abort(entry, options={**entry.options, **user_input})
+        return self.async_show_form(step_id="reconfigure", data_schema=_display_schema(dict(entry.options)))
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlowWithReload:
-        """Return the options flow handler."""
         return SunoOptionsFlow()
 
 
@@ -263,94 +245,63 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             self._options = {**self.config_entry.options, **user_input}
             return await self.async_step_sync()
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=_display_schema(dict(self.config_entry.options)),
-        )
+        return self.async_show_form(step_id="init", data_schema=_display_schema(dict(self.config_entry.options)))
 
     async def async_step_sync(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 2: sync configuration."""
         errors: dict[str, str] = {}
-
         if user_input is not None:
-            # Validate sync path if sync is enabled
             if user_input.get(CONF_SYNC_ENABLED, False):
                 path = user_input.get(CONF_SYNC_PATH, "")
                 if path and not await self._validate_sync_path(path):
                     errors[CONF_SYNC_PATH] = "invalid_sync_path"
-
             if not errors:
                 merged = {**self._options, **user_input}
-                # If specific playlists needed, go to step 3
                 if user_input.get(CONF_SYNC_ENABLED) and not user_input.get(CONF_SYNC_ALL_PLAYLISTS, True):
                     self._options = merged
                     return await self.async_step_sync_playlists()
-                # Clear playlist selection when all_playlists is true
                 merged[CONF_SYNC_PLAYLISTS] = []
                 return self.async_create_entry(data=merged)
-
         opts = self.config_entry.options
         default_path = self._get_default_sync_path()
-
         schema: dict[vol.Marker, Any] = {
             vol.Required(
-                CONF_SYNC_ENABLED,
-                default=opts.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED),
+                CONF_SYNC_ENABLED, default=opts.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED)
             ): BooleanSelector(),
+            vol.Required(CONF_SYNC_PATH, default=opts.get(CONF_SYNC_PATH, default_path)): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.TEXT)
+            ),
+            vol.Required(CONF_SYNC_LIKED, default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED)): BooleanSelector(),
             vol.Required(
-                CONF_SYNC_PATH,
-                default=opts.get(CONF_SYNC_PATH, default_path),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-            vol.Required(
-                CONF_SYNC_LIKED,
-                default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_SYNC_ALL_PLAYLISTS,
-                default=opts.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS),
+                CONF_SYNC_ALL_PLAYLISTS, default=opts.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS)
             ): BooleanSelector(),
             vol.Optional(
-                CONF_SYNC_RECENT_COUNT,
-                description={"suggested_value": opts.get(CONF_SYNC_RECENT_COUNT)},
+                CONF_SYNC_RECENT_COUNT, description={"suggested_value": opts.get(CONF_SYNC_RECENT_COUNT)}
             ): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode=NumberSelectorMode.BOX)),
             vol.Optional(
-                CONF_SYNC_RECENT_DAYS,
-                description={"suggested_value": opts.get(CONF_SYNC_RECENT_DAYS)},
+                CONF_SYNC_RECENT_DAYS, description={"suggested_value": opts.get(CONF_SYNC_RECENT_DAYS)}
             ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
             vol.Optional(
                 CONF_SYNC_TRASH_DAYS,
                 description={"suggested_value": opts.get(CONF_SYNC_TRASH_DAYS, DEFAULT_SYNC_TRASH_DAYS)},
             ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
         }
-
-        return self.async_show_form(
-            step_id="sync",
-            data_schema=vol.Schema(schema),
-            errors=errors,
-        )
+        return self.async_show_form(step_id="sync", data_schema=vol.Schema(schema), errors=errors)
 
     async def async_step_sync_playlists(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 3: select specific playlists to sync."""
         if user_input is not None:
             return self.async_create_entry(data={**self._options, **user_input})
-
         coordinator = self.config_entry.runtime_data
         playlist_options = [SelectOptionDict(value=p.id, label=p.name) for p in coordinator.data.playlists]
-
         return self.async_show_form(
             step_id="sync_playlists",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_SYNC_PLAYLISTS,
-                        default=self.config_entry.options.get(CONF_SYNC_PLAYLISTS, []),
+                        CONF_SYNC_PLAYLISTS, default=self.config_entry.options.get(CONF_SYNC_PLAYLISTS, [])
                     ): SelectSelector(
-                        SelectSelectorConfig(
-                            options=playlist_options,
-                            multiple=True,
-                            mode=SelectSelectorMode.LIST,
-                        )
+                        SelectSelectorConfig(options=playlist_options, multiple=True, mode=SelectSelectorMode.LIST)
                     ),
                 }
             ),
@@ -358,20 +309,18 @@ class SunoOptionsFlow(OptionsFlowWithReload):
 
     def _get_default_sync_path(self) -> str:
         """Compute default sync path from HA media dirs."""
-        import os  # noqa: PLC0415
+        import os
 
         media_dir = self.hass.config.media_dirs.get("local")
-        if media_dir:
-            return os.path.join(media_dir, "suno")
-        return self.hass.config.path("media", "suno")
+        return os.path.join(media_dir, "suno") if media_dir else self.hass.config.path("media", "suno")
 
     async def _validate_sync_path(self, path: str) -> bool:
         """Check that the sync path is writable."""
-        from pathlib import Path as _Path  # noqa: PLC0415
+        from pathlib import Path as _Path
 
         def _check(p: str) -> bool:
-            target = _Path(p)
             try:
+                target = _Path(p)
                 target.mkdir(parents=True, exist_ok=True)
                 test_file = target / ".suno_write_test"
                 test_file.touch()

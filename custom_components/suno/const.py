@@ -1,20 +1,14 @@
 """Constants for the Suno integration."""
 
 DOMAIN = "suno"
-
-# hass.data keys (global, not per-entry)
 DATA_VIEW_REGISTERED = f"{DOMAIN}_view_registered"
 
-# Suno API
 SUNO_API_BASE_URL = "https://studio-api-prod.suno.com"
 CLERK_BASE_URL = "https://clerk.suno.com"
 CLERK_JS_VERSION = "4.72.1"
 CLERK_TOKEN_JS_VERSION = "4.72.0-snapshot.vc141245"
 
-# CDN (cdn1 works publicly; cdn2 returns 403)
 CDN_BASE_URL = "https://cdn1.suno.ai"
-
-# API pagination
 MAX_PAGES = 100
 
 # Config keys
@@ -38,7 +32,7 @@ DEFAULT_AUDIO_QUALITY = "standard"
 DEFAULT_CACHE_ENABLED = False
 DEFAULT_CACHE_MAX_SIZE = 500
 
-# Sync config keys
+# Sync config
 CONF_SYNC_ENABLED = "sync_enabled"
 CONF_SYNC_PATH = "sync_path"
 CONF_SYNC_LIKED = "sync_liked"
@@ -48,7 +42,6 @@ CONF_SYNC_RECENT_COUNT = "sync_recent_count"
 CONF_SYNC_RECENT_DAYS = "sync_recent_days"
 CONF_SYNC_TRASH_DAYS = "sync_trash_days"
 
-# Sync defaults
 DEFAULT_SYNC_ENABLED = False
 DEFAULT_SYNC_LIKED = True
 DEFAULT_SYNC_ALL_PLAYLISTS = True
@@ -56,17 +49,11 @@ DEFAULT_SYNC_RECENT_COUNT = None
 DEFAULT_SYNC_RECENT_DAYS = None
 DEFAULT_SYNC_TRASH_DAYS = 7
 
-# Sync limits
 SYNC_MAX_DOWNLOADS_PER_RUN = 10
 SYNC_MAX_DOWNLOADS_BOOTSTRAP = 25
-SYNC_DOWNLOAD_DELAY = 10  # seconds between downloads
-SYNC_FFMPEG_TIMEOUT = 60  # seconds
+SYNC_DOWNLOAD_DELAY = 10
+SYNC_FFMPEG_TIMEOUT = 60
 
-# Audio quality options
 QUALITY_HIGH = "high"
-
-# JWT refresh buffer (seconds before expiry to trigger refresh)
 JWT_REFRESH_BUFFER = 60
-
-# Metadata task values that indicate edit fragments (not standalone songs)
 EXCLUDED_TASKS = frozenset({"infill", "fixed_infill"})
