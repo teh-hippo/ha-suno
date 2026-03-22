@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.13.0 (2026-03-22)
+
+### Features
+
+- Improve sync sensors, reduce download delay, cache encapsulation
+  ([`1a12b03`](https://github.com/teh-hippo/ha-suno/commit/1a12b03827b3474d332abd1e80c78bb72f048ac9))
+
+
 ## v1.12.1 (2026-03-22)
 
 ### Bug Fixes
