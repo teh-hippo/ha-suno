@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v1.12.1 (2026-03-22)
+
+### Bug Fixes
+
+- Use absolute paths in M3U8 playlists for Jellyfin compatibility
+  ([`666ad23`](https://github.com/teh-hippo/ha-suno/commit/666ad238a1717205cf05f690078af5a3347637da))
+
+
 ## v1.12.0 (2026-03-22)
 
 ### Features
