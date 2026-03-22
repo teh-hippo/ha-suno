@@ -9,5 +9,5 @@ class SunoAuthError(SunoApiError):
     """Raised when authentication fails (expired cookie, invalid JWT, etc.)."""
 
 
-class SunoConnectionError(SunoAuthError):
+class SunoConnectionError(SunoApiError):
     """Raised when Suno/Clerk is unreachable (network down, DNS failure, etc.)."""

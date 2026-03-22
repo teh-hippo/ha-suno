@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .audio import ensure_wav_url, fetch_album_art, wav_to_flac
+from .audio import download_and_transcode_to_flac
 from .const import (
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
@@ -453,23 +453,14 @@ class SunoSync:
             return await self.hass.async_add_executor_job(lambda: target.stat().st_size)
         _LOGGER.info("Downloading: %s", clip.title)
         try:
-            if not (wav_url := await ensure_wav_url(client, clip.id)):
-                _LOGGER.warning("WAV generation timed out for %s", clip.id)
-                return None
-            session = async_get_clientsession(self.hass)
-            async with session.get(wav_url) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning("WAV download failed for %s: %d", clip.id, resp.status)
-                    return None
-                wav_data = await resp.read()
-            image_url = clip.image_large_url or clip.image_url
-            image_data = await fetch_album_art(session, image_url) if image_url else None
-            flac_data = await wav_to_flac(
+            flac_data = await download_and_transcode_to_flac(
+                client,
+                async_get_clientsession(self.hass),
                 get_ffmpeg_manager(self.hass).binary,
-                wav_data,
+                clip.id,
                 clip.title or "Suno",
                 genre=clip.tags or "",
-                image_data=image_data,
+                image_url=clip.image_large_url or clip.image_url,
             )
             if flac_data is None:
                 return None

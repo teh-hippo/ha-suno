@@ -125,3 +125,40 @@ async def fetch_album_art(session: ClientSession, image_url: str) -> bytes | Non
     except Exception:
         _LOGGER.debug("Failed to download album art from %s", image_url)
     return None
+
+
+async def download_and_transcode_to_flac(
+    client: Any,
+    session: ClientSession,
+    ffmpeg_binary: str,
+    clip_id: str,
+    title: str,
+    artist: str = "Suno",
+    genre: str = "",
+    image_url: str | None = None,
+) -> bytes | None:
+    """Download WAV from Suno, fetch album art, and transcode to FLAC.
+
+    Returns FLAC bytes or None on failure.
+    """
+    if not (wav_url := await ensure_wav_url(client, clip_id)):
+        _LOGGER.warning("WAV generation timed out for %s", clip_id)
+        return None
+    try:
+        upstream = await session.get(wav_url)
+    except Exception:
+        _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
+        return None
+    if upstream.status != 200:
+        upstream.close()
+        _LOGGER.warning("WAV download failed for %s: %d", clip_id, upstream.status)
+        return None
+    try:
+        wav_data = await upstream.read()
+    except Exception:
+        _LOGGER.exception("Failed to read WAV for %s", clip_id)
+        return None
+    finally:
+        upstream.close()
+    image_data = await fetch_album_art(session, image_url) if image_url else None
+    return await wav_to_flac(ffmpeg_binary, wav_data, title, artist, genre=genre, image_data=image_data)

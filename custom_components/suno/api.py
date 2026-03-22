@@ -36,6 +36,10 @@ class SunoClient:
     def display_name(self) -> str:
         return self._auth.display_name
 
+    async def ensure_authenticated(self) -> None:
+        """Ensure the client has a valid JWT token."""
+        await self._auth.ensure_jwt()
+
     async def get_feed(self, page: int = 0) -> tuple[list[SunoClip], bool]:
         data = await self._api_get(f"/api/feed/v2/?page={page}")
         if not isinstance(data, dict):

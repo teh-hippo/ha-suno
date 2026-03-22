@@ -87,7 +87,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
 
     async def _async_update_data(self) -> SunoData:
         try:
-            await self.client._auth.ensure_jwt()
+            await self.client.ensure_authenticated()
         except SunoConnectionError as err:
             raise UpdateFailed(f"Cannot reach Suno: {err}") from err
         except SunoAuthError as err:

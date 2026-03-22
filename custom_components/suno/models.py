@@ -10,6 +10,11 @@ from .const import CDN_BASE_URL
 
 
 def _fix_cdn_url(url: str | None) -> str:
+    """Normalise CDN URLs to the primary endpoint.
+
+    The Suno API sometimes returns cdn2.suno.ai URLs that are unreliable or
+    return errors. We rewrite them to cdn1.suno.ai which is the stable CDN.
+    """
     return url.replace("cdn2.suno.ai", "cdn1.suno.ai") if url else ""
 
 
@@ -39,6 +44,9 @@ class SunoClip:
         metadata = raw.get("metadata") or {}
         clip_id = raw.get("id", "")
         audio_url = raw.get("audio_url", "")
+        # Suno sometimes returns temporary "audiopipe" streaming URLs that
+        # expire and break later playback. Replace with the deterministic
+        # CDN URL which is permanent.
         if audio_url and "audiopipe" in audio_url and clip_id:
             audio_url = f"{CDN_BASE_URL}/{clip_id}.mp3"
         return cls(

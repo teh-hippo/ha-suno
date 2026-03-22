@@ -232,7 +232,7 @@ class SunoCache:
         try:
             tmp_path.write_bytes(data)
             os.replace(tmp_path, final_path)
-        except BaseException:
+        except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
 

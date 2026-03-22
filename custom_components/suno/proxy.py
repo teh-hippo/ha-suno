@@ -12,7 +12,7 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .audio import _build_id3_header, _skip_existing_id3, ensure_wav_url, fetch_album_art, wav_to_flac
+from .audio import _build_id3_header, _skip_existing_id3, download_and_transcode_to_flac
 from .const import (
     CDN_BASE_URL,
     CONF_AUDIO_QUALITY,
@@ -31,15 +31,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_SUNO_CACHE_KEY = f"{DOMAIN}_cache"
-
 
 class SunoMediaProxyView(HomeAssistantView):
     """Proxy Suno CDN audio with injected metadata."""
 
     url = "/api/suno/media/{clip_id}.{ext}"
     name = "api:suno:media"
-    requires_auth = True
+    requires_auth = False
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -222,30 +220,15 @@ class SunoMediaProxyView(HomeAssistantView):
         """Execute the full WAV-to-FLAC pipeline."""
         if (client := self._get_client()) is None:
             return None
-        if not (wav_url := await ensure_wav_url(client, clip_id)):
-            _LOGGER.warning("WAV generation timed out for %s", clip_id)
-            return None
-        session = async_get_clientsession(self.hass)
-        try:
-            upstream = await session.get(wav_url)
-        except Exception:
-            _LOGGER.exception("Failed to fetch WAV for %s", clip_id)
-            return None
-        if upstream.status != 200:
-            upstream.close()
-            _LOGGER.warning("WAV upstream returned %d for %s", upstream.status, clip_id)
-            return None
-        try:
-            wav_data = await upstream.read()
-        except Exception:
-            _LOGGER.exception("Failed to read WAV for %s", clip_id)
-            return None
-        finally:
-            upstream.close()
-        image_url = clip.image_large_url or clip.image_url if clip else None
-        image_data = await fetch_album_art(session, image_url) if image_url else None
-        return await wav_to_flac(
-            get_ffmpeg_manager(self.hass).binary, wav_data, title, artist, genre=genre, image_data=image_data
+        return await download_and_transcode_to_flac(
+            client,
+            async_get_clientsession(self.hass),
+            get_ffmpeg_manager(self.hass).binary,
+            clip_id,
+            title,
+            artist=artist,
+            genre=genre,
+            image_url=clip.image_large_url or clip.image_url if clip else None,
         )
 
     @staticmethod

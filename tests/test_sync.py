@@ -152,23 +152,18 @@ async def test_sync_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> 
     client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-1.wav")
     client.request_wav = AsyncMock()
 
-    fake_wav = b"RIFF" + b"\x00" * 100
     fake_flac = b"fLaC" + b"\x00" * 50
 
     with (
-        patch("custom_components.suno.sync.wav_to_flac", new_callable=AsyncMock, return_value=fake_flac),
-        patch("custom_components.suno.sync.get_ffmpeg_manager") as mock_ffmpeg,
-        patch("custom_components.suno.sync.async_get_clientsession") as mock_session,
+        patch(
+            "custom_components.suno.sync.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.sync.get_ffmpeg_manager"),
+        patch("custom_components.suno.sync.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
-        mock_ffmpeg.return_value.binary = "ffmpeg"
-        mock_resp = AsyncMock()
-        mock_resp.status = 200
-        mock_resp.read = AsyncMock(return_value=fake_wav)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-        mock_session.return_value.get = MagicMock(return_value=mock_resp)
-
         opts = {
             CONF_SYNC_ENABLED: True,
             CONF_SYNC_PATH: str(tmp_path / "sync"),

@@ -312,7 +312,7 @@ async def test_get_session_id_connection_error() -> None:
     session.get = MagicMock(return_value=error_resp)
 
     auth = ClerkAuth(session, "cookie")
-    with pytest.raises(SunoAuthError, match="Could not connect to Clerk"):
+    with pytest.raises(SunoConnectionError, match="Could not connect to Clerk"):
         await auth._get_session_id()
 
 
