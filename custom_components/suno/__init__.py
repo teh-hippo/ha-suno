@@ -25,7 +25,7 @@ from .const import (
     DEFAULT_SYNC_ENABLED,
 )
 from .coordinator import SunoCoordinator
-from .exceptions import SunoAuthError
+from .exceptions import SunoAuthError, SunoConnectionError
 from .proxy import SunoMediaProxyView
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,15 +41,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
     auth = ClerkAuth(session, entry.data[CONF_COOKIE])
     client = SunoClient(auth)
 
+    # Create coordinator and load stored data first (instant, no network)
+    coordinator = SunoCoordinator(hass, client, entry)
+    stored_data = await coordinator.async_load_stored_data()
+
+    # Try auth — soft-fail if we have stored data and it's a connection issue
+    auth_ok = False
     try:
         await auth.authenticate()
+        auth_ok = True
+    except SunoConnectionError as err:
+        if stored_data is None:
+            raise ConfigEntryNotReady("Cannot reach Suno (no stored data)") from err
+        _LOGGER.warning("Cannot reach Suno, using stored library data")
     except SunoAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:
-        raise ConfigEntryNotReady(f"Could not connect to Suno: {err}") from err
+        if stored_data is None:
+            raise ConfigEntryNotReady(f"Could not connect to Suno: {err}") from err
+        _LOGGER.warning("Cannot reach Suno, using stored library data")
 
-    coordinator = SunoCoordinator(hass, client, entry)
-    await coordinator.async_config_entry_first_refresh()
+    # Try first refresh — soft-fail if we have stored data
+    if auth_ok:
+        try:
+            await coordinator.async_config_entry_first_refresh()
+        except ConfigEntryNotReady:
+            if stored_data is None:
+                raise
+            _LOGGER.warning("First refresh failed, using stored library data")
+            coordinator.last_update_success = False
 
     entry.runtime_data = coordinator
 

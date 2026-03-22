@@ -195,11 +195,7 @@ class SunoMediaSource(MediaSource):
 
     async def _browse_playlist(self, coordinator: SunoCoordinator, playlist_id: str, ct: str) -> BrowseMediaSource:
         """Show songs in a specific playlist."""
-        try:
-            clips = await coordinator.client.get_playlist_clips(playlist_id)
-        except Exception:
-            _LOGGER.warning("Could not fetch playlist %s", playlist_id)
-            clips = []
+        clips = coordinator.data.playlist_clips.get(playlist_id, [])
 
         name = "Playlist"
         for pl in coordinator.data.playlists:

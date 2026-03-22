@@ -20,7 +20,7 @@ from .const import (
     CLERK_TOKEN_JS_VERSION,
     JWT_REFRESH_BUFFER,
 )
-from .exceptions import SunoAuthError
+from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoUser
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ class ClerkAuth:
             raise
         except Exception as err:
             msg = "Could not connect to Clerk"
-            raise SunoAuthError(msg) from err
+            raise SunoConnectionError(msg) from err
 
         response = data.get("response")
         if not response:
@@ -185,7 +185,7 @@ class ClerkAuth:
             raise
         except Exception as err:
             msg = "Could not refresh JWT"
-            raise SunoAuthError(msg) from err
+            raise SunoConnectionError(msg) from err
 
         jwt = data.get("jwt")
         if not jwt:

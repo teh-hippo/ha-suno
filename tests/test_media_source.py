@@ -427,12 +427,12 @@ async def test_browse_playlist_detail(hass: HomeAssistant, mock_suno_client: Asy
 
 
 async def test_browse_playlist_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Browsing a playlist that fails returns empty children."""
+    """Browsing a playlist with no clips in coordinator returns empty children."""
     entry = make_entry()
+    # Make playlist clip fetch fail during coordinator refresh
+    mock_suno_client.get_playlist_clips.side_effect = Exception("Network error")
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-
-    mock_suno_client.get_playlist_clips.side_effect = Exception("Network error")
 
     source = SunoMediaSource(hass)
     item = MediaSourceItem(hass, "suno", "playlist/pl-001", None)

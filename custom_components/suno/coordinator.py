@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import SunoClient
 from .const import CONF_CACHE_TTL, DEFAULT_CACHE_TTL, DOMAIN
-from .exceptions import SunoAuthError
+from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoCredits, SunoPlaylist
 
 if TYPE_CHECKING:
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     from .sync import SunoSync
 
 _LOGGER = logging.getLogger(__name__)
+
+_STORE_VERSION = 1
 
 
 @dataclass
@@ -33,6 +36,7 @@ class SunoData:
     clips: list[SunoClip] = field(default_factory=list)
     liked_clips: list[SunoClip] = field(default_factory=list)
     playlists: list[SunoPlaylist] = field(default_factory=list)
+    playlist_clips: dict[str, list[SunoClip]] = field(default_factory=dict)
     credits: SunoCredits | None = None
 
 
@@ -53,6 +57,32 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self.client = client
         self.cache: SunoCache | None = None
         self.sync: SunoSync | None = None
+        self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
+
+    async def async_load_stored_data(self) -> SunoData | None:
+        """Load persisted library data from HA Store.
+
+        Returns SunoData if stored data exists, None otherwise.
+        Sets self.data so the media browser works immediately.
+        """
+        saved = await self._store.async_load()
+        if not saved or not isinstance(saved, dict):
+            return None
+        try:
+            data = SunoData(
+                clips=[SunoClip(**c) for c in saved.get("clips", [])],
+                liked_clips=[SunoClip(**c) for c in saved.get("liked_clips", [])],
+                playlists=[SunoPlaylist(**p) for p in saved.get("playlists", [])],
+                playlist_clips={
+                    pid: [SunoClip(**c) for c in clips] for pid, clips in saved.get("playlist_clips", {}).items()
+                },
+            )
+        except Exception:
+            _LOGGER.warning("Stored library data is corrupt, ignoring")
+            return None
+        self.data = data
+        _LOGGER.info("Loaded stored library: %d clips", len(data.clips))
+        return data
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -70,6 +100,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         """Fetch library, liked songs, playlists, and credits from Suno."""
         try:
             await self.client._auth.ensure_jwt()
+        except SunoConnectionError as err:
+            raise UpdateFailed(f"Cannot reach Suno: {err}") from err
         except SunoAuthError as err:
             raise ConfigEntryAuthFailed(
                 translation_domain=DOMAIN,
@@ -122,9 +154,33 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         else:
             credits = results[3]
 
-        return SunoData(
+        # Playlist clips (exempt from rate limiting)
+        playlist_clips: dict[str, list[SunoClip]] = {}
+        for pl in playlists:
+            try:
+                playlist_clips[pl.id] = await self.client.get_playlist_clips(pl.id)
+            except Exception:
+                _LOGGER.debug("Could not fetch clips for playlist %s", pl.name)
+
+        data = SunoData(
             clips=clips,
             liked_clips=liked_clips,
             playlists=playlists,
+            playlist_clips=playlist_clips,
             credits=credits,
         )
+
+        # Persist for offline startup (excludes credits — ephemeral)
+        self.hass.async_create_task(
+            self._store.async_save(
+                {
+                    "clips": [asdict(c) for c in data.clips],
+                    "liked_clips": [asdict(c) for c in data.liked_clips],
+                    "playlists": [asdict(p) for p in data.playlists],
+                    "playlist_clips": {pid: [asdict(c) for c in pclips] for pid, pclips in data.playlist_clips.items()},
+                }
+            ),
+            f"suno_store_save_{self.config_entry.entry_id}",
+        )
+
+        return data
