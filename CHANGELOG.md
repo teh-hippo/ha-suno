@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v1.11.0 (2026-03-22)
+
+### Chores
+
+- Update uv.lock
+  ([`cbc722e`](https://github.com/teh-hippo/ha-suno/commit/cbc722e74f4e715c53c40b142d1b62a743e7f2c4))
+
+### Features
+
+- Fast startup with stored data and offline resilience
+  ([`6c14e32`](https://github.com/teh-hippo/ha-suno/commit/6c14e32682a3eccb7187d31b93fd12c711834a12))
+
+
 ## v1.10.3 (2026-03-22)
 
 ### Bug Fixes
