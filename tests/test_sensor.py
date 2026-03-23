@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant
 
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.models import SunoCredits
 from custom_components.suno.sensor import (
-    _CACHE_SENSORS,
     _SYNC_SENSORS,
     SunoSyncStatusSensor,
     _parse_last_sync,
@@ -223,38 +223,6 @@ def test_sync_size_zero_when_no_sync() -> None:
     assert sensor.native_value == 0.0
 
 
-# ── Cache sensor unit tests ────────────────────────────────────────
-
-
-def _make_cache_sensor(cache_mock=None, **kwargs):
-    """Create a cache sensor with a mocked coordinator."""
-    coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.cache = cache_mock
-    coordinator.data = SunoData()
-    entry = make_entry()
-    sensor = _SimpleSensor.__new__(_SimpleSensor)
-    sensor.coordinator = coordinator
-    sensor._entry = entry
-    sensor._value_fn = kwargs["value_fn"]
-    return sensor
-
-
-def test_cached_files_returns_count() -> None:
-    """Returns file_count from cache."""
-    cache = MagicMock()
-    cache.file_count = 15
-    value_fn = _CACHE_SENSORS[0][2]  # cached_files
-    sensor = _make_cache_sensor(cache_mock=cache, value_fn=value_fn)
-    assert sensor.native_value == 15
-
-
-def test_cached_files_zero_when_no_cache() -> None:
-    """Returns 0 when cache is None."""
-    value_fn = _CACHE_SENSORS[0][2]
-    sensor = _make_cache_sensor(cache_mock=None, value_fn=value_fn)
-    assert sensor.native_value == 0
-
-
 # ── Sync last_run and result sensors ───────────────────────────────
 
 
@@ -301,10 +269,10 @@ def test_sync_result_empty_when_no_sync() -> None:
 def test_sync_files_breakdown_returns_source_counts() -> None:
     """sync_files attr_fn returns source counts from sync."""
     sync = MagicMock()
-    sync.source_breakdown = {"liked": 10, "recent": 50, "playlist:abc": 5}
+    sync.source_breakdown = {"liked": 10, "latest": 50, "playlist:abc": 5}
     coordinator = MagicMock(spec=SunoCoordinator)
     coordinator.sync = sync
-    assert _sync_files_breakdown(coordinator) == {"liked": 10, "recent": 50, "playlist:abc": 5}
+    assert _sync_files_breakdown(coordinator) == {"liked": 10, "latest": 50, "playlist:abc": 5}
 
 
 def test_sync_files_breakdown_empty_when_no_sync() -> None:
@@ -348,3 +316,58 @@ def test_sync_result_has_no_state_class() -> None:
     cfg = _SYNC_SENSORS[4]  # sync_result
     # Tuple: (key, icon, value_fn, unit, state_class)
     assert cfg[4] is None  # state_class
+
+
+def test_sync_status_has_enum_device_class() -> None:
+    """sync_status sensor has ENUM device class and valid options."""
+    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=None)
+    assert sensor.device_class is SensorDeviceClass.ENUM
+    assert sensor._attr_options == ["idle", "syncing", "error"]
+
+
+def test_sync_status_attributes_include_errors() -> None:
+    """sync_status extra_state_attributes includes error count."""
+    sync = MagicMock()
+    sync.is_running = False
+    sync.errors = 3
+    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=sync)
+    attrs = sensor.extra_state_attributes
+    assert attrs["errors"] == 3
+
+
+def test_sync_status_attributes_no_errors_key_when_no_sync() -> None:
+    """sync_status omits errors key when sync is None."""
+    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=None)
+    attrs = sensor.extra_state_attributes
+    assert "errors" not in attrs
+
+
+# ── cached_files is NOT a standalone entity ───────────────────────
+
+
+async def test_no_cached_files_entity(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """There is no standalone sensor.suno_cached_files entity; it's an attribute on cache_size."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    state_ids = {s.entity_id for s in hass.states.async_all("sensor")}
+    assert "sensor.suno_cached_files" not in state_ids
+    # cache_size sensor exists (cached_files is exposed as its attribute when cache is active)
+    assert "sensor.suno_cache_size" in state_ids
+
+
+def test_cache_size_sensor_exposes_cached_files_attr() -> None:
+    """When cache is present, extra_state_attributes includes cached_files."""
+    from custom_components.suno.sensor import SunoCacheSizeSensor
+
+    coordinator = MagicMock(spec=SunoCoordinator)
+    mock_cache = MagicMock()
+    mock_cache.file_count = 42
+    coordinator.cache = mock_cache
+    coordinator.data = SunoData()
+
+    sensor = SunoCacheSizeSensor.__new__(SunoCacheSizeSensor)
+    sensor.coordinator = coordinator
+    attrs = sensor.extra_state_attributes
+    assert attrs["cached_files"] == 42

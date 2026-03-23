@@ -752,3 +752,110 @@ async def test_hq_returns_502_when_no_client(hass: HomeAssistant, mock_suno_clie
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.flac")
     assert resp.status == 502
+
+
+# ── Sync file serving ───────────────────────────────────────────────
+
+
+async def test_serves_synced_mp3_with_correct_mime(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client, tmp_path
+) -> None:
+    """When sync has an MP3 and playback quality is standard, serve with audio/mpeg."""
+    from pathlib import Path
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    synced_file = tmp_path / "clip-aaa-111.mp3"
+    synced_file.write_bytes(b"ID3" + b"\x00" * 100)
+
+    mock_sync = MagicMock()
+    mock_sync.get_synced_path = MagicMock(return_value=Path(synced_file))
+    entry.runtime_data.sync = mock_sync
+
+    client = await hass_client()
+    resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"] == "audio/mpeg"
+    body = await resp.read()
+    assert body == b"ID3" + b"\x00" * 100
+
+
+async def test_skips_synced_flac_when_mp3_requested(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """When sync has FLAC but playback quality is standard, fall through to CDN."""
+    from pathlib import Path
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    synced_file = Path("/fake/clip-aaa-111.flac")
+
+    mock_sync = MagicMock()
+    mock_sync.get_synced_path = MagicMock(return_value=synced_file)
+    entry.runtime_data.sync = mock_sync
+
+    # Falls through to CDN; with no CDN mock it will 502
+    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+        mock_session.return_value.get = AsyncMock(side_effect=Exception("CDN not mocked"))
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
+    assert resp.status == 502
+
+
+async def test_serves_synced_flac_with_correct_mime(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client, tmp_path
+) -> None:
+    """When sync has a FLAC and playback quality is high, serve with audio/flac."""
+    from pathlib import Path
+
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(
+        options={**make_entry().options, CONF_AUDIO_QUALITY: "high"},
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    synced_file = tmp_path / "clip-aaa-111.flac"
+    synced_file.write_bytes(b"fLaC" + b"\x00" * 100)
+
+    mock_sync = MagicMock()
+    mock_sync.get_synced_path = MagicMock(return_value=Path(synced_file))
+    entry.runtime_data.sync = mock_sync
+
+    client = await hass_client()
+    resp = await client.get("/api/suno/media/clip-aaa-111.flac")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"] == "audio/flac"
+    body = await resp.read()
+    assert body == b"fLaC" + b"\x00" * 100
+
+
+async def test_skips_synced_mp3_when_flac_requested(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """When sync has MP3 but playback quality is high, fall through to HQ pipeline."""
+    from pathlib import Path
+
+    from custom_components.suno.const import CONF_AUDIO_QUALITY
+
+    entry = make_entry(
+        options={**make_entry().options, CONF_AUDIO_QUALITY: "high"},
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    synced_file = Path("/fake/clip-aaa-111.mp3")
+
+    mock_sync = MagicMock()
+    mock_sync.get_synced_path = MagicMock(return_value=synced_file)
+    entry.runtime_data.sync = mock_sync
+
+    # Falls through to HQ pipeline; without mocks it will fail
+    client = await hass_client()
+    resp = await client.get("/api/suno/media/clip-aaa-111.flac")
+    assert resp.status == 502
