@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.3.0 (2026-03-23)
+
+### Chores
+
+- Update uv.lock for v3.2.1
+  ([`89f6814`](https://github.com/teh-hippo/ha-suno/commit/89f6814b24aa2317fdaac52061a2632565b3609d))
+
+### Features
+
+- Add download enabled toggle and fix except syntax
+  ([`2b7aa6f`](https://github.com/teh-hippo/ha-suno/commit/2b7aa6fd4eabf1da6ea32fef1a150d5585d76800))
+
+
 ## v3.2.2 (2026-03-23)
 
 ### Bug Fixes
