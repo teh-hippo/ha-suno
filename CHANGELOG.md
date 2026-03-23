@@ -1,28 +1,90 @@
 # CHANGELOG
 
 
-## v2.0.0
-
-### Features
-- Per-source sync quality: choose FLAC or MP3 independently for liked songs, playlists, and latest songs
-- Per-source retention mode: "sync" (managed mirror, removes deleted) or "copy" (download-only, never deletes)
-- Stable file paths using clip ID (no more orphaned files from list reordering)
-- Disk reconciliation: automatic cleanup of orphaned files after each sync
-- MP3 sync path: direct CDN download with ID3 metadata injection (no ffmpeg required)
-- Cache moved to `.cache/suno/` to exclude from HA backups
-- Sync write-through to cache for faster playback of synced content
-
-### Breaking Changes
-- Config entry VERSION bumped to 2 (automatic migration)
-- "Recent" renamed to "Latest" throughout
-- Latest sync uses AND logic when both count and days are set (was OR/union)
-- `cached_files` sensor entity removed (data available as attribute on `cache_size`)
-- Sync status sensor now uses ENUM device class
+## v3.2.1 (2026-03-23)
 
 ### Bug Fixes
-- Fixed index-based file paths causing orphaned files when library order changes
-- Fixed proxy serving wrong MIME type for MP3 synced files
-- Fixed cache directory being included in HA backups
+
+- **ci**: Pass RELEASE_TOKEN to checkout for git push auth
+  ([`ab037ec`](https://github.com/teh-hippo/ha-suno/commit/ab037ecdd377e886ff5da6cd617ef8bc98fd5080))
+
+
+## v3.2.0 (2026-03-23)
+
+### Bug Fixes
+
+- **ci**: Use RELEASE_TOKEN for semantic-release push
+  ([`de9c8bd`](https://github.com/teh-hippo/ha-suno/commit/de9c8bd53a629f95bd75bd3e14c03c5b84f31db3))
+
+### Build System
+
+- **deps**: Upgrade
+  ([`2255a86`](https://github.com/teh-hippo/ha-suno/commit/2255a86475170dea3fc473d463d4571536b0b3cc))
+
+### Features
+
+- Include remaster, upload, concat and editor export tracks
+  ([`003d663`](https://github.com/teh-hippo/ha-suno/commit/003d663b3ce189a6c13a18f0a50daa74d91e23a2))
+
+- UX improvements, minimum songs filter, and cleanup
+  ([`ca83185`](https://github.com/teh-hippo/ha-suno/commit/ca831859fd27c725de02962ad90947e925b918b4))
+
+
+## v3.1.0 (2026-03-23)
+
+### Bug Fixes
+
+- Resolve correct coordinator per clip in multi-account proxy
+  ([`a5f49b1`](https://github.com/teh-hippo/ha-suno/commit/a5f49b12ff1c6b95788add385ee07c5113a8a5d0))
+
+### Chores
+
+- Bump version to 3.1.0
+  ([`47e3b19`](https://github.com/teh-hippo/ha-suno/commit/47e3b19f13ba533193741034022fe81446c5cfa0))
+
+### Features
+
+- Device naming, shared rate limiter, multi-account safety
+  ([`4efd7d4`](https://github.com/teh-hippo/ha-suno/commit/4efd7d4502b72e3f1faf89668b1f2aaf2499df10))
+
+
+## v3.0.1 (2026-03-23)
+
+### Bug Fixes
+
+- Check liked_clips for quality derivation in media source
+  ([`7ee01da`](https://github.com/teh-hippo/ha-suno/commit/7ee01da3322ad0acd78043135f2f4236ac4d0218))
+
+
+## v3.0.0 (2026-03-23)
+
+### Build System
+
+- **deps**: Update mcr.microsoft.com/devcontainers/python Docker tag to v3.14
+  ([#2](https://github.com/teh-hippo/ha-suno/pull/2),
+  [`e9f65a3`](https://github.com/teh-hippo/ha-suno/commit/e9f65a3392a7a344042b3a205bf4900f12cc7ae6))
+
+- **deps**: Upgrade
+  ([`98fa0ea`](https://github.com/teh-hippo/ha-suno/commit/98fa0ea191eb0d26f9ff9897a0056386ed93979f))
+
+### Continuous Integration
+
+- Fix automerge config for all update types
+  ([`7d9f12f`](https://github.com/teh-hippo/ha-suno/commit/7d9f12f4b72d77973619fc9e1352361286ced861))
+
+- Fix build_command, add dependabot, remove lockfile-update workflow
+  ([`95efce3`](https://github.com/teh-hippo/ha-suno/commit/95efce3cc176ff395c68c6f6efd9c3bf1163680a))
+
+- Migrate from Dependabot to Renovate
+  ([`5b404d0`](https://github.com/teh-hippo/ha-suno/commit/5b404d0b12350d1c2cd82ff11aa519868ef05b43))
+
+- Standardise renovate.json with forkProcessing
+  ([`5ecdd8f`](https://github.com/teh-hippo/ha-suno/commit/5ecdd8f1508d10c0015561938ce4bb8e3bbeef78))
+
+### Features
+
+- Config flow restructure — per-content-type pages
+  ([`2395fac`](https://github.com/teh-hippo/ha-suno/commit/2395fac95d05776271e46cd3ad3f65282df5beba))
 
 
 ## v1.13.1 (2026-03-22)
