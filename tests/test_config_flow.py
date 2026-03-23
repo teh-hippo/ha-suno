@@ -608,3 +608,126 @@ async def test_migration_v2_to_v3_sync_disabled_guard(hass: HomeAssistant, mock_
     opts = entry.options
     # sync_enabled=False means download_path should be removed
     assert CONF_DOWNLOAD_PATH not in opts or opts.get(CONF_DOWNLOAD_PATH, "") == ""
+
+
+# ── Download path conflict ───────────────────────────────────────────
+
+
+async def test_download_path_conflict_detected(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Two entries with the same download path should show an error."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/media/suno",
+        },
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Add a second entry with the same download path
+    other = make_entry(unique_id="other-user")
+    other_opts = dict(other.options)
+    other_opts[CONF_DOWNLOAD_PATH] = "/media/suno"
+    other = make_entry(unique_id="other-user", options=other_opts)
+    other.add_to_hass(hass)
+
+    flow = hass.config_entries.options._progress[result["flow_id"]]
+    with patch.object(type(flow), "_validate_download_path", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: True,
+                CONF_SHOW_LIKED: True,
+                CONF_SHOW_LATEST: True,
+                CONF_DOWNLOAD_PATH: "/media/suno",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"][CONF_DOWNLOAD_PATH] == "download_path_conflict"
+
+
+async def test_download_path_no_conflict_different_paths(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Different download paths should not conflict."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/media/suno-a",
+        },
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    other = make_entry(unique_id="other-user", options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno-b"})
+    other.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = hass.config_entries.options._progress[result["flow_id"]]
+    with patch.object(type(flow), "_validate_download_path", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: False,
+                CONF_SHOW_LIKED: False,
+                CONF_SHOW_LATEST: False,
+                CONF_DOWNLOAD_PATH: "/media/suno-a",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    # No conflict — should proceed (CREATE_ENTRY because all toggles are off)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_download_path_self_reference_no_conflict(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Same entry re-saving its own path should not conflict."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/media/suno",
+        },
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = hass.config_entries.options._progress[result["flow_id"]]
+    with patch.object(type(flow), "_validate_download_path", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: False,
+                CONF_SHOW_LIKED: False,
+                CONF_SHOW_LATEST: False,
+                CONF_DOWNLOAD_PATH: "/media/suno",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    # Should succeed — own entry path is excluded from conflict check
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_dynamic_title_from_auth(hass: HomeAssistant, mock_setup_entry: AsyncMock) -> None:
+    """Config entry title uses auth.display_name from the flow."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+
+    mock_client = _make_flow_client(
+        authenticate=AsyncMock(return_value=MOCK_USER_ID),
+        display_name="CoolArtist",
+    )
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: MOCK_COOKIE},
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "CoolArtist"

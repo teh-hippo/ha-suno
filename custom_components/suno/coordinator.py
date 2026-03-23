@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import SunoClient
 from .const import DEFAULT_CACHE_TTL, DOMAIN
 from .exceptions import SunoAuthError, SunoConnectionError
-from .models import SunoClip, SunoCredits, SunoPlaylist
+from .models import SunoClip, SunoCredits, SunoPlaylist, SunoUser
 
 if TYPE_CHECKING:
     from .cache import SunoCache
@@ -53,6 +53,10 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self.cache: SunoCache | None = None
         self.download_manager: SunoDownloadManager | None = None
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
+        self.user = SunoUser(
+            id=client.user_id or "",
+            display_name=client.display_name,
+        )
 
     async def async_load_stored_data(self) -> SunoData | None:
         """Load persisted library from HA Store."""
@@ -78,7 +82,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, self.config_entry.unique_id or self.config_entry.entry_id)},
-            name=self.client.display_name,
+            name=self.user.display_name,
             manufacturer="Suno",
             model="Music Library",
             entry_type=DeviceEntryType.SERVICE,
@@ -124,15 +128,34 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             _LOGGER.warning("Could not fetch credits", exc_info=results[3])
 
         playlist_clips: dict[str, list[SunoClip]] = {}
-        for pl in playlists:
-            try:
-                playlist_clips[pl.id] = await self.client.get_playlist_clips(pl.id)
-            except Exception:
-                _LOGGER.debug("Could not fetch clips for playlist %s", pl.name)
+        if playlists:
+            sem = asyncio.Semaphore(3)
+
+            async def _fetch_playlist(pl: SunoPlaylist) -> tuple[str, list[SunoClip]]:
+                async with sem:
+                    return pl.id, await self.client.get_playlist_clips(pl.id)
+
+            results_pl = await asyncio.gather(
+                *[_fetch_playlist(pl) for pl in playlists],
+                return_exceptions=True,
+            )
+            for result in results_pl:
+                if isinstance(result, tuple):
+                    pl_id, clips_list = result
+                    playlist_clips[pl_id] = clips_list
+                elif isinstance(result, Exception):
+                    _LOGGER.warning("Failed to fetch playlist clips: %s", result)
 
         data = SunoData(
             clips=clips, liked_clips=liked_clips, playlists=playlists, playlist_clips=playlist_clips, credits=credits
         )
+        # Update user identity from Suno API data
+        api_display_name = self.client.suno_display_name
+        if api_display_name and api_display_name != self.user.display_name:
+            self.user = SunoUser(id=self.user.id, display_name=api_display_name)
+            if api_display_name != self.config_entry.title:
+                self.hass.config_entries.async_update_entry(self.config_entry, title=api_display_name)
+
         self.hass.async_create_task(
             self._store.async_save(
                 {

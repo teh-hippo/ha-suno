@@ -103,22 +103,22 @@ async def test_remove_entry_cleans_old_cache_dir(hass: HomeAssistant, tmp_path: 
 
 
 async def test_remove_entry_cleans_storage_files(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Removes .storage/suno_* files."""
+    """Removes per-entry and shared storage files when last entry is removed."""
+    entry = make_entry()
     storage_dir = tmp_path / ".storage"
     storage_dir.mkdir()
     (storage_dir / "suno_cache_index").write_text("{}")
-    (storage_dir / "suno_sync_abc").write_text("{}")
+    (storage_dir / f"suno_library_{entry.entry_id}").write_text("{}")
     (storage_dir / "other_file").write_text("{}")
 
     with (
         patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
         patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
     ):
-        entry = make_entry()
         await async_remove_entry(hass, entry)
 
     assert not (storage_dir / "suno_cache_index").exists()
-    assert not (storage_dir / "suno_sync_abc").exists()
+    assert not (storage_dir / f"suno_library_{entry.entry_id}").exists()
     assert (storage_dir / "other_file").exists()
 
 
@@ -135,9 +135,10 @@ async def test_remove_entry_missing_dirs(hass: HomeAssistant, tmp_path: Path) ->
 
 async def test_remove_entry_oserror_logged(hass: HomeAssistant, tmp_path: Path) -> None:
     """OSError during storage cleanup is logged, not raised."""
+    entry = make_entry()
     storage_dir = tmp_path / ".storage"
     storage_dir.mkdir()
-    suno_file = storage_dir / "suno_test"
+    suno_file = storage_dir / f"suno_library_{entry.entry_id}"
     suno_file.write_text("{}")
 
     with (
@@ -145,6 +146,47 @@ async def test_remove_entry_oserror_logged(hass: HomeAssistant, tmp_path: Path) 
         patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
         patch.object(Path, "unlink", side_effect=OSError("permission denied")),
     ):
-        entry = make_entry()
         # Should not raise despite OSError
         await async_remove_entry(hass, entry)
+
+
+# ── Multi-entry behaviour ─────────────────────────────────────────────
+
+
+async def test_remove_entry_preserves_cache_for_other_entries(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Removing one entry preserves the cache dir when another entry remains."""
+    entry_a = make_entry(unique_id="user-a")
+    entry_b = make_entry(unique_id="user-b")
+    entry_a.add_to_hass(hass)
+    entry_b.add_to_hass(hass)
+
+    cache_dir = tmp_path / ".cache" / "suno"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "clip.mp3").write_bytes(b"data")
+
+    storage_dir = tmp_path / ".storage"
+    storage_dir.mkdir()
+
+    with (
+        patch.object(hass.config, "cache_path", return_value=str(cache_dir)),
+        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+    ):
+        await async_remove_entry(hass, entry_a)
+
+    # Cache dir must still exist because entry_b remains
+    assert cache_dir.exists()
+
+
+async def test_rate_limiter_shared_across_entries(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Rate limiter is the same instance for all config entries."""
+    from custom_components.suno.const import DOMAIN
+
+    entry_a = make_entry(unique_id="user-a")
+    entry_b = make_entry(unique_id="user-b")
+
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry_a)
+        await setup_entry(hass, entry_b)
+
+    assert "rate_limiter" in hass.data[DOMAIN]
+    assert hass.data[DOMAIN]["rate_limiter"] is hass.data[DOMAIN]["rate_limiter"]

@@ -34,6 +34,7 @@ from .const import (
 from .coordinator import SunoCoordinator
 from .exceptions import SunoAuthError, SunoConnectionError
 from .proxy import SunoMediaProxyView
+from .rate_limit import SunoRateLimiter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,9 +162,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
+    # Shared rate limiter across all config entries
+    hass.data.setdefault(DOMAIN, {})
+    if "rate_limiter" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["rate_limiter"] = SunoRateLimiter()
+    rate_limiter = hass.data[DOMAIN]["rate_limiter"]
+
     session = async_get_clientsession(hass)
     auth = ClerkAuth(session, entry.data[CONF_COOKIE])
-    client = SunoClient(auth)
+    client = SunoClient(auth, rate_limiter=rate_limiter)
 
     coordinator = SunoCoordinator(hass, client, entry)
     stored_data = await coordinator.async_load_stored_data()
@@ -221,21 +228,37 @@ async def async_unload_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> boo
 
 async def async_remove_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> None:
     """Clean up cache and stored data on removal."""
-    cache_dir = Path(hass.config.cache_path("suno"))
-    if cache_dir.is_dir():
-        await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
-        _LOGGER.debug("Removed cache directory: %s", cache_dir)
+    remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
 
-    old_cache_dir = Path(hass.config.path("suno_cache"))
-    if old_cache_dir.is_dir():
-        await hass.async_add_executor_job(shutil.rmtree, old_cache_dir, True)
-        _LOGGER.debug("Removed legacy cache directory: %s", old_cache_dir)
-
+    # Always clean per-entry storage files
     storage_dir = Path(hass.config.path(".storage"))
     if storage_dir.is_dir():
-        for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_*"))):
+        for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob(f"suno_*{entry.entry_id}*"))):
             try:
                 await hass.async_add_executor_job(store_file.unlink)
                 _LOGGER.debug("Removed store file: %s", store_file.name)
             except OSError:
                 _LOGGER.warning("Could not remove store file: %s", store_file)
+
+    # Only remove shared resources if this is the last entry
+    if not remaining:
+        cache_dir = Path(hass.config.cache_path("suno"))
+        if cache_dir.is_dir():
+            await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
+            _LOGGER.debug("Removed cache directory: %s", cache_dir)
+
+        old_cache_dir = Path(hass.config.path("suno_cache"))
+        if old_cache_dir.is_dir():
+            await hass.async_add_executor_job(shutil.rmtree, old_cache_dir, True)
+            _LOGGER.debug("Removed legacy cache directory: %s", old_cache_dir)
+
+        # Clean shared storage (cache index)
+        if storage_dir.is_dir():
+            for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_cache*"))):
+                try:
+                    await hass.async_add_executor_job(store_file.unlink)
+                except OSError:
+                    pass
+
+        # Clean up domain data
+        hass.data.pop(DOMAIN, None)

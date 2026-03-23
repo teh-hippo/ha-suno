@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import time
 from typing import Any
 
 from aiohttp import ClientSession
@@ -18,15 +17,17 @@ from .const import (
 )
 from .exceptions import SunoApiError, SunoAuthError
 from .models import SunoClip, SunoCredits, SunoPlaylist
+from .rate_limit import SunoRateLimiter
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class SunoClient:
-    def __init__(self, auth: ClerkAuth) -> None:
+    def __init__(self, auth: ClerkAuth, rate_limiter: SunoRateLimiter | None = None) -> None:
         self._auth = auth
         self._session: ClientSession = auth._session
-        self._throttle_until: float = 0
+        self._rate_limiter = rate_limiter
+        self._last_seen_display_name: str | None = None
 
     @property
     def user_id(self) -> str | None:
@@ -36,6 +37,10 @@ class SunoClient:
     def display_name(self) -> str:
         return self._auth.display_name
 
+    @property
+    def suno_display_name(self) -> str | None:
+        return self._last_seen_display_name
+
     async def ensure_authenticated(self) -> None:
         """Ensure the client has a valid JWT token."""
         await self._auth.ensure_jwt()
@@ -44,7 +49,11 @@ class SunoClient:
         data = await self._api_get(f"/api/feed/v2/?page={page}")
         if not isinstance(data, dict):
             return [], False
-        return self._filter_and_sanitise(data.get("clips") or []), bool(data.get("has_more", False))
+        raw_clips = data.get("clips") or []
+        # Capture display_name from first clip (user's own Suno handle)
+        if raw_clips and not self._last_seen_display_name:
+            self._last_seen_display_name = (raw_clips[0].get("display_name") or "").strip() or None
+        return self._filter_and_sanitise(raw_clips), bool(data.get("has_more", False))
 
     async def get_all_songs(self) -> list[SunoClip]:
         return await self._paginate_feed()
@@ -89,7 +98,10 @@ class SunoClient:
             data = await self._api_get(f"/api/feed/v2/?page={page}{'&' + query if query else ''}")
             if not isinstance(data, dict):
                 break
-            all_clips.extend(self._filter_and_sanitise(data.get("clips") or []))
+            raw_clips = data.get("clips") or []
+            if raw_clips and not self._last_seen_display_name:
+                self._last_seen_display_name = (raw_clips[0].get("display_name") or "").strip() or None
+            all_clips.extend(self._filter_and_sanitise(raw_clips))
             if not data.get("has_more", False):
                 break
             page += 1
@@ -98,38 +110,41 @@ class SunoClient:
 
     async def _api_request(self, method: str, path: str, *, expect_json: bool = True) -> Any:
         for attempt in range(4):
-            if self._throttle_until > 0 and (wait := self._throttle_until - time.monotonic()) > 0:
-                _LOGGER.debug("Throttling for %.1fs", wait)
-                await asyncio.sleep(wait)
-
-            url = f"{SUNO_API_BASE_URL}{path}"
-            headers = {"Authorization": f"Bearer {await self._auth.ensure_jwt()}"}
-            _LOGGER.debug("%s %s (attempt %d)", method, path, attempt + 1)
-
+            if self._rate_limiter:
+                await self._rate_limiter.acquire()
             try:
-                req = self._session.get if method == "GET" else self._session.post
-                async with req(url, headers=headers) as resp:
-                    if resp.status in (401, 403):
-                        raise SunoAuthError(f"Suno API auth failed with status {resp.status}")
-                    if resp.status == 429:
-                        if attempt < 3:
-                            delay = 2.0 * (2**attempt) + random.uniform(0, 1)  # noqa: S311
-                            if (retry_after := resp.headers.get("Retry-After")) and retry_after.isdigit():
-                                delay = max(delay, float(retry_after))
-                            self._throttle_until = time.monotonic() + delay
-                            _LOGGER.debug("Rate limited, retrying in %.1fs", delay)
-                            await asyncio.sleep(delay)
-                            continue
-                        raise SunoApiError("Rate limited after retries")
-                    if expect_json:
-                        if resp.status != 200:
-                            raise SunoApiError(f"Suno API returned {resp.status}: {(await resp.text())[:200]}")
-                        return await resp.json()
-                    return resp.status
-            except SunoApiError, SunoAuthError:
-                raise
-            except Exception as err:
-                raise SunoApiError(f"Suno API request failed: {err}") from err
+                url = f"{SUNO_API_BASE_URL}{path}"
+                headers = {"Authorization": f"Bearer {await self._auth.ensure_jwt()}"}
+                _LOGGER.debug("%s %s (attempt %d)", method, path, attempt + 1)
+
+                try:
+                    req = self._session.get if method == "GET" else self._session.post
+                    async with req(url, headers=headers) as resp:
+                        if resp.status in (401, 403):
+                            raise SunoAuthError(f"Suno API auth failed with status {resp.status}")
+                        if resp.status == 429:
+                            if attempt < 3:
+                                delay = 2.0 * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+                                if (retry_after := resp.headers.get("Retry-After")) and retry_after.isdigit():
+                                    delay = max(delay, float(retry_after))
+                                if self._rate_limiter:
+                                    await self._rate_limiter.report_rate_limit(delay)
+                                _LOGGER.debug("Rate limited, retrying in %.1fs", delay)
+                                await asyncio.sleep(delay)
+                                continue
+                            raise SunoApiError("Rate limited after maximum retries")
+                        if expect_json:
+                            if resp.status != 200:
+                                raise SunoApiError(f"Suno API returned {resp.status}: {(await resp.text())[:200]}")
+                            return await resp.json()
+                        return resp.status
+                except SunoApiError, SunoAuthError:
+                    raise
+                except Exception as err:
+                    raise SunoApiError(f"Suno API request failed: {err}") from err
+            finally:
+                if self._rate_limiter:
+                    self._rate_limiter.release()
         raise SunoApiError("API request failed after retries")
 
     async def _api_get(self, path: str) -> Any:

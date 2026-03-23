@@ -103,6 +103,7 @@ def mock_suno_client() -> AsyncMock:
     client = AsyncMock()
     client.user_id = MOCK_USER_ID
     client.display_name = "Suno"
+    client.suno_display_name = None
     client._auth = _make_mock_auth()
     client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
     client.get_feed = AsyncMock(return_value=(sample_clips(), False))

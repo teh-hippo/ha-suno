@@ -150,7 +150,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(user_id)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title="Suno",
+                    title=auth.display_name,
                     data={CONF_COOKIE: cookie},
                     options={
                         CONF_SHOW_PLAYLISTS: True,
@@ -273,6 +273,8 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             path = user_input.get(CONF_DOWNLOAD_PATH, "")
             if path and not await self._validate_download_path(path):
                 errors[CONF_DOWNLOAD_PATH] = "invalid_download_path"
+            elif path and self._check_download_path_conflict(path):
+                errors[CONF_DOWNLOAD_PATH] = "download_path_conflict"
             if not errors:
                 self._options = {**self.config_entry.options, **user_input}
                 return await self._next_content_step()
@@ -389,13 +391,31 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         )
         return self.async_show_form(step_id="latest", data_schema=schema)
 
+    def _check_download_path_conflict(self, path: str) -> bool:
+        """Check if another config entry already uses this download path."""
+        from pathlib import Path as _Path
+
+        if not path:
+            return False
+        resolved = _Path(path).resolve()
+        current_entry_id = getattr(self, "config_entry", None)
+        current_id = current_entry_id.entry_id if current_entry_id else None
+
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == current_id:
+                continue
+            other_path = entry.options.get(CONF_DOWNLOAD_PATH)
+            if other_path and _Path(other_path).resolve() == resolved:
+                return True
+        return False
+
     async def _validate_download_path(self, path: str) -> bool:
         """Check that the download path is writable."""
         from pathlib import Path as _Path
 
         def _check(p: str) -> bool:
             try:
-                target = _Path(p)
+                target = _Path(p).resolve()
                 target.mkdir(parents=True, exist_ok=True)
                 test_file = target / ".suno_write_test"
                 test_file.touch()

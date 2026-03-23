@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -135,3 +135,48 @@ async def test_coordinator_uses_default_cache_ttl(hass: HomeAssistant, mock_suno
     assert coordinator.update_interval is not None
     # DEFAULT_CACHE_TTL is 30 minutes
     assert coordinator.update_interval.total_seconds() == 30 * 60
+
+
+# ── Display name and title updates ────────────────────────────────────
+
+
+async def test_display_name_from_clip_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When client.suno_display_name returns a name, coordinator.user.display_name updates."""
+    mock_suno_client.suno_display_name = "CoolArtist"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.user.display_name == "CoolArtist"
+
+
+async def test_title_update_on_display_name_change(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Config entry title updates when display name changes."""
+    mock_suno_client.suno_display_name = "NewName"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    assert entry.title == "NewName"
+
+
+async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """No async_update_entry call when title already matches display name."""
+    mock_suno_client.suno_display_name = "Suno"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    # Trigger another update — display name matches, so title shouldn't change
+    mock_suno_client.suno_display_name = "Suno"
+    with patch.object(
+        hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
+    ) as mock_update:
+        await coordinator._async_update_data()
+        # display_name == user.display_name so the update branch is skipped entirely
+        for call in mock_update.call_args_list:
+            if "title" in call.kwargs:
+                pytest.fail("async_update_entry should not be called with title when unchanged")

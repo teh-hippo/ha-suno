@@ -149,6 +149,9 @@ class ClerkAuth:
                     self._display_name = username
                 elif first and "@" not in first:
                     self._display_name = f"{first} {last}".strip() if last else first
+                elif username and "@" in username:
+                    # Use email local part as fallback (e.g., "yshvq8dp9v" from Apple relay)
+                    self._display_name = username.split("@")[0].strip()[:100] or None
                 else:
                     self._display_name = None
                 break

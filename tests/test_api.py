@@ -949,7 +949,7 @@ async def test_api_get_429_exhausts_retries() -> None:
 
     session.get = MagicMock(return_value=_mock_response(429))
 
-    with pytest.raises(SunoApiError, match="after retries"):
+    with pytest.raises(SunoApiError, match="after maximum retries"):
         await client._api_get("/api/test")
 
 

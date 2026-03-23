@@ -17,11 +17,16 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoCon
     coordinator = entry.runtime_data
 
     data = coordinator.data
+    rate_limiter = hass.data.get("suno", {}).get("rate_limiter")
     return {
         "config_entry": {
             "unique_id": entry.unique_id,
             "options": dict(entry.options),
             "data": async_redact_data(dict(entry.data), REDACT_KEYS),
+        },
+        "user": {
+            "id": coordinator.user.id,
+            "display_name": coordinator.user.display_name,
         },
         "library": {
             "total_clips": len(data.clips),
@@ -32,5 +37,10 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoCon
             "credits_left": data.credits.credits_left if data.credits else None,
             "monthly_limit": data.credits.monthly_limit if data.credits else None,
             "monthly_usage": data.credits.monthly_usage if data.credits else None,
+        },
+        "rate_limiter": {
+            "is_throttled": rate_limiter.is_throttled if rate_limiter else None,
+            "total_429_count": rate_limiter.total_429_count if rate_limiter else None,
+            "seconds_remaining": rate_limiter.seconds_remaining if rate_limiter else None,
         },
     }

@@ -109,7 +109,8 @@
       }
     },
     "error": {
-      "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission."
+      "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission.",
+      "download_path_conflict": "This download directory is already in use by another Suno account."
     }
   },
   "entity": {
@@ -126,34 +127,31 @@
       "cache_size": {
         "name": "Cache size"
       },
-      "sync_status": {
-        "name": "Sync status"
+      "download_status": {
+        "name": "Download status"
       },
-      "sync_files": {
-        "name": "Synced files"
+      "downloaded_files": {
+        "name": "Downloaded files"
       },
-      "sync_remaining": {
-        "name": "Sync items remaining"
+      "download_remaining": {
+        "name": "Download items remaining"
       },
-      "cached_files": {
-        "name": "Cached files"
+      "download_size": {
+        "name": "Download library size"
       },
-      "sync_size": {
-        "name": "Sync library size"
+      "last_download_run": {
+        "name": "Last download"
       },
-      "sync_last_run": {
-        "name": "Last sync"
-      },
-      "sync_result": {
-        "name": "Last sync result"
+      "last_download_result": {
+        "name": "Last download result"
       }
     },
     "button": {
       "clear_cache": {
         "name": "Clear cache"
       },
-      "clear_sync_library": {
-        "name": "Force re-sync"
+      "download_library": {
+        "name": "Download library"
       }
     }
   },
