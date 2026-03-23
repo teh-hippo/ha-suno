@@ -26,6 +26,7 @@ CONF_LATEST_COUNT = "latest_count"
 CONF_LATEST_DAYS = "latest_days"
 CONF_LATEST_MINIMUM = "latest_minimum"
 CONF_CREATE_PLAYLISTS = "create_playlists"
+CONF_DOWNLOAD_ENABLED = "download_enabled"
 
 # Per-source quality config keys
 CONF_QUALITY_LIKED = "quality_liked"
@@ -41,6 +42,7 @@ CONF_DOWNLOAD_MODE_LATEST = "download_mode_latest"
 DEFAULT_SHOW_LIKED = True
 DEFAULT_SHOW_LATEST = True
 DEFAULT_SHOW_PLAYLISTS = True
+DEFAULT_DOWNLOAD_ENABLED = True
 DEFAULT_CACHE_TTL = 30
 DEFAULT_CACHE_MAX_SIZE = 500
 DEFAULT_ALL_PLAYLISTS = True

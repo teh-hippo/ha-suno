@@ -22,6 +22,7 @@
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
           "show_latest": "Your latest",
+          "download_enabled": "Download songs",
           "download_path": "Download directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
@@ -30,7 +31,8 @@
           "show_playlists": "Include your Suno playlists in the media browser and downloads.",
           "show_liked": "Include your liked songs.",
           "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_path": "Local folder for saving songs. Leave empty for streaming only.",
+          "download_enabled": "Save songs to a local directory.",
+          "download_path": "Local folder for saving songs.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
@@ -55,6 +57,7 @@
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
           "show_latest": "Your latest",
+          "download_enabled": "Download songs",
           "download_path": "Download directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
@@ -63,7 +66,8 @@
           "show_playlists": "Include your Suno playlists in the media browser and downloads.",
           "show_liked": "Include your liked songs.",
           "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_path": "Local folder for saving songs. Leave empty for streaming only.",
+          "download_enabled": "Save songs to a local directory.",
+          "download_path": "Local folder for saving songs.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }

@@ -35,6 +35,7 @@ from .const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
     CONF_CREATE_PLAYLISTS,
+    CONF_DOWNLOAD_ENABLED,
     CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
@@ -52,6 +53,7 @@ from .const import (
     DEFAULT_ALL_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CREATE_PLAYLISTS,
+    DEFAULT_DOWNLOAD_ENABLED,
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_LATEST_COUNT,
     DEFAULT_LATEST_DAYS,
@@ -101,29 +103,38 @@ def _library_schema(opts: dict[str, Any]) -> vol.Schema:
             default=opts.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST),
         ): BooleanSelector(),
         vol.Required(
-            CONF_DOWNLOAD_PATH,
-            default=opts.get(CONF_DOWNLOAD_PATH, ""),
-        ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+            CONF_DOWNLOAD_ENABLED,
+            default=opts.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED),
+        ): BooleanSelector(),
+    }
+    if opts.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED):
+        schema[
+            vol.Required(
+                CONF_DOWNLOAD_PATH,
+                default=opts.get(CONF_DOWNLOAD_PATH, ""),
+            )
+        ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+        if opts.get(CONF_DOWNLOAD_PATH):
+            schema[
+                vol.Required(
+                    CONF_CREATE_PLAYLISTS,
+                    default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
+                )
+            ] = BooleanSelector()
+    schema[
         vol.Required(
             CONF_CACHE_MAX_SIZE,
             default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
-        ): NumberSelector(
-            NumberSelectorConfig(
-                min=100,
-                max=10000,
-                step=100,
-                mode=NumberSelectorMode.BOX,
-                unit_of_measurement="MB",
-            )
-        ),
-    }
-    if opts.get(CONF_DOWNLOAD_PATH):
-        schema[
-            vol.Required(
-                CONF_CREATE_PLAYLISTS,
-                default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
-            )
-        ] = BooleanSelector()
+        )
+    ] = NumberSelector(
+        NumberSelectorConfig(
+            min=100,
+            max=10000,
+            step=100,
+            mode=NumberSelectorMode.BOX,
+            unit_of_measurement="MB",
+        )
+    )
     return vol.Schema(schema)
 
 
@@ -160,6 +171,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_SHOW_PLAYLISTS: True,
                         CONF_SHOW_LIKED: True,
                         CONF_SHOW_LATEST: True,
+                        CONF_DOWNLOAD_ENABLED: DEFAULT_DOWNLOAD_ENABLED,
                         CONF_DOWNLOAD_PATH: "",
                         CONF_CREATE_PLAYLISTS: True,
                         CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,

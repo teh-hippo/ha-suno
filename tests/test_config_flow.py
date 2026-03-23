@@ -14,6 +14,7 @@ from custom_components.suno.const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
     CONF_CREATE_PLAYLISTS,
+    CONF_DOWNLOAD_ENABLED,
     CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
@@ -29,6 +30,7 @@ from custom_components.suno.const import (
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
+    DEFAULT_DOWNLOAD_ENABLED,
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_LATEST_COUNT,
     DEFAULT_LATEST_DAYS,
@@ -88,6 +90,7 @@ async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry: AsyncMoc
     assert result["options"][CONF_SHOW_LIKED] is True
     assert result["options"][CONF_SHOW_LATEST] is True
     assert result["options"][CONF_SHOW_PLAYLISTS] is True
+    assert result["options"][CONF_DOWNLOAD_ENABLED] is DEFAULT_DOWNLOAD_ENABLED
     assert result["options"][CONF_DOWNLOAD_PATH] == ""
     assert result["options"][CONF_CREATE_PLAYLISTS] is True
     assert result["options"][CONF_CACHE_MAX_SIZE] == DEFAULT_CACHE_MAX_SIZE
@@ -304,7 +307,7 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
                 CONF_SHOW_LIKED: False,
                 CONF_SHOW_LATEST: False,
                 CONF_SHOW_PLAYLISTS: False,
-                CONF_DOWNLOAD_PATH: "",
+                CONF_DOWNLOAD_ENABLED: False,
                 CONF_CACHE_MAX_SIZE: 1000,
             },
         )
@@ -332,7 +335,7 @@ async def test_options_flow_shows_form(hass: HomeAssistant, mock_suno_client: As
 
 
 async def test_options_flow_library_step(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Options flow Library page has the 5 expected fields (create_playlists only when download_path set)."""
+    """Options flow Library page has the expected fields with download toggle."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -344,6 +347,7 @@ async def test_options_flow_library_step(hass: HomeAssistant, mock_suno_client: 
     assert CONF_SHOW_PLAYLISTS in schema_keys
     assert CONF_SHOW_LIKED in schema_keys
     assert CONF_SHOW_LATEST in schema_keys
+    assert CONF_DOWNLOAD_ENABLED in schema_keys
     assert CONF_DOWNLOAD_PATH in schema_keys
     assert CONF_CACHE_MAX_SIZE in schema_keys
     # create_playlists only shown when download_path is non-empty (default is "")
@@ -370,7 +374,7 @@ async def test_options_flow_conditional_routing(hass: HomeAssistant, mock_suno_c
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
                 CONF_SHOW_LATEST: False,
-                CONF_DOWNLOAD_PATH: "",
+                CONF_DOWNLOAD_ENABLED: False,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
             },
         )
@@ -402,6 +406,7 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
                 CONF_SHOW_LIKED: True,
                 CONF_SHOW_LATEST: True,
                 CONF_SHOW_PLAYLISTS: True,
+                CONF_DOWNLOAD_ENABLED: True,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: 2000,
@@ -490,6 +495,7 @@ async def test_download_path_conflict_detected(hass: HomeAssistant, mock_suno_cl
                 CONF_SHOW_PLAYLISTS: True,
                 CONF_SHOW_LIKED: True,
                 CONF_SHOW_LATEST: True,
+                CONF_DOWNLOAD_ENABLED: True,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
@@ -523,6 +529,7 @@ async def test_download_path_no_conflict_different_paths(hass: HomeAssistant, mo
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
                 CONF_SHOW_LATEST: False,
+                CONF_DOWNLOAD_ENABLED: True,
                 CONF_DOWNLOAD_PATH: "/media/suno-a",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
@@ -553,6 +560,7 @@ async def test_download_path_self_reference_no_conflict(hass: HomeAssistant, moc
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
                 CONF_SHOW_LATEST: False,
+                CONF_DOWNLOAD_ENABLED: True,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,

@@ -17,9 +17,11 @@ from .auth import ClerkAuth
 from .const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
+    CONF_DOWNLOAD_ENABLED,
     CONF_DOWNLOAD_PATH,
     DATA_VIEW_REGISTERED,
     DEFAULT_CACHE_MAX_SIZE,
+    DEFAULT_DOWNLOAD_ENABLED,
     DOMAIN,
 )
 from .coordinator import SunoCoordinator
@@ -97,8 +99,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
         hass.http.register_view(SunoMediaProxyView(hass))
         hass.data[DATA_VIEW_REGISTERED] = True
 
-    # Create download manager when download_path is configured
-    if entry.options.get(CONF_DOWNLOAD_PATH):
+    # Create download manager when downloads are enabled and path is configured
+    if entry.options.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED) and entry.options.get(CONF_DOWNLOAD_PATH):
         from .download import SunoDownloadManager  # noqa: PLC0415
 
         coordinator.download_manager = await SunoDownloadManager.async_setup(hass, entry, coordinator, client)

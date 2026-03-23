@@ -14,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SunoConfigEntry
-from .const import CONF_DOWNLOAD_PATH
+from .const import CONF_DOWNLOAD_ENABLED, CONF_DOWNLOAD_PATH, DEFAULT_DOWNLOAD_ENABLED
 from .coordinator import SunoCoordinator, SunoData
 
 PARALLEL_UPDATES = 0
@@ -242,7 +242,7 @@ async def async_setup_entry(
     entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _LIBRARY_SENSORS)
     entities.append(SunoCacheSizeSensor(coordinator, entry))
 
-    if entry.options.get(CONF_DOWNLOAD_PATH):
+    if entry.options.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED) and entry.options.get(CONF_DOWNLOAD_PATH):
         entities.append(SunoDownloadStatusSensor(coordinator, entry))
         entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _DOWNLOAD_SENSORS)
 
