@@ -385,7 +385,7 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
         CONF_LATEST_DAYS: None,
     }
 
-    desired, preserved = await sync._build_desired(options, client)
+    desired, preserved, _ = await sync._build_desired(options, client)
 
     # clip-liked should be preserved since liked API failed
     assert "clip-liked" in preserved
@@ -434,7 +434,7 @@ async def test_latest_count_only(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: 5,
         CONF_LATEST_DAYS: None,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 5
     ids = {d.clip.id for d in desired}
     assert ids == {f"clip-{i}" for i in range(5)}
@@ -470,7 +470,7 @@ async def test_latest_days_only(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: 7,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
     assert "clip-new-1" in ids
     assert "clip-new-2" in ids
@@ -512,7 +512,7 @@ async def test_latest_both_and(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: 3,
         CONF_LATEST_DAYS: 7,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
     # count=3 gives {clip-r0, clip-r1, clip-r2}, days=7 gives all clip-r*, intersection = {clip-r0, clip-r1, clip-r2}
     assert len(ids) == 3
@@ -540,7 +540,7 @@ async def test_latest_both_zero_disabled(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: None,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 0
     client.get_all_songs.assert_not_called()
 
@@ -592,8 +592,9 @@ class TestWriteM3u8Playlists:
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
         desired = [DownloadItem(clip=clip, collection="My Playlist", sources=["playlist:pl1"], quality=QUALITY_HIGH)]
+        source_to_name = {"playlist:pl1": "My Playlist"}
 
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
         content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
         assert content.startswith("#EXTM3U\n")
@@ -606,11 +607,79 @@ class TestWriteM3u8Playlists:
         desired = [
             DownloadItem(clip=clip, collection="Favourites", sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)
         ]
+        source_to_name = {"liked": "Liked Songs", "playlist:pl1": "Favourites"}
 
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
         assert (tmp_path / "Liked Songs.m3u8").exists()
         assert (tmp_path / "Favourites.m3u8").exists()
+
+    def test_clip_liked_and_in_playlist_no_duplicates(self, tmp_path: Path) -> None:
+        """A liked clip also in a playlist appears once in each M3U8, not twice in Liked Songs."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [
+            DownloadItem(clip=clip, collection="Liked Songs", sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)
+        ]
+        source_to_name = {"liked": "Liked Songs", "playlist:pl1": "The Second album"}
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
+
+        liked_content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        album_content = (tmp_path / "The Second album.m3u8").read_text(encoding="utf-8")
+        assert liked_content.count("song.flac") == 1
+        assert album_content.count("song.flac") == 1
+
+    def test_clip_in_two_playlists(self, tmp_path: Path) -> None:
+        """A clip in two playlists appears in both M3U8 files."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [
+            DownloadItem(clip=clip, collection="Playlist A", sources=["playlist:a", "playlist:b"], quality=QUALITY_HIGH)
+        ]
+        source_to_name = {"playlist:a": "Playlist A", "playlist:b": "Playlist B"}
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
+
+        assert (tmp_path / "Playlist A.m3u8").exists()
+        assert (tmp_path / "Playlist B.m3u8").exists()
+        a_content = (tmp_path / "Playlist A.m3u8").read_text(encoding="utf-8")
+        b_content = (tmp_path / "Playlist B.m3u8").read_text(encoding="utf-8")
+        assert "song.flac" in a_content
+        assert "song.flac" in b_content
+
+    def test_liked_plus_two_playlists(self, tmp_path: Path) -> None:
+        """A clip that is liked and in two playlists appears in all three M3U8 files."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [
+            DownloadItem(
+                clip=clip,
+                collection="Liked Songs",
+                sources=["liked", "playlist:a", "playlist:b"],
+                quality=QUALITY_HIGH,
+            )
+        ]
+        source_to_name = {"liked": "Liked Songs", "playlist:a": "Keep", "playlist:b": "Zac & Xavi"}
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
+
+        assert (tmp_path / "Liked Songs.m3u8").exists()
+        assert (tmp_path / "Keep.m3u8").exists()
+        assert (tmp_path / "Zac & Xavi.m3u8").exists()
+        for f in ["Liked Songs.m3u8", "Keep.m3u8", "Zac & Xavi.m3u8"]:
+            content = (tmp_path / f).read_text(encoding="utf-8")
+            assert content.count("song.flac") == 1
+
+    def test_latest_source_excluded_from_m3u8(self, tmp_path: Path) -> None:
+        """Clips with only a 'latest' source produce no M3U8 file."""
+        clip = self._make_clip()
+        clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
+        desired = [DownloadItem(clip=clip, collection="Latest", sources=["latest"], quality=QUALITY_STANDARD)]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired)
+
+        assert not list(tmp_path.glob("*.m3u8"))
 
     def test_cleans_stale_m3u8(self, tmp_path: Path) -> None:
         """Stale M3U8 files from previous runs are removed."""
@@ -685,7 +754,7 @@ async def test_quality_change_triggers_redownload(hass: HomeAssistant, tmp_path:
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
-        patch.object(sync, "_build_desired", return_value=(desired, set())),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"})),
     ):
         opts = {
             CONF_DOWNLOAD_PATH: str(sync_dir),
@@ -889,7 +958,7 @@ async def test_download_clip_mp3_path(hass: HomeAssistant, tmp_path: Path) -> No
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
-        patch.object(sync, "_build_desired", return_value=(desired, set())),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"})),
     ):
         opts = {
             CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
@@ -1279,7 +1348,7 @@ async def test_download_manager_skips_disabled_source(hass: HomeAssistant) -> No
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: None,
     }
-    desired, _ = await mgr._build_desired(options, client)
+    desired, _, _ = await mgr._build_desired(options, client)
     assert len(desired) == 0
     # get_liked_songs should not be called since show_liked is False
     client.get_liked_songs.assert_not_called()
@@ -1332,7 +1401,7 @@ async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 7,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     # Intersection of top-5 and within-7-days = 3 recent clips
     # Minimum = 7 → pad to 7 with most recent clips
     assert len(desired) == 7
@@ -1362,7 +1431,7 @@ async def test_latest_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 0,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     # count=3, days=7, all clips are old → intersection is empty, minimum=0 → no padding
     assert len(desired) == 0
 
@@ -1387,7 +1456,7 @@ async def test_latest_minimum_alone_triggers_latest(hass: HomeAssistant) -> None
         CONF_LATEST_DAYS: None,
         CONF_LATEST_MINIMUM: 5,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     # count=0, days=0 → empty set, but minimum=5 → pad to 5
     assert len(desired) == 5
 
@@ -1412,7 +1481,7 @@ async def test_latest_minimum_capped_by_library_size(hass: HomeAssistant) -> Non
         CONF_LATEST_DAYS: None,
         CONF_LATEST_MINIMUM: 100,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     # Only 3 clips exist, minimum=100 but capped
     assert len(desired) == 3
 
@@ -1441,7 +1510,7 @@ async def test_latest_minimum_overrides_expired_days(hass: HomeAssistant) -> Non
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 5,
     }
-    desired, _ = await sync._build_desired(options, client)
+    desired, _, _ = await sync._build_desired(options, client)
     # days=7 → no clips match, but minimum=5 → pad with 5 most recent
     assert len(desired) == 5
 

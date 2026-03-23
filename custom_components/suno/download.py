@@ -91,8 +91,20 @@ def _build_download_summary(downloaded: int, removed: int, meta_updates: int) ->
     return ", ".join(parts) if parts else "No change"
 
 
-def _write_m3u8_playlists(base: Path, clips_state: dict[str, Any], desired: list[DownloadItem]) -> None:
-    """Write M3U8 playlist files for Jellyfin/media player compatibility."""
+def _write_m3u8_playlists(
+    base: Path,
+    clips_state: dict[str, Any],
+    desired: list[DownloadItem],
+    source_to_name: dict[str, str] | None = None,
+) -> None:
+    """Write M3U8 playlist files for Jellyfin/media player compatibility.
+
+    Each source tag (e.g. "liked", "playlist:abc") is resolved to a playlist
+    name via *source_to_name*.  The "liked" source always maps to
+    "Liked Songs"; "latest" sources are intentionally excluded from playlists.
+    """
+    if source_to_name is None:
+        source_to_name = {}
     # Build playlist_name → [(abs_path, title, duration)] from sources
     playlists: dict[str, list[tuple[str, str, int]]] = {}
     for item in desired:
@@ -101,25 +113,29 @@ def _write_m3u8_playlists(base: Path, clips_state: dict[str, Any], desired: list
             continue
         abs_path = str(base / entry["path"])
         title = entry.get("title") or item.clip.title or "Untitled"
+        # Strip newlines to prevent M3U8 directive injection
+        title = title.replace("\n", " ").replace("\r", "")
         duration = int(item.clip.duration) if item.clip.duration else -1
         for source in item.sources:
             if source == "liked":
                 playlists.setdefault("Liked Songs", []).append((abs_path, title, duration))
             elif source.startswith("playlist:"):
-                playlists.setdefault(item.collection, []).append((abs_path, title, duration))
+                playlist_name = source_to_name.get(source, source)
+                playlists.setdefault(playlist_name, []).append((abs_path, title, duration))
 
     # Write M3U8 files
     written: set[str] = set()
     for name, tracks in playlists.items():
-        filename = f"{_sanitise_filename(name)}.m3u8"
-        written.add(filename)
-        lines = [f"#EXTM3U\n#PLAYLIST:{name}"]
+        safe_name = name.replace("\n", " ").replace("\r", "")
+        filename = f"{_sanitise_filename(safe_name)}.m3u8"
+        lines = [f"#EXTM3U\n#PLAYLIST:{safe_name}"]
         for abs_path, title, duration in tracks:
             lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
         try:
             (base / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            written.add(filename)
         except OSError:
-            pass
+            _LOGGER.warning("Failed to write playlist file: %s", filename)
 
     # Clean up stale M3U8 files
     for existing in base.glob("*.m3u8"):
@@ -135,6 +151,8 @@ def _clip_path(clip: SunoClip, quality: str) -> str:
     """
     title = _sanitise_filename(clip.title or "untitled")
     date_str = clip.created_at[:10] if clip.created_at else "unknown"
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        date_str = "unknown"
     clip_short = clip.id[:8]
     ext = "flac" if quality == QUALITY_HIGH else "mp3"
     return f"{date_str}/{title} [{clip_short}].{ext}"
@@ -361,7 +379,7 @@ class SunoDownloadManager:
             await self.hass.async_add_executor_job(shutil.rmtree, str(trash_dir), True)
             _LOGGER.info("Removed legacy .trash directory")
         self._state.pop("trash", None)
-        desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
+        desired, preserved_ids, source_to_name = await self._build_desired(options, client, coordinator_data)
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[DownloadItem] = []
         meta_updates = 0
@@ -451,7 +469,9 @@ class SunoDownloadManager:
         self._state["last_result"] = self._last_result
         await self._save_state(base)
         if options.get(CONF_CREATE_PLAYLISTS):
-            await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)
+            await self.hass.async_add_executor_job(
+                _write_m3u8_playlists, base, clips_state, desired, source_to_name
+            )
 
         orphans = await self._reconcile_disk(base, clips_state)
         if orphans:
@@ -489,9 +509,10 @@ class SunoDownloadManager:
         options: dict[str, Any],
         client: Any,
         coordinator_data: SunoData | None = None,
-    ) -> tuple[list[DownloadItem], set[str]]:
+    ) -> tuple[list[DownloadItem], set[str], dict[str, str]]:
         clip_map: dict[str, DownloadItem] = {}
         preserved: set[str] = set()
+        source_to_name: dict[str, str] = {"liked": "Liked Songs"}
         prev_clips = self._state.get("clips", {})
         if options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
@@ -511,12 +532,13 @@ class SunoDownloadManager:
                 for pl in playlists:
                     if not sync_all and pl.id not in selected_ids:
                         continue
+                    tag = f"playlist:{pl.id}"
+                    source_to_name[tag] = pl.name
                     try:
                         for clip in await client.get_playlist_clips(pl.id):
-                            _add_clip(clip_map, clip, pl.name, f"playlist:{pl.id}", playlist_quality)
+                            _add_clip(clip_map, clip, pl.name, tag, playlist_quality)
                     except Exception:
                         _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
-                        tag = f"playlist:{pl.id}"
                         _preserve_by(preserved, prev_clips, lambda s, t=tag: t in s)
             except Exception:
                 _LOGGER.warning("Failed to fetch playlists for sync")
@@ -565,7 +587,7 @@ class SunoDownloadManager:
                 _LOGGER.warning("Failed to fetch latest songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "latest" in s)
         preserved -= clip_map.keys()
-        return list(clip_map.values()), preserved
+        return list(clip_map.values()), preserved, source_to_name
 
     async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
