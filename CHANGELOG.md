@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.3.1 (2026-03-23)
+
+### Bug Fixes
+
+- Remove stale migration comment
+  ([`c171eb5`](https://github.com/teh-hippo/ha-suno/commit/c171eb51eba303d97a6f87f36d338e2771abd6d1))
+
+### Chores
+
+- Align requires-python with HA core (drop upper bound)
+  ([`db2ed6f`](https://github.com/teh-hippo/ha-suno/commit/db2ed6f842d221cef0350a6446b37f1554a71367))
+
+
 ## v3.3.0 (2026-03-23)
 
 ### Chores
