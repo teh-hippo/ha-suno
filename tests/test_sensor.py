@@ -41,18 +41,17 @@ def test_suno_data_defaults() -> None:
 
 
 async def test_sensor_setup_creates_all_sensors(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Platform setup creates credits, total_songs, liked_songs, and cache_size sensors."""
+    """Platform setup creates credits, liked_songs, and cache_size sensors."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     states = hass.states.async_all("sensor")
-    # credits, total_songs, liked_songs, cache_size (download disabled by default - no path)
-    assert len(states) == 4
+    # credits, liked_songs, cache_size (download disabled by default - no path)
+    assert len(states) == 3
 
     state_ids = {s.entity_id for s in states}
     assert "sensor.suno_credits" in state_ids
-    assert "sensor.suno_total_songs" in state_ids
     assert "sensor.suno_liked_songs" in state_ids
     assert "sensor.suno_cache_size" in state_ids
 
@@ -68,17 +67,6 @@ async def test_credits_sensor_state(hass: HomeAssistant, mock_suno_client: Async
     assert state.state == "1500"
     assert state.attributes["monthly_limit"] == 2500
     assert state.attributes["monthly_usage"] == 1000
-
-
-async def test_total_songs_sensor(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Total songs sensor reports clip count."""
-    entry = make_entry()
-    with patch_suno_setup(mock_suno_client):
-        await setup_entry(hass, entry)
-
-    state = hass.states.get("sensor.suno_total_songs")
-    assert state is not None
-    assert state.state == "2"  # sample_clips returns 2
 
 
 async def test_liked_songs_sensor(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -116,7 +104,6 @@ async def test_sensor_unique_ids(hass: HomeAssistant, mock_suno_client: AsyncMoc
     entities = er_mod.async_entries_for_config_entry(registry, entry.entry_id)
     unique_ids = {e.unique_id for e in entities}
     assert "test-user-id-123_credits" in unique_ids
-    assert "test-user-id-123_total_songs" in unique_ids
     assert "test-user-id-123_liked_songs" in unique_ids
     assert "test-user-id-123_cache_size" in unique_ids
 

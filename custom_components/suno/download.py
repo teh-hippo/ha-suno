@@ -29,6 +29,7 @@ from .const import (
     CONF_DOWNLOAD_PATH,
     CONF_LATEST_COUNT,
     CONF_LATEST_DAYS,
+    CONF_LATEST_MINIMUM,
     CONF_PLAYLISTS,
     CONF_QUALITY_LATEST,
     CONF_QUALITY_LIKED,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_LATEST_COUNT,
     DEFAULT_LATEST_DAYS,
+    DEFAULT_LATEST_MINIMUM,
     DEFAULT_SHOW_LIKED,
     DOMAIN,
     DOWNLOAD_DELAY,
@@ -226,6 +228,7 @@ class SunoDownloadManager:
         """Load persisted download state."""
         if (data := await self._store.async_load()) and isinstance(data, dict):
             self._state = data
+            self._last_result = data.get("last_result", "")
 
     @classmethod
     async def async_setup(
@@ -408,7 +411,7 @@ class SunoDownloadManager:
             _LOGGER.error("Cannot create download directory: %s", download_path)
             self._errors += 1
             return
-        is_bootstrap = self.total_files == 0 and len(to_download) > DOWNLOAD_MAX_PER_RUN
+        is_bootstrap = len(to_download) > DOWNLOAD_MAX_PER_RUN
         max_dl = DOWNLOAD_MAX_BOOTSTRAP if is_bootstrap else DOWNLOAD_MAX_PER_RUN
         if is_bootstrap:
             _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
@@ -441,7 +444,11 @@ class SunoDownloadManager:
         self._state["clips"] = clips_state
         self._state["last_download"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
-        self._last_result = _build_download_summary(downloaded, len(to_delete), meta_updates)
+        if self._pending > 0:
+            self._last_result = f"Downloading ({self._pending} remaining)"
+        else:
+            self._last_result = _build_download_summary(downloaded, len(to_delete), meta_updates)
+        self._state["last_result"] = self._last_result
         await self._save_state(base)
         if options.get(CONF_CREATE_PLAYLISTS):
             await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)
@@ -516,7 +523,8 @@ class SunoDownloadManager:
                 _preserve_by(preserved, prev_clips, lambda s: any(x.startswith("playlist:") for x in s))
         latest_count = options.get(CONF_LATEST_COUNT, DEFAULT_LATEST_COUNT)
         latest_days = options.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS)
-        if latest_count or latest_days:
+        minimum = int(options.get(CONF_LATEST_MINIMUM, DEFAULT_LATEST_MINIMUM))
+        if latest_count or latest_days or minimum:
             latest_quality = options.get(CONF_QUALITY_LATEST, QUALITY_STANDARD)
             try:
                 all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
@@ -545,6 +553,10 @@ class SunoDownloadManager:
                     latest_set = by_days
                 else:
                     latest_set = set()
+
+                # Minimum floor: pad with most recent songs if below threshold
+                if minimum and len(latest_set) < minimum:
+                    latest_set |= {c.id for c in all_clips[:minimum]}
 
                 for clip in all_clips:
                     if clip.id in latest_set:

@@ -81,7 +81,6 @@ class _SimpleSensor(_SunoSensor):
 # ── Sensor definitions ──────────────────────────────────────────────
 
 _LIBRARY_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | None]] = [
-    ("total_songs", "mdi:music-note-plus", lambda c: len(c.data.clips), None),
     ("liked_songs", "mdi:heart-outline", lambda c: len(c.data.liked_clips), None),
 ]
 

@@ -24,6 +24,7 @@ CONF_ALL_PLAYLISTS = "all_playlists"
 CONF_PLAYLISTS = "playlists"
 CONF_LATEST_COUNT = "latest_count"
 CONF_LATEST_DAYS = "latest_days"
+CONF_LATEST_MINIMUM = "latest_minimum"
 CONF_CREATE_PLAYLISTS = "create_playlists"
 
 # Per-source quality config keys
@@ -46,6 +47,7 @@ DEFAULT_ALL_PLAYLISTS = True
 DEFAULT_CREATE_PLAYLISTS = True
 DEFAULT_LATEST_COUNT = 20
 DEFAULT_LATEST_DAYS = 7
+DEFAULT_LATEST_MINIMUM = 0
 DEFAULT_DOWNLOAD_MODE = "mirror"
 
 # Quality values

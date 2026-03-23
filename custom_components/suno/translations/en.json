@@ -17,7 +17,7 @@
       },
       "reconfigure": {
         "title": "Library",
-        "description": "Choose which parts of your Suno library to include.",
+        "description": "Choose which parts of your Suno library to manage.",
         "data": {
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
@@ -27,6 +27,9 @@
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
+          "show_playlists": "Include your Suno playlists in the media browser and downloads.",
+          "show_liked": "Include your liked songs.",
+          "show_latest": "Include your most recent songs, filtered by count and age.",
           "download_path": "Local folder for saving songs. Leave empty for streaming only.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
@@ -47,7 +50,7 @@
     "step": {
       "init": {
         "title": "Library",
-        "description": "Choose which parts of your Suno library to include.",
+        "description": "Choose which parts of your Suno library to manage.",
         "data": {
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
@@ -57,6 +60,9 @@
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
+          "show_playlists": "Include your Suno playlists in the media browser and downloads.",
+          "show_liked": "Include your liked songs.",
+          "show_latest": "Include your most recent songs, filtered by count and age.",
           "download_path": "Local folder for saving songs. Leave empty for streaming only.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
@@ -71,8 +77,8 @@
           "all_playlists": "Download all playlists"
         },
         "data_description": {
-          "download_mode_playlists": "Mirror removes local files when songs are removed from a playlist. Collect keeps all downloads permanently.",
-          "all_playlists": "Download all your playlists. Turn off to choose specific playlists."
+          "download_mode_playlists": "Mirror removes local files when songs are removed from a playlist. Keep retains all downloads permanently, even when removed from your library.",
+          "all_playlists": "Turn off to choose specific playlists on the next page."
         }
       },
       "liked": {
@@ -83,7 +89,7 @@
           "download_mode_liked": "Mode"
         },
         "data_description": {
-          "download_mode_liked": "Mirror removes local files when you unlike a song. Collect keeps all downloads permanently."
+          "download_mode_liked": "Mirror removes local files when you unlike a song. Keep retains all downloads permanently."
         }
       },
       "latest": {
@@ -93,12 +99,14 @@
           "quality_latest": "Quality",
           "download_mode_latest": "Mode",
           "latest_count": "Maximum songs",
-          "latest_days": "Lookback period (days)"
+          "latest_days": "Lookback period (days)",
+          "latest_minimum": "Always keep at least"
         },
         "data_description": {
-          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Collect keeps all downloads permanently.",
+          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Keep retains all downloads permanently.",
           "latest_count": "Include up to this many of your latest songs. Set to 0 for no limit.",
-          "latest_days": "Only include songs created within this many days. Set to 0 for no limit."
+          "latest_days": "Only include songs created within this many days. Set to 0 for no limit.",
+          "latest_minimum": "Always include at least this many recent songs, even if they fall outside the lookback period. Set to 0 to disable."
         }
       },
       "select_playlists": {
@@ -117,9 +125,6 @@
     "sensor": {
       "credits": {
         "name": "Credits"
-      },
-      "total_songs": {
-        "name": "Total songs"
       },
       "liked_songs": {
         "name": "Liked songs"

@@ -99,7 +99,6 @@ Synced files use stable clip-ID-based paths (e.g., `liked/abcd1234.flac`). This 
 | Entity | Type | Description |
 |--------|------|-------------|
 | `sensor.suno_credits` | Diagnostic | Remaining credits (attrs: `monthly_limit`, `monthly_usage`, `period`) |
-| `sensor.suno_total_songs` | Diagnostic | Total songs in your library |
 | `sensor.suno_liked_songs` | Diagnostic | Number of liked songs |
 | `sensor.suno_cache_size` | Diagnostic | Local audio cache size in MB |
 | `sensor.suno_sync_status`* | Diagnostic | Sync state: idle / syncing / error |

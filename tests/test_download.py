@@ -17,6 +17,7 @@ from custom_components.suno.const import (
     CONF_DOWNLOAD_PATH,
     CONF_LATEST_COUNT,
     CONF_LATEST_DAYS,
+    CONF_LATEST_MINIMUM,
     CONF_PLAYLISTS,
     CONF_SHOW_LIKED,
     DOWNLOAD_MODE_COLLECT,
@@ -1298,3 +1299,209 @@ async def test_download_manager_empty_path_no_download(hass: HomeAssistant) -> N
     # No download operations should have been attempted
     client.get_liked_songs.assert_not_called()
     assert mgr.total_files == 0
+
+
+# ── Latest minimum songs ───────────────────────────────────────────
+
+
+async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None:
+    """Minimum pads with most recent clips when intersection is below threshold."""
+    from datetime import timedelta
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    now = datetime.now(tz=UTC)
+    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 10 clips: 3 recent within 7 days, 7 old outside window
+    clips = [_make_dated_clip(f"clip-new-{i}", created=recent_ts) for i in range(3)] + [
+        _make_dated_clip(f"clip-old-{i}", created=old_ts) for i in range(7)
+    ]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=clips)
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_LATEST_COUNT: 5,
+        CONF_LATEST_DAYS: 7,
+        CONF_LATEST_MINIMUM: 7,
+    }
+    desired, _ = await sync._build_desired(options, client)
+    # Intersection of top-5 and within-7-days = 3 recent clips
+    # Minimum = 7 → pad to 7 with most recent clips
+    assert len(desired) == 7
+
+
+async def test_latest_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
+    """Minimum=0 has no effect."""
+    from datetime import timedelta
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    now = datetime.now(tz=UTC)
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [_make_dated_clip(f"clip-{i}", created=old_ts) for i in range(5)]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=clips)
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_LATEST_COUNT: 3,
+        CONF_LATEST_DAYS: 7,
+        CONF_LATEST_MINIMUM: 0,
+    }
+    desired, _ = await sync._build_desired(options, client)
+    # count=3, days=7, all clips are old → intersection is empty, minimum=0 → no padding
+    assert len(desired) == 0
+
+
+async def test_latest_minimum_alone_triggers_latest(hass: HomeAssistant) -> None:
+    """Minimum works when count=0 and days=0 (both filters disabled)."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clips = [_make_dated_clip(f"clip-{i}") for i in range(10)]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=clips)
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_LATEST_COUNT: None,
+        CONF_LATEST_DAYS: None,
+        CONF_LATEST_MINIMUM: 5,
+    }
+    desired, _ = await sync._build_desired(options, client)
+    # count=0, days=0 → empty set, but minimum=5 → pad to 5
+    assert len(desired) == 5
+
+
+async def test_latest_minimum_capped_by_library_size(hass: HomeAssistant) -> None:
+    """Minimum can't exceed available clips."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clips = [_make_dated_clip(f"clip-{i}") for i in range(3)]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=clips)
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_LATEST_COUNT: None,
+        CONF_LATEST_DAYS: None,
+        CONF_LATEST_MINIMUM: 100,
+    }
+    desired, _ = await sync._build_desired(options, client)
+    # Only 3 clips exist, minimum=100 but capped
+    assert len(desired) == 3
+
+
+async def test_latest_minimum_overrides_expired_days(hass: HomeAssistant) -> None:
+    """Minimum pads even when all clips are outside lookback period."""
+    from datetime import timedelta
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    now = datetime.now(tz=UTC)
+    old_ts = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [_make_dated_clip(f"clip-{i}", created=old_ts) for i in range(8)]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=clips)
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_LATEST_COUNT: None,
+        CONF_LATEST_DAYS: 7,
+        CONF_LATEST_MINIMUM: 5,
+    }
+    desired, _ = await sync._build_desired(options, client)
+    # days=7 → no clips match, but minimum=5 → pad with 5 most recent
+    assert len(desired) == 5
+
+
+# ── _last_result persistence ──────────────────────────────────────
+
+
+async def test_last_result_persisted_and_restored(hass: HomeAssistant) -> None:
+    """_last_result is saved to state and restored on init."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    stored = {
+        "clips": {},
+        "last_download": "2026-03-22T08:00:00+00:00",
+        "last_result": "3 new songs, 1 removal",
+    }
+    with patch.object(sync._store, "async_load", return_value=stored):
+        await sync.async_init()
+
+    assert sync.last_result == "3 new songs, 1 removal"
+
+
+# ── Bootstrap remaining display ───────────────────────────────────
+
+
+async def test_bootstrap_shows_remaining(hass: HomeAssistant, tmp_path: Path) -> None:
+    """During bootstrap, last_result shows 'Downloading (X remaining)'."""
+    from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    # Create enough clips to trigger bootstrap AND exceed bootstrap cap
+    num_clips = DOWNLOAD_MAX_BOOTSTRAP + 5
+    clips = [_make_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=clips)
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Bootstrap caps downloads, so pending > 0 → shows remaining message
+    assert "remaining" in sync.last_result
+    assert sync._state["last_result"] == sync.last_result

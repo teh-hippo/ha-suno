@@ -41,6 +41,7 @@ from .const import (
     CONF_DOWNLOAD_PATH,
     CONF_LATEST_COUNT,
     CONF_LATEST_DAYS,
+    CONF_LATEST_MINIMUM,
     CONF_PLAYLISTS,
     CONF_QUALITY_LATEST,
     CONF_QUALITY_LIKED,
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_LATEST_COUNT,
     DEFAULT_LATEST_DAYS,
+    DEFAULT_LATEST_MINIMUM,
     DEFAULT_SHOW_LATEST,
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_PLAYLISTS,
@@ -71,7 +73,7 @@ QUALITY_OPTIONS = [
 ]
 MODE_OPTIONS = [
     SelectOptionDict(value="mirror", label="Mirror"),
-    SelectOptionDict(value="collect", label="Collect"),
+    SelectOptionDict(value="collect", label="Keep"),
 ]
 
 
@@ -85,42 +87,44 @@ def _mode_selector() -> SelectSelector:
 
 def _library_schema(opts: dict[str, Any]) -> vol.Schema:
     """Build schema for the Library options page."""
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_SHOW_PLAYLISTS,
-                default=opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_SHOW_LIKED,
-                default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_SHOW_LATEST,
-                default=opts.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_DOWNLOAD_PATH,
-                default=opts.get(CONF_DOWNLOAD_PATH, ""),
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+    schema: dict[Any, Any] = {
+        vol.Required(
+            CONF_SHOW_PLAYLISTS,
+            default=opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_SHOW_LIKED,
+            default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_SHOW_LATEST,
+            default=opts.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST),
+        ): BooleanSelector(),
+        vol.Required(
+            CONF_DOWNLOAD_PATH,
+            default=opts.get(CONF_DOWNLOAD_PATH, ""),
+        ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
+        vol.Required(
+            CONF_CACHE_MAX_SIZE,
+            default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=100,
+                max=10000,
+                step=100,
+                mode=NumberSelectorMode.BOX,
+                unit_of_measurement="MB",
+            )
+        ),
+    }
+    if opts.get(CONF_DOWNLOAD_PATH):
+        schema[
             vol.Required(
                 CONF_CREATE_PLAYLISTS,
                 default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
-            ): BooleanSelector(),
-            vol.Required(
-                CONF_CACHE_MAX_SIZE,
-                default=opts.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE),
-            ): NumberSelector(
-                NumberSelectorConfig(
-                    min=100,
-                    max=10000,
-                    step=100,
-                    mode=NumberSelectorMode.BOX,
-                    unit_of_measurement="MB",
-                )
-            ),
-        }
-    )
+            )
+        ] = BooleanSelector()
+    return vol.Schema(schema)
 
 
 class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -167,6 +171,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_DOWNLOAD_MODE_LATEST: DEFAULT_DOWNLOAD_MODE,
                         CONF_LATEST_COUNT: DEFAULT_LATEST_COUNT,
                         CONF_LATEST_DAYS: DEFAULT_LATEST_DAYS,
+                        CONF_LATEST_MINIMUM: DEFAULT_LATEST_MINIMUM,
                         CONF_ALL_PLAYLISTS: True,
                         CONF_PLAYLISTS: [],
                     },
@@ -387,6 +392,10 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                     CONF_LATEST_DAYS,
                     default=opts.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS),
                 ): NumberSelector(NumberSelectorConfig(min=0, max=365, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Required(
+                    CONF_LATEST_MINIMUM,
+                    default=opts.get(CONF_LATEST_MINIMUM, DEFAULT_LATEST_MINIMUM),
+                ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
             }
         )
         return self.async_show_form(step_id="latest", data_schema=schema)
