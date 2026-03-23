@@ -19,7 +19,6 @@ from .models import SunoClip, clip_meta_hash
 
 if TYPE_CHECKING:
     from .cache import SunoCache
-    from .download import SunoDownloadManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,51 +33,44 @@ class SunoMediaProxyView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._inflight: dict[str, asyncio.Future[bytes | None]] = {}
-        self._clips_by_id: dict[str, SunoClip] = {}
+        self._clips_by_id: dict[str, tuple[SunoClip, SunoCoordinator]] = {}
         self._clips_generation: int = -1
 
-    def _find_clip(self, clip_id: str) -> SunoClip | None:
-        """Look up a clip across all active coordinators."""
+    def _find_clip(self, clip_id: str) -> tuple[SunoClip | None, SunoCoordinator | None]:
+        """Look up a clip and its owning coordinator across all active coordinators."""
         generation = 0
         entries = self.hass.config_entries.async_entries(DOMAIN)
         for entry in entries:
             if (coordinator := getattr(entry, "runtime_data", None)) is not None:
                 generation += id(coordinator.data)
         if generation != self._clips_generation:
-            lookup: dict[str, SunoClip] = {}
+            lookup: dict[str, tuple[SunoClip, SunoCoordinator]] = {}
             for entry in entries:
                 if (coordinator := getattr(entry, "runtime_data", None)) is None:
                     continue
                 for clip in coordinator.data.clips:
-                    lookup[clip.id] = clip
+                    lookup[clip.id] = (clip, coordinator)
                 for clip in coordinator.data.liked_clips:
-                    lookup.setdefault(clip.id, clip)
+                    lookup.setdefault(clip.id, (clip, coordinator))
             self._clips_by_id = lookup
             self._clips_generation = generation
-        return self._clips_by_id.get(clip_id)
+        result = self._clips_by_id.get(clip_id)
+        if result is not None:
+            return result
+        return None, None
 
     def _first_coordinator(self) -> SunoCoordinator | None:
-        """Return the first loaded coordinator."""
+        """Return the first loaded coordinator (fallback for unknown clips)."""
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if isinstance(coord := getattr(entry, "runtime_data", None), SunoCoordinator):
                 return coord
         return None
 
-    def _get_cache(self) -> SunoCache | None:
-        """Return the SunoCache from the first coordinator."""
-        return c.cache if (c := self._first_coordinator()) else None
-
-    def _get_download_manager(self) -> SunoDownloadManager | None:
-        """Return the SunoDownloadManager from the first coordinator."""
-        return c.download_manager if (c := self._first_coordinator()) else None
-
-    def _get_client(self) -> Any:
-        """Return the SunoClient from the first coordinator."""
-        return c.client if (c := self._first_coordinator()) else None
-
     async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
-        clip = self._find_clip(clip_id)
+        clip, coordinator = self._find_clip(clip_id)
+        if coordinator is None:
+            coordinator = self._first_coordinator()
         title = clip.title if clip else "Suno"
         artist = "Suno"
         genre = (clip.tags if clip else None) or ""
@@ -87,7 +79,7 @@ class SunoMediaProxyView(HomeAssistantView):
         is_hq = ext == "flac"
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
-        if (dm := self._get_download_manager()) is not None:
+        if (dm := coordinator.download_manager if coordinator else None) is not None:
             if (dl_path := dm.get_downloaded_path(clip_id, meta_hash)) is not None:
                 dl_ext = dl_path.suffix.lstrip(".")
                 if (is_hq and dl_ext == "flac") or (not is_hq and dl_ext == "mp3"):
@@ -97,14 +89,17 @@ class SunoMediaProxyView(HomeAssistantView):
                     except FileNotFoundError, OSError:
                         _LOGGER.debug("Downloaded file vanished for %s, falling through", clip_id)
 
-        cache = self._get_cache()
+        cache = coordinator.cache if coordinator else None
         if cache is not None:
             cache_fmt = "flac" if is_hq else "mp3"
             if (cached_path := await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)) is not None:
                 return web.FileResponse(cached_path, headers={"Content-Type": content_type})
 
         if is_hq:
-            return await self._handle_hq(request, clip_id, clip, title, artist, genre, content_type, cache, meta_hash)
+            client = coordinator.client if coordinator else None
+            return await self._handle_hq(
+                request, clip_id, clip, title, artist, genre, content_type, cache, meta_hash, client
+            )
 
         audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
@@ -172,6 +167,7 @@ class SunoMediaProxyView(HomeAssistantView):
         content_type: str,
         cache: SunoCache | None,
         meta_hash: str,
+        client: Any = None,
     ) -> web.Response:
         """Transcode WAV to FLAC with metadata, using request coalescing."""
         key = f"{clip_id}.flac"
@@ -186,7 +182,7 @@ class SunoMediaProxyView(HomeAssistantView):
         fut: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._inflight[key] = fut
         try:
-            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, genre)
+            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, genre, client)
             fut.set_result(flac_data)
         except BaseException as exc:
             fut.set_result(None)
@@ -203,10 +199,10 @@ class SunoMediaProxyView(HomeAssistantView):
         return web.Response(body=flac_data, content_type=content_type)
 
     async def _run_hq_pipeline(
-        self, clip_id: str, clip: SunoClip | None, title: str, artist: str, genre: str
+        self, clip_id: str, clip: SunoClip | None, title: str, artist: str, genre: str, client: Any = None
     ) -> bytes | None:
         """Execute the full WAV-to-FLAC pipeline."""
-        if (client := self._get_client()) is None:
+        if client is None:
             return None
         return await download_and_transcode_to_flac(
             client,

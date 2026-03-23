@@ -141,8 +141,9 @@ async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncM
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
-    clip = view._find_clip("nonexistent-id")
+    clip, coordinator = view._find_clip("nonexistent-id")
     assert clip is None
+    assert coordinator is None
 
 
 async def test_view_finds_clip_in_main_clips(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -152,9 +153,10 @@ async def test_view_finds_clip_in_main_clips(hass: HomeAssistant, mock_suno_clie
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
-    clip = view._find_clip("clip-aaa-111")
+    clip, coordinator = view._find_clip("clip-aaa-111")
     assert clip is not None
     assert clip.title == "Test Song Alpha"
+    assert coordinator is not None
 
 
 async def test_view_finds_clip_in_liked(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -166,9 +168,10 @@ async def test_view_finds_clip_in_liked(hass: HomeAssistant, mock_suno_client: A
         await setup_entry(hass, entry)
 
     view = SunoMediaProxyView(hass)
-    clip = view._find_clip("clip-aaa-111")
+    clip, coordinator = view._find_clip("clip-aaa-111")
     assert clip is not None
     assert clip.title == "Test Song Alpha"
+    assert coordinator is not None
 
 
 async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
@@ -230,8 +233,9 @@ async def test_find_clip_skips_entries_without_runtime_data(hass: HomeAssistant,
 
     view = SunoMediaProxyView(hass)
     # Should still find clip from entry1, skipping entry2
-    clip = view._find_clip("clip-aaa-111")
+    clip, coordinator = view._find_clip("clip-aaa-111")
     assert clip is not None
+    assert coordinator is not None
 
 
 # ── Streaming handler tests ─────────────────────────────────────────
