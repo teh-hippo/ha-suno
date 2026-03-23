@@ -36,9 +36,6 @@ PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR]
 type SunoConfigEntry = ConfigEntry[SunoCoordinator]
 
 
-# Migration removed — all entries expected at VERSION 3 (no external users)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
     # Shared rate limiter across all config entries
     hass.data.setdefault(DOMAIN, {})
