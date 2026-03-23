@@ -82,9 +82,10 @@ class SunoMediaSource(MediaSource):
     def _get_clip_quality(self, clip: SunoClip, entry: SunoConfigEntry, coordinator: SunoCoordinator) -> str:
         """Determine quality for a clip based on source membership."""
         opts = entry.options
-        if opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED) and clip.is_liked:
+        if opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             if opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH) == QUALITY_HIGH:
-                return QUALITY_HIGH
+                if clip.is_liked or any(c.id == clip.id for c in coordinator.data.liked_clips):
+                    return QUALITY_HIGH
         if opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS):
             if opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH) == QUALITY_HIGH:
                 for pl_clips in coordinator.data.playlist_clips.values():
