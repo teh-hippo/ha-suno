@@ -27,7 +27,7 @@ class SunoCache:
     def __init__(self, hass: HomeAssistant, max_size_mb: int) -> None:
         self._hass = hass
         self._max_bytes = max_size_mb * 1024 * 1024
-        self._cache_dir = Path(hass.config.path("suno_cache"))
+        self._cache_dir = Path(hass.config.cache_path("suno"))
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
         self._index: dict[str, Any] = {}
         self._lock = asyncio.Lock()

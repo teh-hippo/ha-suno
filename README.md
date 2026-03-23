@@ -9,7 +9,8 @@ Suno.ai integration for Home Assistant. Browse and play your Suno music library 
 - Browse your Suno library in the HA media browser (liked, playlists, recent, all songs)
 - Play on any media player (Sonos, Chromecast, Apple TV, etc.)
 - Standard (MP3) or high quality (FLAC) audio with embedded metadata and album art
-- Optional local FLAC sync to a media directory
+- Optional sync to a media directory (FLAC or MP3, per source)
+- Per-source retention mode: sync (managed mirror) or copy (download-only)
 - Optional audio cache for faster replay
 - Credit usage sensor
 
@@ -61,19 +62,37 @@ Available under the integration's options menu.
 
 ### Sync
 
-Downloads FLAC files to a local directory for offline access and instant HQ playback.
+Downloads songs to a local directory for offline access and instant playback. Each source can be configured independently with its own quality and retention mode.
+
+#### General settings
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| Sync enabled | Off | Download FLAC files to a local directory |
+| Sync enabled | Off | Enable background sync to a local directory |
 | Sync path | -- | Target directory for downloaded files |
-| Sync liked | On | Include liked songs |
-| Sync all playlists | On | Sync all playlists (or pick specific ones) |
-| Recent count | -- | Limit sync to N most recent songs |
-| Recent days | -- | Limit sync to songs from the last N days |
-| Trash days | 7 | Days before removed files are permanently deleted |
+| Playlist files | Off | Generate M3U8 playlist files |
 
-When HQ mode is enabled, the proxy serves synced FLAC files directly — no re-download or transcoding needed.
+#### Per-source settings
+
+Each source (liked songs, playlists, latest songs) has independent quality and mode settings:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Quality | FLAC | FLAC (lossless, requires ffmpeg) or MP3 (direct CDN download with ID3 metadata) |
+| Mode | Sync | **Sync**: managed mirror — removes local files when songs are removed from the source. **Copy**: download-only — never deletes files. |
+
+#### Latest songs filters
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Latest count | -- | Maximum number of latest songs to sync (0 or empty to disable) |
+| Latest days | -- | Sync songs created within this many days (0 or empty to disable) |
+
+When both count and days are set, AND logic applies — a song must satisfy both criteria to be synced.
+
+#### File paths
+
+Synced files use stable clip-ID-based paths (e.g., `liked/abcd1234.flac`). This prevents orphaned files when your library order changes. A disk reconciliation pass runs after each sync to clean up any orphaned files in sync mode.
 
 ## Entities
 
@@ -94,7 +113,7 @@ When HQ mode is enabled, the proxy serves synced FLAC files directly — no re-d
 
 ```
 Play request
- ├─ Sync directory (FLAC, HQ only) → instant
+ ├─ Sync directory (FLAC or MP3) → instant
  ├─ Cache (MP3 or FLAC) → instant
  ├─ In-flight request for same clip → coalesced (wait for first to finish)
  └─ Pipeline:

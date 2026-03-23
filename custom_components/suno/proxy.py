@@ -102,12 +102,16 @@ class SunoMediaProxyView(HomeAssistantView):
         is_hq = quality == QUALITY_HIGH
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
-        if is_hq and (sync := self._get_sync()) is not None:
+        if (sync := self._get_sync()) is not None:
             if (synced_path := sync.get_synced_path(clip_id, meta_hash)) is not None:
-                try:
-                    return web.FileResponse(synced_path, headers={"Content-Type": "audio/flac"})
-                except FileNotFoundError, OSError:
-                    _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
+                synced_ext = synced_path.suffix.lstrip(".")
+                # Only serve if format matches what was requested
+                if (is_hq and synced_ext == "flac") or (not is_hq and synced_ext == "mp3"):
+                    mime = "audio/flac" if synced_ext == "flac" else "audio/mpeg"
+                    try:
+                        return web.FileResponse(synced_path, headers={"Content-Type": mime})
+                    except FileNotFoundError, OSError:
+                        _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
 
         cache = self._get_cache() if cache_enabled else None
         if cache is not None:

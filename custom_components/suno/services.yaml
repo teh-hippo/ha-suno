@@ -1,6 +1,6 @@
 sync_media:
   name: Sync media
-  description: Trigger a FLAC sync of Suno songs to the configured directory.
+  description: Trigger a sync of Suno songs to the configured directory.
   fields:
     force:
       name: Force

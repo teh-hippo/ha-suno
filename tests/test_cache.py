@@ -22,7 +22,7 @@ def _flac_bytes(size: int = 256) -> bytes:
 
 async def test_cache_init_creates_dir(hass: HomeAssistant, tmp_path: Path) -> None:
     """async_init should create the cache directory."""
-    with patch.object(hass.config, "path", return_value=str(tmp_path / "suno_cache")):
+    with patch.object(hass.config, "cache_path", return_value=str(tmp_path / "suno_cache")):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -32,7 +32,7 @@ async def test_cache_init_creates_dir(hass: HomeAssistant, tmp_path: Path) -> No
 async def test_cache_put_and_get(hass: HomeAssistant, tmp_path: Path) -> None:
     """Putting data then getting it should return a valid path."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -49,7 +49,7 @@ async def test_cache_put_and_get(hass: HomeAssistant, tmp_path: Path) -> None:
 
 async def test_cache_get_miss(hass: HomeAssistant, tmp_path: Path) -> None:
     """Getting a clip that was never cached returns None."""
-    with patch.object(hass.config, "path", return_value=str(tmp_path / "suno_cache")):
+    with patch.object(hass.config, "cache_path", return_value=str(tmp_path / "suno_cache")):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -59,7 +59,7 @@ async def test_cache_get_miss(hass: HomeAssistant, tmp_path: Path) -> None:
 async def test_cache_atomic_write(hass: HomeAssistant, tmp_path: Path) -> None:
     """No .tmp file should remain after a successful put."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -73,7 +73,7 @@ async def test_cache_eviction(hass: HomeAssistant, tmp_path: Path) -> None:
     """When the cache is full, the oldest entry should be evicted."""
     cache_dir = str(tmp_path / "suno_cache")
     # 1 KB max
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=0)
         cache._max_bytes = 1024
         await cache.async_init()
@@ -91,7 +91,7 @@ async def test_cache_eviction(hass: HomeAssistant, tmp_path: Path) -> None:
 async def test_cache_corrupt_file_rejects(hass: HomeAssistant, tmp_path: Path) -> None:
     """A file with bad magic bytes should be rejected on get."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -108,7 +108,7 @@ async def test_cache_corrupt_file_rejects(hass: HomeAssistant, tmp_path: Path) -
 async def test_cache_flac_validation(hass: HomeAssistant, tmp_path: Path) -> None:
     """FLAC files should be validated against fLaC magic."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -130,7 +130,7 @@ async def test_cache_cleanup_tmp_on_init(hass: HomeAssistant, tmp_path: Path) ->
     stale_tmp = cache_dir / "stale.mp3.tmp"
     stale_tmp.write_bytes(b"partial data")
 
-    with patch.object(hass.config, "path", return_value=str(cache_dir)):
+    with patch.object(hass.config, "cache_path", return_value=str(cache_dir)):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -140,7 +140,7 @@ async def test_cache_cleanup_tmp_on_init(hass: HomeAssistant, tmp_path: Path) ->
 async def test_cache_empty_file_rejected(hass: HomeAssistant, tmp_path: Path) -> None:
     """A zero-byte file should be rejected."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -155,7 +155,7 @@ async def test_cache_empty_file_rejected(hass: HomeAssistant, tmp_path: Path) ->
 async def test_cache_init_loads_saved_index(hass: HomeAssistant, tmp_path: Path) -> None:
     """async_init should load a previously saved index (line 50)."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
 
     saved_index = {"clip-saved.mp3": {"access": 1000.0, "meta_hash": "abc123"}}
@@ -172,7 +172,7 @@ async def test_cache_init_tmp_cleanup_oserror(hass: HomeAssistant, tmp_path: Pat
     stale_tmp = cache_dir / "stale.mp3.tmp"
     stale_tmp.write_bytes(b"partial")
 
-    with patch.object(hass.config, "path", return_value=str(cache_dir)):
+    with patch.object(hass.config, "cache_path", return_value=str(cache_dir)):
         cache = SunoCache(hass, max_size_mb=10)
 
     with patch.object(Path, "unlink", side_effect=OSError("permission denied")):
@@ -185,7 +185,7 @@ async def test_cache_init_tmp_cleanup_oserror(hass: HomeAssistant, tmp_path: Pat
 async def test_cache_put_oserror_returns_none(hass: HomeAssistant, tmp_path: Path) -> None:
     """OSError during atomic write should return None (lines 89-91)."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -198,7 +198,7 @@ async def test_cache_put_oserror_returns_none(hass: HomeAssistant, tmp_path: Pat
 async def test_cache_eviction_break_when_enough_space(hass: HomeAssistant, tmp_path: Path) -> None:
     """Eviction loop should break once enough space is freed (line 108)."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=0)
         cache._max_bytes = 2048
         await cache.async_init()
@@ -222,7 +222,7 @@ async def test_cache_eviction_break_when_enough_space(hass: HomeAssistant, tmp_p
 async def test_cache_eviction_oserror_on_file_ops(hass: HomeAssistant, tmp_path: Path) -> None:
     """OSError during eviction file operations should be handled (lines 114-115)."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=0)
         cache._max_bytes = 512
         await cache.async_init()
@@ -256,7 +256,7 @@ async def test_cache_eviction_oserror_on_file_ops(hass: HomeAssistant, tmp_path:
 async def test_total_size_handles_missing_files(hass: HomeAssistant, tmp_path: Path) -> None:
     """_total_size should handle missing files gracefully (lines 127-128)."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -293,7 +293,7 @@ async def test_validate_file_oserror(tmp_path: Path) -> None:
 async def test_cache_get_file_deleted_from_disk(hass: HomeAssistant, tmp_path: Path) -> None:
     """Getting a clip whose file was deleted should return None and clean index."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 
@@ -309,7 +309,7 @@ async def test_cache_get_file_deleted_from_disk(hass: HomeAssistant, tmp_path: P
 async def test_cache_async_clear(hass: HomeAssistant, tmp_path: Path) -> None:
     """async_clear should remove all cached files and reset the index."""
     cache_dir = str(tmp_path / "suno_cache")
-    with patch.object(hass.config, "path", return_value=cache_dir):
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
         cache = SunoCache(hass, max_size_mb=10)
         await cache.async_init()
 

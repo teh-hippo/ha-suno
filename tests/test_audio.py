@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from custom_components.suno.audio import (
     _build_id3_header,
     _skip_existing_id3,
+    download_as_mp3,
     ensure_wav_url,
     fetch_album_art,
     wav_to_flac,
@@ -223,6 +224,92 @@ def test_skip_existing_id3_no_tag() -> None:
     audio_data = b"\xff\xfb\x90\x00" * 10
     result = _skip_existing_id3(audio_data)
     assert result == audio_data
+
+
+# ── download_as_mp3 ─────────────────────────────────────────────────
+
+
+async def test_download_as_mp3_happy_path() -> None:
+    """Successful download returns ID3 header + MP3 body."""
+    mp3_body = b"\xff\xfb\x90\x00" * 10
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.read = AsyncMock(return_value=mp3_body)
+
+    session = AsyncMock()
+    session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_resp),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "My Song", "Artist")
+
+    assert result is not None
+    assert result[:3] == b"ID3"
+    assert b"My Song" in result
+    assert b"Artist" in result
+    assert result.endswith(mp3_body)
+
+
+async def test_download_as_mp3_cdn_failure() -> None:
+    """404 from CDN returns None."""
+    mock_resp = AsyncMock()
+    mock_resp.status = 404
+
+    session = AsyncMock()
+    session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_resp),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "Title")
+
+    assert result is None
+
+
+async def test_download_as_mp3_strips_existing_id3() -> None:
+    """Old ID3 header is stripped and replaced with new metadata."""
+    # Build a fake ID3 header
+    old_tag_body = b"\x00" * 20
+    tag_size = len(old_tag_body)
+    syncsafe_bytes = bytes(
+        [
+            (tag_size >> 21) & 0x7F,
+            (tag_size >> 14) & 0x7F,
+            (tag_size >> 7) & 0x7F,
+            tag_size & 0x7F,
+        ]
+    )
+    old_id3 = b"ID3\x04\x00\x00" + syncsafe_bytes + old_tag_body
+    audio_frames = b"\xff\xfb\x90\x00" * 10
+    raw_mp3 = old_id3 + audio_frames
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.read = AsyncMock(return_value=raw_mp3)
+
+    session = AsyncMock()
+    session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_resp),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "New Title", genre="Pop")
+
+    assert result is not None
+    assert result[:3] == b"ID3"
+    assert b"New Title" in result
+    assert b"Pop" in result
+    # Old null-filled tag body should not appear as a contiguous block
+    assert old_id3 not in result
+    assert result.endswith(audio_frames)
 
 
 # ── clip_meta_hash ──────────────────────────────────────────────────

@@ -65,19 +65,41 @@ async def test_unload_entry(hass: HomeAssistant, mock_suno_client: AsyncMock) ->
 
 
 async def test_remove_entry_cleans_cache_dir(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Removes the suno_cache directory when it exists."""
-    cache_dir = tmp_path / "suno_cache"
-    cache_dir.mkdir()
+    """Removes the .cache/suno directory when it exists."""
+    cache_dir = tmp_path / ".cache" / "suno"
+    cache_dir.mkdir(parents=True)
     (cache_dir / "clip.mp3").write_bytes(b"data")
 
     storage_dir = tmp_path / ".storage"
     storage_dir.mkdir()
 
-    with patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)):
+    with (
+        patch.object(hass.config, "cache_path", return_value=str(cache_dir)),
+        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+    ):
         entry = make_entry()
         await async_remove_entry(hass, entry)
 
     assert not cache_dir.exists()
+
+
+async def test_remove_entry_cleans_old_cache_dir(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Removes the legacy suno_cache directory when it exists."""
+    old_cache_dir = tmp_path / "suno_cache"
+    old_cache_dir.mkdir()
+    (old_cache_dir / "clip.mp3").write_bytes(b"data")
+
+    storage_dir = tmp_path / ".storage"
+    storage_dir.mkdir()
+
+    with (
+        patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
+        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+    ):
+        entry = make_entry()
+        await async_remove_entry(hass, entry)
+
+    assert not old_cache_dir.exists()
 
 
 async def test_remove_entry_cleans_storage_files(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -88,7 +110,10 @@ async def test_remove_entry_cleans_storage_files(hass: HomeAssistant, tmp_path: 
     (storage_dir / "suno_sync_abc").write_text("{}")
     (storage_dir / "other_file").write_text("{}")
 
-    with patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)):
+    with (
+        patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
+        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+    ):
         entry = make_entry()
         await async_remove_entry(hass, entry)
 
@@ -99,7 +124,10 @@ async def test_remove_entry_cleans_storage_files(hass: HomeAssistant, tmp_path: 
 
 async def test_remove_entry_missing_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
     """Handles missing cache and storage dirs gracefully."""
-    with patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)):
+    with (
+        patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
+        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+    ):
         entry = make_entry()
         # Should not raise
         await async_remove_entry(hass, entry)
@@ -113,6 +141,7 @@ async def test_remove_entry_oserror_logged(hass: HomeAssistant, tmp_path: Path) 
     suno_file.write_text("{}")
 
     with (
+        patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
         patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
         patch.object(Path, "unlink", side_effect=OSError("permission denied")),
     ):

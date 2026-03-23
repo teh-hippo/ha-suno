@@ -8,6 +8,7 @@ import aiohttp
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.suno.const import (
     CONF_AUDIO_QUALITY,
@@ -347,10 +348,9 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
 
     # Step 2: sync options (all defaults, sync disabled)
     from custom_components.suno.const import (
-        CONF_SYNC_ALL_PLAYLISTS,
         CONF_SYNC_ENABLED,
-        CONF_SYNC_LIKED,
         CONF_SYNC_PATH,
+        CONF_SYNC_PLAYLISTS_M3U,
     )
 
     result = await hass.config_entries.options.async_configure(
@@ -358,8 +358,7 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
         {
             CONF_SYNC_ENABLED: False,
             CONF_SYNC_PATH: "/media/suno",
-            CONF_SYNC_LIKED: True,
-            CONF_SYNC_ALL_PLAYLISTS: True,
+            CONF_SYNC_PLAYLISTS_M3U: False,
         },
     )
 
@@ -371,3 +370,143 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
     assert result["data"][CONF_CACHE_ENABLED] is True
     assert result["data"][CONF_CACHE_MAX_SIZE] == 2000
     assert result["data"][CONF_SYNC_ENABLED] is False
+
+
+# ── Migration ────────────────────────────────────────────────────────
+
+
+async def test_migration_v1_to_v2(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Migrating a v1 entry adds per-source quality/mode defaults and renames keys."""
+    from custom_components.suno import async_migrate_entry
+    from custom_components.suno.const import (
+        CONF_SYNC_LATEST_COUNT,
+        CONF_SYNC_LATEST_DAYS,
+        CONF_SYNC_MODE_LATEST,
+        CONF_SYNC_MODE_LIKED,
+        CONF_SYNC_MODE_PLAYLISTS,
+        CONF_SYNC_QUALITY_LATEST,
+        CONF_SYNC_QUALITY_LIKED,
+        CONF_SYNC_QUALITY_PLAYLISTS,
+        QUALITY_HIGH,
+        QUALITY_STANDARD,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Suno",
+        unique_id=MOCK_USER_ID,
+        data={CONF_COOKIE: MOCK_COOKIE},
+        options={
+            **make_entry().options,
+            "sync_recent_count": 25.0,
+            "sync_recent_days": 7.0,
+            "cache_ttl_minutes": 30.0,
+        },
+        version=1,
+    )
+    entry.add_to_hass(hass)
+
+    result = await async_migrate_entry(hass, entry)
+    assert result is True
+    assert entry.version == 2
+
+    opts = entry.options
+    # Per-source quality defaults added
+    assert opts[CONF_SYNC_QUALITY_LIKED] == QUALITY_HIGH
+    assert opts[CONF_SYNC_QUALITY_PLAYLISTS] == QUALITY_HIGH
+    assert opts[CONF_SYNC_QUALITY_LATEST] == QUALITY_STANDARD
+    # Per-source mode defaults added
+    assert opts[CONF_SYNC_MODE_LIKED] == "sync"
+    assert opts[CONF_SYNC_MODE_PLAYLISTS] == "sync"
+    assert opts[CONF_SYNC_MODE_LATEST] == "sync"
+    # Keys renamed from recent → latest
+    assert "sync_recent_count" not in opts
+    assert "sync_recent_days" not in opts
+    assert opts[CONF_SYNC_LATEST_COUNT] == 25
+    assert opts[CONF_SYNC_LATEST_DAYS] == 7
+    # Float → int coercion
+    assert opts["cache_ttl_minutes"] == 30
+    assert isinstance(opts["cache_ttl_minutes"], int)
+
+
+# ── Sync sources step ───────────────────────────────────────────────
+
+
+async def test_options_sync_sources_step(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Options flow with sync enabled goes through sync_sources step."""
+    from custom_components.suno.const import (
+        CONF_SYNC_ALL_PLAYLISTS,
+        CONF_SYNC_ENABLED,
+        CONF_SYNC_LATEST_COUNT,
+        CONF_SYNC_LIKED,
+        CONF_SYNC_MODE_LATEST,
+        CONF_SYNC_MODE_LIKED,
+        CONF_SYNC_MODE_PLAYLISTS,
+        CONF_SYNC_PATH,
+        CONF_SYNC_PLAYLISTS_M3U,
+        CONF_SYNC_QUALITY_LATEST,
+        CONF_SYNC_QUALITY_LIKED,
+        CONF_SYNC_QUALITY_PLAYLISTS,
+    )
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Step 1: display + cache
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_RECENT: True,
+            CONF_RECENT_COUNT: 20,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_CACHE_TTL: 30,
+            CONF_AUDIO_QUALITY: "standard",
+            CONF_CACHE_ENABLED: False,
+            CONF_CACHE_MAX_SIZE: 500,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "sync"
+
+    # Step 2: sync general (enabled)
+    with patch.object(
+        type(hass.config_entries.options._progress[result["flow_id"]]),
+        "_validate_sync_path",
+        return_value=True,
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SYNC_ENABLED: True,
+                CONF_SYNC_PATH: "/media/suno",
+                CONF_SYNC_PLAYLISTS_M3U: True,
+            },
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "sync_sources"
+
+    # Step 3: sync sources
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_SYNC_LIKED: True,
+            CONF_SYNC_QUALITY_LIKED: "high",
+            CONF_SYNC_MODE_LIKED: "sync",
+            CONF_SYNC_ALL_PLAYLISTS: True,
+            CONF_SYNC_QUALITY_PLAYLISTS: "standard",
+            CONF_SYNC_MODE_PLAYLISTS: "copy",
+            CONF_SYNC_LATEST_COUNT: 50.0,
+            CONF_SYNC_QUALITY_LATEST: "standard",
+            CONF_SYNC_MODE_LATEST: "sync",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SYNC_ENABLED] is True
+    assert result["data"][CONF_SYNC_QUALITY_LIKED] == "high"
+    assert result["data"][CONF_SYNC_QUALITY_PLAYLISTS] == "standard"
+    assert result["data"][CONF_SYNC_MODE_PLAYLISTS] == "copy"
+    assert result["data"][CONF_SYNC_PLAYLISTS_M3U] is True

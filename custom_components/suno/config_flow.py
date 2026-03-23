@@ -42,12 +42,18 @@ from .const import (
     CONF_SHOW_RECENT,
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
+    CONF_SYNC_LATEST_COUNT,
+    CONF_SYNC_LATEST_DAYS,
     CONF_SYNC_LIKED,
+    CONF_SYNC_MODE_LATEST,
+    CONF_SYNC_MODE_LIKED,
+    CONF_SYNC_MODE_PLAYLISTS,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
     CONF_SYNC_PLAYLISTS_M3U,
-    CONF_SYNC_RECENT_COUNT,
-    CONF_SYNC_RECENT_DAYS,
+    CONF_SYNC_QUALITY_LATEST,
+    CONF_SYNC_QUALITY_LIKED,
+    CONF_SYNC_QUALITY_PLAYLISTS,
     DEFAULT_AUDIO_QUALITY,
     DEFAULT_CACHE_ENABLED,
     DEFAULT_CACHE_MAX_SIZE,
@@ -59,8 +65,11 @@ from .const import (
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
     DEFAULT_SYNC_LIKED,
+    DEFAULT_SYNC_MODE,
     DEFAULT_SYNC_PLAYLISTS_M3U,
     DOMAIN,
+    QUALITY_HIGH,
+    QUALITY_STANDARD,
 )
 from .exceptions import SunoAuthError
 
@@ -126,7 +135,7 @@ def _display_schema(opts: dict[str, Any]) -> vol.Schema:
 class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Suno."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: cookie input."""
@@ -248,7 +257,7 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         return self.async_show_form(step_id="init", data_schema=_display_schema(dict(self.config_entry.options)))
 
     async def async_step_sync(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 2: sync configuration."""
+        """Step 2: sync general settings."""
         errors: dict[str, str] = {}
         if user_input is not None:
             if user_input.get(CONF_SYNC_ENABLED, False):
@@ -257,9 +266,9 @@ class SunoOptionsFlow(OptionsFlowWithReload):
                     errors[CONF_SYNC_PATH] = "invalid_sync_path"
             if not errors:
                 merged = {**self._options, **user_input}
-                if user_input.get(CONF_SYNC_ENABLED) and not user_input.get(CONF_SYNC_ALL_PLAYLISTS, True):
+                if user_input.get(CONF_SYNC_ENABLED):
                     self._options = merged
-                    return await self.async_step_sync_playlists()
+                    return await self.async_step_sync_sources()
                 merged[CONF_SYNC_PLAYLISTS] = []
                 return self.async_create_entry(data=merged)
         opts = self.config_entry.options
@@ -271,16 +280,6 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             vol.Required(CONF_SYNC_PATH, default=opts.get(CONF_SYNC_PATH, default_path)): TextSelector(
                 TextSelectorConfig(type=TextSelectorType.TEXT)
             ),
-            vol.Required(CONF_SYNC_LIKED, default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED)): BooleanSelector(),
-            vol.Required(
-                CONF_SYNC_ALL_PLAYLISTS, default=opts.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS)
-            ): BooleanSelector(),
-            vol.Optional(
-                CONF_SYNC_RECENT_COUNT, description={"suggested_value": opts.get(CONF_SYNC_RECENT_COUNT)}
-            ): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode=NumberSelectorMode.BOX)),
-            vol.Optional(
-                CONF_SYNC_RECENT_DAYS, description={"suggested_value": opts.get(CONF_SYNC_RECENT_DAYS)}
-            ): NumberSelector(NumberSelectorConfig(min=1, max=90, step=1, mode=NumberSelectorMode.BOX)),
             vol.Required(
                 CONF_SYNC_PLAYLISTS_M3U,
                 default=opts.get(CONF_SYNC_PLAYLISTS_M3U, DEFAULT_SYNC_PLAYLISTS_M3U),
@@ -288,8 +287,78 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         }
         return self.async_show_form(step_id="sync", data_schema=vol.Schema(schema), errors=errors)
 
+    async def async_step_sync_sources(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Step 3: configure sync sources with quality and mode."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            merged = {**self._options, **user_input}
+            if user_input.get(CONF_SYNC_ALL_PLAYLISTS, True):
+                merged[CONF_SYNC_PLAYLISTS] = []
+                return self.async_create_entry(data=merged)
+            else:
+                self._options = merged
+                return await self.async_step_sync_playlists()
+
+        opts = self.config_entry.options
+        quality_options = [
+            SelectOptionDict(value="standard", label="Standard (MP3)"),
+            SelectOptionDict(value="high", label="High (FLAC)"),
+        ]
+        mode_options = [
+            SelectOptionDict(value="sync", label="Sync (remove deleted songs)"),
+            SelectOptionDict(value="copy", label="Copy (keep all downloads)"),
+        ]
+        quality_selector = SelectSelector(
+            SelectSelectorConfig(options=quality_options, mode=SelectSelectorMode.DROPDOWN)
+        )
+        mode_selector = SelectSelector(SelectSelectorConfig(options=mode_options, mode=SelectSelectorMode.DROPDOWN))
+
+        schema = vol.Schema(
+            {
+                # Liked songs
+                vol.Required(CONF_SYNC_LIKED, default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED)): BooleanSelector(),
+                vol.Required(
+                    CONF_SYNC_QUALITY_LIKED, default=opts.get(CONF_SYNC_QUALITY_LIKED, QUALITY_HIGH)
+                ): quality_selector,
+                vol.Required(
+                    CONF_SYNC_MODE_LIKED, default=opts.get(CONF_SYNC_MODE_LIKED, DEFAULT_SYNC_MODE)
+                ): mode_selector,
+                # Playlists
+                vol.Required(
+                    CONF_SYNC_ALL_PLAYLISTS,
+                    default=opts.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS),
+                ): BooleanSelector(),
+                vol.Required(
+                    CONF_SYNC_QUALITY_PLAYLISTS,
+                    default=opts.get(CONF_SYNC_QUALITY_PLAYLISTS, QUALITY_HIGH),
+                ): quality_selector,
+                vol.Required(
+                    CONF_SYNC_MODE_PLAYLISTS,
+                    default=opts.get(CONF_SYNC_MODE_PLAYLISTS, DEFAULT_SYNC_MODE),
+                ): mode_selector,
+                # Latest songs
+                vol.Optional(
+                    CONF_SYNC_LATEST_COUNT,
+                    description={"suggested_value": opts.get(CONF_SYNC_LATEST_COUNT)},
+                ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Optional(
+                    CONF_SYNC_LATEST_DAYS,
+                    description={"suggested_value": opts.get(CONF_SYNC_LATEST_DAYS)},
+                ): NumberSelector(NumberSelectorConfig(min=0, max=365, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Required(
+                    CONF_SYNC_QUALITY_LATEST,
+                    default=opts.get(CONF_SYNC_QUALITY_LATEST, QUALITY_STANDARD),
+                ): quality_selector,
+                vol.Required(
+                    CONF_SYNC_MODE_LATEST, default=opts.get(CONF_SYNC_MODE_LATEST, DEFAULT_SYNC_MODE)
+                ): mode_selector,
+            }
+        )
+
+        return self.async_show_form(step_id="sync_sources", data_schema=schema, errors=errors)
+
     async def async_step_sync_playlists(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 3: select specific playlists to sync."""
+        """Step 4: select specific playlists to sync."""
         if user_input is not None:
             return self.async_create_entry(data={**self._options, **user_input})
         coordinator = self.config_entry.runtime_data

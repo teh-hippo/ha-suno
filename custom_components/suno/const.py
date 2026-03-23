@@ -38,15 +38,15 @@ CONF_SYNC_PATH = "sync_path"
 CONF_SYNC_LIKED = "sync_liked"
 CONF_SYNC_ALL_PLAYLISTS = "sync_all_playlists"
 CONF_SYNC_PLAYLISTS = "sync_playlists"
-CONF_SYNC_RECENT_COUNT = "sync_recent_count"
-CONF_SYNC_RECENT_DAYS = "sync_recent_days"
+CONF_SYNC_LATEST_COUNT = "sync_latest_count"
+CONF_SYNC_LATEST_DAYS = "sync_latest_days"
 CONF_SYNC_PLAYLISTS_M3U = "sync_playlists_m3u"
 
 DEFAULT_SYNC_ENABLED = False
 DEFAULT_SYNC_LIKED = True
 DEFAULT_SYNC_ALL_PLAYLISTS = True
-DEFAULT_SYNC_RECENT_COUNT = None
-DEFAULT_SYNC_RECENT_DAYS = None
+DEFAULT_SYNC_LATEST_COUNT = None
+DEFAULT_SYNC_LATEST_DAYS = None
 DEFAULT_SYNC_PLAYLISTS_M3U = False
 
 SYNC_MAX_DOWNLOADS_PER_RUN = 10
@@ -55,5 +55,28 @@ SYNC_DOWNLOAD_DELAY = 2
 SYNC_FFMPEG_TIMEOUT = 60
 
 QUALITY_HIGH = "high"
+QUALITY_STANDARD = "standard"
+
+# Sync modes
+SYNC_MODE_SYNC = "sync"
+SYNC_MODE_COPY = "copy"
+
+# Per-source quality config keys
+CONF_SYNC_QUALITY_LIKED = "sync_quality_liked"
+CONF_SYNC_QUALITY_PLAYLISTS = "sync_quality_playlists"
+CONF_SYNC_QUALITY_LATEST = "sync_quality_latest"
+
+# Per-source quality config keys
+CONF_SYNC_QUALITY_LIKED = "sync_quality_liked"
+CONF_SYNC_QUALITY_PLAYLISTS = "sync_quality_playlists"
+CONF_SYNC_QUALITY_LATEST = "sync_quality_latest"
+
+# Per-source mode config keys
+CONF_SYNC_MODE_LIKED = "sync_mode_liked"
+CONF_SYNC_MODE_PLAYLISTS = "sync_mode_playlists"
+CONF_SYNC_MODE_LATEST = "sync_mode_latest"
+
+# Defaults
+DEFAULT_SYNC_MODE = "sync"
 JWT_REFRESH_BUFFER = 60
 EXCLUDED_TASKS = frozenset({"infill", "fixed_infill"})

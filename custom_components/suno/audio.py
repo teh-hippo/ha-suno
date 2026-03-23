@@ -117,6 +117,34 @@ async def ensure_wav_url(client: Any, clip_id: str, polls: int = 24, interval: f
     return None
 
 
+async def download_as_mp3(
+    session: ClientSession,
+    audio_url: str,
+    title: str,
+    artist: str = "Suno",
+    genre: str = "",
+) -> bytes | None:
+    """Download MP3 from CDN and inject ID3 metadata tags.
+
+    Downloads the MP3, strips any existing ID3v2 header, and prepends
+    a new ID3v2.4 header with the provided metadata.
+    No ffmpeg required.
+    """
+    try:
+        async with session.get(audio_url) as resp:
+            if resp.status != 200:
+                _LOGGER.warning("MP3 download failed for %s: %d", audio_url, resp.status)
+                return None
+            raw = await resp.read()
+    except Exception:
+        _LOGGER.exception("Failed to download MP3 from %s", audio_url)
+        return None
+
+    header = _build_id3_header(title=title, artist=artist, genre=genre)
+    body = _skip_existing_id3(raw)
+    return header + body
+
+
 async def fetch_album_art(session: ClientSession, image_url: str) -> bytes | None:
     """Download album art, returning raw bytes or None on failure."""
     try:

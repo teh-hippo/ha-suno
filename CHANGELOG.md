@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v2.0.0
+
+### Features
+- Per-source sync quality: choose FLAC or MP3 independently for liked songs, playlists, and latest songs
+- Per-source retention mode: "sync" (managed mirror, removes deleted) or "copy" (download-only, never deletes)
+- Stable file paths using clip ID (no more orphaned files from list reordering)
+- Disk reconciliation: automatic cleanup of orphaned files after each sync
+- MP3 sync path: direct CDN download with ID3 metadata injection (no ffmpeg required)
+- Cache moved to `.cache/suno/` to exclude from HA backups
+- Sync write-through to cache for faster playback of synced content
+
+### Breaking Changes
+- Config entry VERSION bumped to 2 (automatic migration)
+- "Recent" renamed to "Latest" throughout
+- Latest sync uses AND logic when both count and days are set (was OR/union)
+- `cached_files` sensor entity removed (data available as attribute on `cache_size`)
+- Sync status sensor now uses ENUM device class
+
+### Bug Fixes
+- Fixed index-based file paths causing orphaned files when library order changes
+- Fixed proxy serving wrong MIME type for MP3 synced files
+- Fixed cache directory being included in HA backups
+
+
 ## v1.13.1 (2026-03-22)
 
 ### Bug Fixes

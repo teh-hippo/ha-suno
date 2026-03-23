@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,25 +18,36 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .audio import download_and_transcode_to_flac
+from .audio import download_and_transcode_to_flac, download_as_mp3
 from .const import (
+    CDN_BASE_URL,
     CONF_SYNC_ALL_PLAYLISTS,
     CONF_SYNC_ENABLED,
+    CONF_SYNC_LATEST_COUNT,
+    CONF_SYNC_LATEST_DAYS,
     CONF_SYNC_LIKED,
+    CONF_SYNC_MODE_LATEST,
+    CONF_SYNC_MODE_LIKED,
+    CONF_SYNC_MODE_PLAYLISTS,
     CONF_SYNC_PATH,
     CONF_SYNC_PLAYLISTS,
     CONF_SYNC_PLAYLISTS_M3U,
-    CONF_SYNC_RECENT_COUNT,
-    CONF_SYNC_RECENT_DAYS,
+    CONF_SYNC_QUALITY_LATEST,
+    CONF_SYNC_QUALITY_LIKED,
+    CONF_SYNC_QUALITY_PLAYLISTS,
     DEFAULT_SYNC_ALL_PLAYLISTS,
     DEFAULT_SYNC_ENABLED,
+    DEFAULT_SYNC_LATEST_COUNT,
+    DEFAULT_SYNC_LATEST_DAYS,
     DEFAULT_SYNC_LIKED,
-    DEFAULT_SYNC_RECENT_COUNT,
-    DEFAULT_SYNC_RECENT_DAYS,
+    DEFAULT_SYNC_MODE,
     DOMAIN,
+    QUALITY_HIGH,
+    QUALITY_STANDARD,
     SYNC_DOWNLOAD_DELAY,
     SYNC_MAX_DOWNLOADS_BOOTSTRAP,
     SYNC_MAX_DOWNLOADS_PER_RUN,
+    SYNC_MODE_SYNC,
 )
 from .models import SunoClip, clip_meta_hash
 
@@ -50,6 +62,16 @@ STORE_VERSION = 1
 _SERVICE_SYNC = "sync_media"
 _MANIFEST_FILENAME = ".suno_sync.json"
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+@dataclass
+class SyncItem:
+    """A clip scheduled for sync with its resolved metadata."""
+
+    clip: SunoClip
+    collection: str
+    sources: list[str]
+    quality: str  # "high" | "standard"
 
 
 def _sanitise_filename(name: str, max_len: int = 200) -> str:
@@ -69,24 +91,22 @@ def _build_sync_summary(downloaded: int, removed: int, meta_updates: int) -> str
     return ", ".join(parts) if parts else "No change"
 
 
-def _write_m3u8_playlists(
-    base: Path, clips_state: dict[str, Any], desired: list[tuple[Any, int, str, list[str]]]
-) -> None:
+def _write_m3u8_playlists(base: Path, clips_state: dict[str, Any], desired: list[SyncItem]) -> None:
     """Write M3U8 playlist files for Jellyfin/media player compatibility."""
     # Build playlist_name → [(abs_path, title, duration)] from sources
     playlists: dict[str, list[tuple[str, str, int]]] = {}
-    for clip, _idx, collection, sources in desired:
-        entry = clips_state.get(clip.id)
+    for item in desired:
+        entry = clips_state.get(item.clip.id)
         if not entry or not entry.get("path"):
             continue
         abs_path = str(base / entry["path"])
-        title = entry.get("title") or clip.title or "Untitled"
-        duration = int(clip.duration) if clip.duration else -1
-        for source in sources:
+        title = entry.get("title") or item.clip.title or "Untitled"
+        duration = int(item.clip.duration) if item.clip.duration else -1
+        for source in item.sources:
             if source == "liked":
                 playlists.setdefault("Liked Songs", []).append((abs_path, title, duration))
             elif source.startswith("playlist:"):
-                playlists.setdefault(collection, []).append((abs_path, title, duration))
+                playlists.setdefault(item.collection, []).append((abs_path, title, duration))
 
     # Write M3U8 files
     written: set[str] = set()
@@ -107,20 +127,33 @@ def _write_m3u8_playlists(
             existing.unlink(missing_ok=True)
 
 
-def _clip_path(clip: SunoClip, index: int) -> str:
-    """Build the relative file path for a clip (date organisation)."""
+def _clip_path(clip: SunoClip, quality: str) -> str:
+    """Build the relative file path for a clip.
+
+    Uses clip ID prefix for uniqueness (not position index).
+    Extension determined by quality setting.
+    """
     title = _sanitise_filename(clip.title or "untitled")
     date_str = clip.created_at[:10] if clip.created_at else "unknown"
-    return f"{date_str}/{index + 1:02d} - {title}.flac"
+    clip_short = clip.id[:8]
+    ext = "flac" if quality == QUALITY_HIGH else "mp3"
+    return f"{date_str}/{title} [{clip_short}].{ext}"
 
 
 def _add_clip(
-    clip_map: dict[str, tuple[SunoClip, str, list[str]]], clip: SunoClip, collection: str, source: str
+    clip_map: dict[str, SyncItem],
+    clip: SunoClip,
+    collection: str,
+    source: str,
+    quality: str,
 ) -> None:
     if clip.id in clip_map:
-        clip_map[clip.id][2].append(source)
+        item = clip_map[clip.id]
+        item.sources.append(source)
+        if quality == QUALITY_HIGH:
+            item.quality = QUALITY_HIGH
     else:
-        clip_map[clip.id] = (clip, collection, [source])
+        clip_map[clip.id] = SyncItem(clip=clip, collection=collection, sources=[source], quality=quality)
 
 
 def _preserve_by(preserved: set[str], prev_clips: dict[str, Any], pred: Any) -> None:
@@ -163,6 +196,17 @@ async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
             _LOGGER.warning("Failed to delete: %s", r)
     await hass.async_add_executor_job(_delete, base, rel_path)
 
+
+
+def _source_uses_sync_mode(source: str, options: dict[str, Any]) -> bool:
+    """Check if a source tag's mode is 'sync' (managed, delete removed)."""
+    if source == "liked":
+        return bool(options.get(CONF_SYNC_MODE_LIKED, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
+    if source.startswith("playlist:"):
+        return bool(options.get(CONF_SYNC_MODE_PLAYLISTS, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
+    if source == "latest":
+        return bool(options.get(CONF_SYNC_MODE_LATEST, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
+    return True  # Unknown sources default to sync (delete-safe)
 
 
 class SunoSync:
@@ -320,23 +364,40 @@ class SunoSync:
         self._state.pop("trash", None)
         desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
         clips_state = dict(self._state.get("clips", {}))
-        to_download: list[tuple[SunoClip, int]] = []
+        to_download: list[SyncItem] = []
         meta_updates = 0
         seen_ids: set[str] = set()
-        for clip, index, _collection, sources in desired:
-            seen_ids.add(clip.id)
-            if clip.id not in clips_state or force:
-                to_download.append((clip, index))
-            elif clip.id in clips_state:
-                existing = clips_state[clip.id]
-                existing["sources"] = sources
-                old_hash = existing.get("meta_hash", "")
-                new_hash = clip_meta_hash(clip)
-                if old_hash and new_hash != old_hash:
-                    existing["meta_hash"] = new_hash
-                    existing["title"] = clip.title
-                    meta_updates += 1
-        to_delete = [cid for cid in clips_state if cid not in seen_ids and cid not in preserved_ids]
+        for item in desired:
+            seen_ids.add(item.clip.id)
+            if item.clip.id not in clips_state or force:
+                to_download.append(item)
+            else:
+                existing = clips_state[item.clip.id]
+                # Quality change detection
+                existing_quality = existing.get("quality", QUALITY_HIGH)
+                if existing_quality != item.quality:
+                    old_path = existing.get("path")
+                    if old_path:
+                        await _delete_file(self.hass, base, old_path)
+                    to_download.append(item)
+                else:
+                    existing["sources"] = item.sources
+                    old_hash = existing.get("meta_hash", "")
+                    new_hash = clip_meta_hash(item.clip)
+                    if old_hash and new_hash != old_hash:
+                        existing["meta_hash"] = new_hash
+                        existing["title"] = item.clip.title
+                        meta_updates += 1
+        to_delete = []
+        for cid in clips_state:
+            if cid in seen_ids or cid in preserved_ids:
+                continue
+            entry = clips_state[cid]
+            sources = entry.get("sources", [])
+            # Only delete if ALL sources use "sync" mode
+            # Empty sources → all() returns True → delete (orphan cleanup)
+            if all(_source_uses_sync_mode(src, options) for src in sources):
+                to_delete.append(cid)
         self._pending = len(to_download)
         self._notify_coordinator()
         _LOGGER.info("Sync: %d to download, %d to remove, %d current", len(to_download), len(to_delete), len(seen_ids))
@@ -351,19 +412,20 @@ class SunoSync:
         if is_bootstrap:
             _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
         downloaded = 0
-        for clip, index in to_download:
+        for item in to_download:
             if downloaded >= max_dl:
                 _LOGGER.info("Reached max downloads (%d), continuing next sync", max_dl)
                 break
-            rel_path = _clip_path(clip, index)
-            if (file_size := await self._download_clip(client, clip, base, rel_path)) is not None:
-                clips_state[clip.id] = {
+            rel_path = _clip_path(item.clip, item.quality)
+            if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
+                clips_state[item.clip.id] = {
                     "path": rel_path,
-                    "title": clip.title,
-                    "created": clip.created_at[:10] if clip.created_at else None,
-                    "sources": next((srcs for c, _, _, srcs in desired if c.id == clip.id), []),
+                    "title": item.clip.title,
+                    "created": item.clip.created_at[:10] if item.clip.created_at else None,
+                    "sources": item.sources,
                     "size": file_size,
-                    "meta_hash": clip_meta_hash(clip),
+                    "meta_hash": clip_meta_hash(item.clip),
+                    "quality": item.quality,
                 }
                 downloaded += 1
                 self._pending = max(0, len(to_download) - downloaded)
@@ -383,26 +445,59 @@ class SunoSync:
         if options.get(CONF_SYNC_PLAYLISTS_M3U):
             await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)
 
+        orphans = await self._reconcile_disk(base, clips_state)
+        if orphans:
+            _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
+
+    async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
+        """Remove orphaned audio files not tracked in sync state."""
+        known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
+
+        def _scan_and_remove(base_path: Path, known: set[str]) -> int:
+            count = 0
+            if not base_path.exists():
+                return 0
+            for f in base_path.rglob("*"):
+                if not f.is_file():
+                    continue
+                # Skip non-audio files (manifest, playlists, tmp, hidden)
+                if f.suffix.lower() not in (".flac", ".mp3"):
+                    continue
+                rel = str(f.relative_to(base_path))
+                if rel not in known:
+                    f.unlink(missing_ok=True)
+                    _LOGGER.info("Reconciliation: removed orphan %s", rel)
+                    count += 1
+            # Clean up empty directories
+            for d in sorted(base_path.rglob("*"), reverse=True):
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+            return count
+
+        return await self.hass.async_add_executor_job(_scan_and_remove, base, known_paths)
+
     async def _build_desired(
         self,
         options: dict[str, Any],
         client: Any,
         coordinator_data: SunoData | None = None,
-    ) -> tuple[list[tuple[SunoClip, int, str, list[str]]], set[str]]:
-        clip_map: dict[str, tuple[SunoClip, str, list[str]]] = {}
+    ) -> tuple[list[SyncItem], set[str]]:
+        clip_map: dict[str, SyncItem] = {}
         preserved: set[str] = set()
         prev_clips = self._state.get("clips", {})
         if options.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED):
+            liked_quality = options.get(CONF_SYNC_QUALITY_LIKED, QUALITY_HIGH)
             try:
                 liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
                 for clip in liked:
-                    _add_clip(clip_map, clip, "Liked Songs", "liked")
+                    _add_clip(clip_map, clip, "Liked Songs", "liked", liked_quality)
             except Exception:
                 _LOGGER.warning("Failed to fetch liked songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
         sync_all = options.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS)
         selected_ids = options.get(CONF_SYNC_PLAYLISTS, []) or []
         if sync_all or selected_ids:
+            playlist_quality = options.get(CONF_SYNC_QUALITY_PLAYLISTS, QUALITY_HIGH)
             try:
                 playlists = coordinator_data.playlists if coordinator_data else await client.get_playlists()
                 for pl in playlists:
@@ -410,7 +505,7 @@ class SunoSync:
                         continue
                     try:
                         for clip in await client.get_playlist_clips(pl.id):
-                            _add_clip(clip_map, clip, pl.name, f"playlist:{pl.id}")
+                            _add_clip(clip_map, clip, pl.name, f"playlist:{pl.id}", playlist_quality)
                     except Exception:
                         _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
                         tag = f"playlist:{pl.id}"
@@ -418,59 +513,95 @@ class SunoSync:
             except Exception:
                 _LOGGER.warning("Failed to fetch playlists for sync")
                 _preserve_by(preserved, prev_clips, lambda s: any(x.startswith("playlist:") for x in s))
-        recent_count = options.get(CONF_SYNC_RECENT_COUNT, DEFAULT_SYNC_RECENT_COUNT)
-        recent_days = options.get(CONF_SYNC_RECENT_DAYS, DEFAULT_SYNC_RECENT_DAYS)
-        if recent_count or recent_days:
+        latest_count = options.get(CONF_SYNC_LATEST_COUNT, DEFAULT_SYNC_LATEST_COUNT)
+        latest_days = options.get(CONF_SYNC_LATEST_DAYS, DEFAULT_SYNC_LATEST_DAYS)
+        if latest_count or latest_days:
+            latest_quality = options.get(CONF_SYNC_QUALITY_LATEST, QUALITY_STANDARD)
             try:
                 all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
-                recent_set: set[str] = set()
-                if recent_count:
-                    recent_set.update(c.id for c in all_clips[: int(recent_count)])
-                if recent_days:
-                    cutoff = datetime.now(tz=UTC).timestamp() - int(recent_days) * 86400
+
+                # Start with all clips, then narrow
+                by_count: set[str] | None = set(c.id for c in all_clips[: int(latest_count)]) if latest_count else None
+                by_days: set[str] | None = None
+                if latest_days:
+                    cutoff = datetime.now(tz=UTC).timestamp() - int(latest_days) * 86400
+                    by_days = set()
                     for clip in all_clips:
                         if clip.created_at:
                             try:
                                 created = datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))
                                 if created.timestamp() >= cutoff:
-                                    recent_set.add(clip.id)
+                                    by_days.add(clip.id)
                             except ValueError:
                                 pass
-                for clip in all_clips:
-                    if clip.id in recent_set:
-                        _add_clip(clip_map, clip, "Recent", "recent")
-            except Exception:
-                _LOGGER.warning("Failed to fetch recent songs for sync")
-                _preserve_by(preserved, prev_clips, lambda s: "recent" in s)
-        preserved -= clip_map.keys()
-        return [
-            (clip, i, collection, sources) for i, (clip, collection, sources) in enumerate(clip_map.values())
-        ], preserved
 
-    async def _download_clip(self, client: Any, clip: SunoClip, base: Path, rel_path: str) -> int | None:
+                # AND logic: intersect the filters that are active
+                if by_count is not None and by_days is not None:
+                    latest_set = by_count & by_days  # intersection
+                elif by_count is not None:
+                    latest_set = by_count
+                elif by_days is not None:
+                    latest_set = by_days
+                else:
+                    latest_set = set()
+
+                for clip in all_clips:
+                    if clip.id in latest_set:
+                        _add_clip(clip_map, clip, "Latest", "latest", latest_quality)
+            except Exception:
+                _LOGGER.warning("Failed to fetch latest songs for sync")
+                _preserve_by(preserved, prev_clips, lambda s: "latest" in s)
+        preserved -= clip_map.keys()
+        return list(clip_map.values()), preserved
+
+    async def _download_clip(self, client: Any, item: SyncItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
         if await self.hass.async_add_executor_job(target.exists):
             return await self.hass.async_add_executor_job(lambda: target.stat().st_size)
-        _LOGGER.info("Downloading: %s", clip.title)
+        _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         try:
-            flac_data = await download_and_transcode_to_flac(
-                client,
-                async_get_clientsession(self.hass),
-                get_ffmpeg_manager(self.hass).binary,
-                clip.id,
-                clip.title or "Suno",
-                genre=clip.tags or "",
-                image_url=clip.image_large_url or clip.image_url,
-            )
-            if flac_data is None:
+            session = async_get_clientsession(self.hass)
+
+            if item.quality == QUALITY_HIGH:
+                data = await download_and_transcode_to_flac(
+                    client,
+                    session,
+                    get_ffmpeg_manager(self.hass).binary,
+                    item.clip.id,
+                    item.clip.title or "Suno",
+                    genre=item.clip.tags or "",
+                    image_url=item.clip.image_large_url or item.clip.image_url or None,
+                )
+                fmt = "flac"
+            else:
+                audio_url = item.clip.audio_url or f"{CDN_BASE_URL}/{item.clip.id}.mp3"
+                data = await download_as_mp3(
+                    session,
+                    audio_url,
+                    title=item.clip.title or "Suno",
+                    genre=item.clip.tags or "",
+                )
+                fmt = "mp3"
+
+            if data is None:
                 return None
-            await _write_file(self.hass, target, flac_data)
-            _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(flac_data))
-            return len(flac_data)
+
+            await _write_file(self.hass, target, data)
+            _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(data))
+
+            # Write-through to cache
+            if self._cache is not None:
+                meta_hash = clip_meta_hash(item.clip)
+                try:
+                    await self._cache.async_put(item.clip.id, fmt, data, meta_hash=meta_hash)
+                except Exception:
+                    _LOGGER.debug("Cache write-through failed for %s", item.clip.id)
+
+            return len(data)
         except asyncio.CancelledError:
             raise
         except Exception:
-            _LOGGER.exception("Failed to download %s", clip.id)
+            _LOGGER.exception("Failed to download %s", item.clip.id)
             return None
 
     # fmt: off

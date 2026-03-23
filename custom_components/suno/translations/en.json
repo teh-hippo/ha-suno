@@ -59,11 +59,30 @@
         "data": {
           "sync_enabled": "Enable sync",
           "sync_path": "Sync directory",
-          "sync_liked": "Sync liked songs",
-          "sync_all_playlists": "Sync all playlists",
-          "sync_recent_count": "Keep most recent songs",
-          "sync_recent_days": "Keep songs from last N days",
           "sync_playlists_m3u": "Create playlist files (M3U8)"
+        }
+      },
+      "sync_sources": {
+        "title": "Sync sources",
+        "description": "Configure what to sync, quality, and retention mode for each source.",
+        "data": {
+          "sync_liked": "Sync liked songs",
+          "sync_quality_liked": "Liked songs quality",
+          "sync_mode_liked": "Liked songs mode",
+          "sync_all_playlists": "Sync all playlists",
+          "sync_quality_playlists": "Playlist quality",
+          "sync_mode_playlists": "Playlist mode",
+          "sync_latest_count": "Latest songs count",
+          "sync_latest_days": "Latest songs lookback (days)",
+          "sync_quality_latest": "Latest songs quality",
+          "sync_mode_latest": "Latest songs mode"
+        },
+        "data_description": {
+          "sync_latest_count": "Maximum number of latest songs to sync (0 or empty to disable count limit)",
+          "sync_latest_days": "Sync songs created within this many days (0 or empty to disable time limit)",
+          "sync_mode_liked": "Sync: removes local files when songs are un-liked. Copy: keeps all downloaded files.",
+          "sync_mode_playlists": "Sync: removes local files when songs are removed from playlists. Copy: keeps all downloaded files.",
+          "sync_mode_latest": "Sync: removes songs that no longer match latest criteria. Copy: keeps all downloaded files."
         }
       },
       "sync_playlists": {
