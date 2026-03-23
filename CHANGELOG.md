@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.2.2 (2026-03-23)
+
+### Bug Fixes
+
+- Resolve M3U8 playlist misattribution and duplicates
+  ([`ae49d83`](https://github.com/teh-hippo/ha-suno/commit/ae49d83f82df53875ac9224b44cb76d9ed47a9b4))
+
+
 ## v3.2.1 (2026-03-23)
 
 ### Bug Fixes
