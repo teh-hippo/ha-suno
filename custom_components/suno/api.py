@@ -12,6 +12,7 @@ from aiohttp import ClientSession
 from .auth import ClerkAuth
 from .const import (
     EXCLUDED_TASKS,
+    EXCLUDED_TYPES,
     MAX_PAGES,
     SUNO_API_BASE_URL,
 )
@@ -74,7 +75,7 @@ class SunoClient:
         if not isinstance(data, dict):
             return []
         clips_data = [entry.get("clip") or entry for entry in (data.get("playlist_clips") or [])]
-        return [SunoClip.from_api_response(clip) for clip in clips_data if clip.get("status") == "complete"]
+        return self._filter_and_sanitise(clips_data)
 
     async def get_credits(self) -> SunoCredits:
         if not isinstance(data := await self._api_get("/api/billing/info/"), dict):
@@ -86,8 +87,8 @@ class SunoClient:
             SunoClip.from_api_response(clip)
             for clip in raw_clips
             if clip.get("status") == "complete"
-            and clip.get("metadata", {}).get("type") == "gen"
-            and clip.get("metadata", {}).get("task") not in EXCLUDED_TASKS
+            and (clip.get("metadata") or {}).get("type") not in EXCLUDED_TYPES
+            and (clip.get("metadata") or {}).get("task") not in EXCLUDED_TASKS
         ]
 
     async def _paginate_feed(self, params: dict[str, str] | None = None) -> list[SunoClip]:

@@ -66,3 +66,4 @@ DOWNLOAD_FFMPEG_TIMEOUT = 60
 
 JWT_REFRESH_BUFFER = 60
 EXCLUDED_TASKS = frozenset({"infill", "fixed_infill"})
+EXCLUDED_TYPES = frozenset({"rendered_context_window"})

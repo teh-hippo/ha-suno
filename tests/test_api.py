@@ -471,8 +471,8 @@ async def test_get_feed_non_dict_response() -> None:
     assert has_more is False
 
 
-async def test_get_feed_excludes_infill_tasks() -> None:
-    """get_feed excludes clips with infill or fixed_infill task metadata."""
+async def test_get_feed_filtering() -> None:
+    """get_feed excludes editor artifacts but includes all music types."""
     session = AsyncMock()
     client = _make_authed_client(session)
 
@@ -496,15 +496,72 @@ async def test_get_feed_excludes_infill_tasks() -> None:
             "audio_url": "https://cdn1.suno.ai/c4.mp3",
             "metadata": {"type": "gen", "task": "generate"},
         },
+        {
+            "id": "c5",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c5.mp3",
+            "metadata": {"type": "upsample", "task": "upsample"},
+        },
+        {
+            "id": "c6",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c6.mp3",
+            "metadata": {"type": "rendered_context_window"},
+        },
+        {
+            "id": "c7",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c7.mp3",
+            "metadata": {"type": "upload"},
+        },
+        {
+            "id": "c8",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c8.mp3",
+            "metadata": {"type": "concat"},
+        },
+        {
+            "id": "c9",
+            "status": "complete",
+            "audio_url": "https://cdn1.suno.ai/c9.mp3",
+            "metadata": {"type": "edit_v3_export"},
+        },
     ]
     session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
 
     clips, _ = await client.get_feed(0)
     ids = [c.id for c in clips]
+    # Included: gen, gen+generate, upsample, upload, concat, edit_v3_export
     assert "c1" in ids
+    assert "c4" in ids
+    assert "c5" in ids
+    assert "c7" in ids
+    assert "c8" in ids
+    assert "c9" in ids
+    # Excluded: infill, fixed_infill, rendered_context_window
     assert "c2" not in ids
     assert "c3" not in ids
-    assert "c4" in ids
+    assert "c6" not in ids
+
+
+async def test_get_feed_handles_missing_metadata() -> None:
+    """get_feed handles clips with missing or None metadata gracefully."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    raw_clips = [
+        {"id": "c1", "status": "complete", "audio_url": "https://cdn1.suno.ai/c1.mp3", "metadata": None},
+        {"id": "c2", "status": "complete", "audio_url": "https://cdn1.suno.ai/c2.mp3"},
+        {"id": "c3", "status": "complete", "audio_url": "https://cdn1.suno.ai/c3.mp3", "metadata": {}},
+    ]
+    session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
+
+    clips, _ = await client.get_feed(0)
+    ids = [c.id for c in clips]
+    # All included: blocklist design includes unknown/missing types
+    assert "c1" in ids
+    assert "c2" in ids
+    assert "c3" in ids
 
 
 async def test_get_liked_songs_excludes_infill_tasks() -> None:
@@ -673,7 +730,7 @@ async def test_get_playlist_clips_dict_response() -> None:
 
 
 async def test_get_playlist_clips_filters_incomplete() -> None:
-    """get_playlist_clips filters out non-complete clips."""
+    """get_playlist_clips filters out non-complete and editor artifact clips."""
     session = AsyncMock()
     client = _make_authed_client(session)
     session.get = MagicMock(
@@ -697,18 +754,42 @@ async def test_get_playlist_clips_filters_incomplete() -> None:
                             "metadata": {"type": "gen"},
                         },
                     },
+                    {
+                        "clip": {
+                            "id": "c3",
+                            "status": "complete",
+                            "audio_url": "https://cdn1.suno.ai/c3.mp3",
+                            "metadata": {"type": "upsample", "task": "upsample"},
+                        },
+                    },
+                    {
+                        "clip": {
+                            "id": "c4",
+                            "status": "complete",
+                            "audio_url": "https://cdn1.suno.ai/c4.mp3",
+                            "metadata": {"type": "rendered_context_window"},
+                        },
+                    },
+                    {
+                        "clip": {
+                            "id": "c5",
+                            "status": "complete",
+                            "audio_url": "https://cdn1.suno.ai/c5.mp3",
+                            "metadata": {"type": "gen", "task": "infill"},
+                        },
+                    },
                 ],
             },
         )
     )
 
     clips = await client.get_playlist_clips("pl-1")
-    assert len(clips) == 1
-    assert clips[0].id == "c1"
-
-    clips = await client.get_playlist_clips("pl-1")
-    assert len(clips) == 1
-    assert clips[0].id == "c1"
+    ids = [c.id for c in clips]
+    assert "c1" in ids
+    assert "c2" not in ids  # incomplete
+    assert "c3" in ids  # upsample included
+    assert "c4" not in ids  # editor artifact excluded
+    assert "c5" not in ids  # infill excluded
 
 
 async def test_get_playlist_clips_empty() -> None:
@@ -745,7 +826,7 @@ async def test_get_playlist_clips_empty_playlist() -> None:
 
 
 async def test_get_liked_songs_success() -> None:
-    """get_liked_songs returns liked gen clips."""
+    """get_liked_songs returns all music types including uploads."""
     session = AsyncMock()
     client = _make_authed_client(session)
 
@@ -769,9 +850,9 @@ async def test_get_liked_songs_success() -> None:
     session.get = MagicMock(return_value=_mock_response(200, {"clips": raw_clips, "has_more": False}))
 
     clips = await client.get_liked_songs()
-    # Only type=gen clips are returned
-    assert len(clips) == 1
+    assert len(clips) == 2
     assert clips[0].id == "c1"
+    assert clips[1].id == "c2"
 
 
 async def test_get_liked_songs_pagination() -> None:
