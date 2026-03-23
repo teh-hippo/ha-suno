@@ -15,23 +15,19 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import SunoClient
 from .auth import ClerkAuth
 from .const import (
-    CONF_CACHE_ENABLED,
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
-    CONF_SYNC_ENABLED,
-    CONF_SYNC_LATEST_COUNT,
-    CONF_SYNC_LATEST_DAYS,
-    CONF_SYNC_MODE_LATEST,
-    CONF_SYNC_MODE_LIKED,
-    CONF_SYNC_MODE_PLAYLISTS,
-    CONF_SYNC_QUALITY_LATEST,
-    CONF_SYNC_QUALITY_LIKED,
-    CONF_SYNC_QUALITY_PLAYLISTS,
+    CONF_DOWNLOAD_MODE_LATEST,
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    CONF_QUALITY_LATEST,
+    CONF_QUALITY_LIKED,
+    CONF_QUALITY_PLAYLISTS,
     DATA_VIEW_REGISTERED,
-    DEFAULT_CACHE_ENABLED,
     DEFAULT_CACHE_MAX_SIZE,
-    DEFAULT_SYNC_ENABLED,
-    DEFAULT_SYNC_MODE,
+    DEFAULT_DOWNLOAD_MODE,
+    DOMAIN,
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
@@ -47,32 +43,32 @@ type SunoConfigEntry = ConfigEntry[SunoCoordinator]
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate config entry from VERSION 1 to VERSION 2."""
+    """Migrate config entry to latest version."""
     if entry.version < 2:
         new_options = dict(entry.options)
 
         # Add per-source quality defaults
-        new_options.setdefault(CONF_SYNC_QUALITY_LIKED, QUALITY_HIGH)
-        new_options.setdefault(CONF_SYNC_QUALITY_PLAYLISTS, QUALITY_HIGH)
-        new_options.setdefault(CONF_SYNC_QUALITY_LATEST, QUALITY_STANDARD)
+        new_options.setdefault(CONF_QUALITY_LIKED, QUALITY_HIGH)
+        new_options.setdefault(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH)
+        new_options.setdefault(CONF_QUALITY_LATEST, QUALITY_STANDARD)
 
         # Add per-source mode defaults
-        new_options.setdefault(CONF_SYNC_MODE_LIKED, DEFAULT_SYNC_MODE)
-        new_options.setdefault(CONF_SYNC_MODE_PLAYLISTS, DEFAULT_SYNC_MODE)
-        new_options.setdefault(CONF_SYNC_MODE_LATEST, DEFAULT_SYNC_MODE)
+        new_options.setdefault(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE)
+        new_options.setdefault(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE)
+        new_options.setdefault(CONF_DOWNLOAD_MODE_LATEST, DEFAULT_DOWNLOAD_MODE)
 
         # Rename recent → latest (carry over values)
         if "sync_recent_count" in new_options:
             val = new_options.pop("sync_recent_count")
-            new_options[CONF_SYNC_LATEST_COUNT] = int(val) if val else None
+            new_options["sync_latest_count"] = int(val) if val else None
         if "sync_recent_days" in new_options:
             val = new_options.pop("sync_recent_days")
-            new_options[CONF_SYNC_LATEST_DAYS] = int(val) if val else None
+            new_options["sync_latest_days"] = int(val) if val else None
 
         # Float → int coercion for number fields
         for key in (
-            CONF_SYNC_LATEST_COUNT,
-            CONF_SYNC_LATEST_DAYS,
+            "sync_latest_count",
+            "sync_latest_days",
             "recent_count",
             "cache_ttl_minutes",
             "cache_max_size_mb",
@@ -85,6 +81,82 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         hass.config_entries.async_update_entry(entry, options=new_options, version=2)
         _LOGGER.info("Migrated Suno config entry to version 2")
+
+    if entry.version < 3:
+        opts = dict(entry.options)
+
+        # Key renames: sync → download/quality/latest
+        renames = {
+            "sync_path": "download_path",
+            "sync_mode_liked": "download_mode_liked",
+            "sync_mode_playlists": "download_mode_playlists",
+            "sync_mode_latest": "download_mode_latest",
+            "sync_quality_liked": "quality_liked",
+            "sync_quality_playlists": "quality_playlists",
+            "sync_quality_latest": "quality_latest",
+            "sync_latest_count": "latest_count",
+            "sync_latest_days": "latest_days",
+            "sync_all_playlists": "all_playlists",
+            "sync_playlists": "playlists",
+            "sync_playlists_m3u": "create_playlists",
+            "show_recent": "show_latest",
+        }
+        for old, new in renames.items():
+            if old in opts:
+                opts[new] = opts.pop(old)
+
+        # Mode value renames: sync→mirror, copy→collect
+        for mode_key in ("download_mode_liked", "download_mode_playlists", "download_mode_latest"):
+            if mode_key in opts:
+                if opts[mode_key] == "sync":
+                    opts[mode_key] = "mirror"
+                elif opts[mode_key] == "copy":
+                    opts[mode_key] = "collect"
+
+        # sync_enabled=False guard: don't accidentally activate downloading
+        if not opts.pop("sync_enabled", False):
+            opts.pop("download_path", None)
+
+        # Remove deprecated keys
+        for key in (
+            "audio_quality",
+            "recent_count",
+            "cache_ttl_minutes",
+            "cache_enabled",
+            "sync_enabled",
+            "sync_liked",
+            "sync_trash_days",
+        ):
+            opts.pop(key, None)
+
+        # Ensure defaults for new keys
+        opts.setdefault("cache_max_size_mb", 500)
+        opts.setdefault("latest_count", 20)
+        opts.setdefault("latest_days", 7)
+
+        # Entity registry migration (sync → download sensor names)
+        try:
+            from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+            registry = er.async_get(hass)
+            remap = {
+                "sync_status": "download_status",
+                "sync_files": "downloaded_files",
+                "sync_remaining": "download_remaining",
+                "sync_size": "download_size",
+                "sync_last_run": "last_download_run",
+                "sync_result": "last_download_result",
+            }
+            for old_suffix, new_suffix in remap.items():
+                old_uid = f"{entry.unique_id}_{old_suffix}"
+                if eid := registry.async_get_entity_id("sensor", DOMAIN, old_uid):
+                    registry.async_update_entity(eid, new_unique_id=f"{entry.unique_id}_{new_suffix}")
+        except Exception:
+            _LOGGER.debug("Entity registry migration skipped")
+
+        hass.config_entries.async_update_entry(entry, options=opts, version=3)
+        _LOGGER.info("Migrated Suno config entry to version 3")
+
     return True
 
 
@@ -122,21 +194,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
 
     entry.runtime_data = coordinator
 
-    if entry.options.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED):
-        from .cache import SunoCache  # noqa: PLC0415
+    # Always create cache
+    from .cache import SunoCache  # noqa: PLC0415
 
-        cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE))
-        await cache.async_init()
-        coordinator.cache = cache
+    cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE))
+    await cache.async_init()
+    coordinator.cache = cache
 
     if not hass.data.get(DATA_VIEW_REGISTERED):
         hass.http.register_view(SunoMediaProxyView(hass))
         hass.data[DATA_VIEW_REGISTERED] = True
 
-    if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
-        from .sync import SunoSync  # noqa: PLC0415
+    # Create download manager when download_path is configured
+    if entry.options.get(CONF_DOWNLOAD_PATH):
+        from .download import SunoDownloadManager  # noqa: PLC0415
 
-        coordinator.sync = await SunoSync.async_setup(hass, entry, coordinator, client)
+        coordinator.download_manager = await SunoDownloadManager.async_setup(hass, entry, coordinator, client)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

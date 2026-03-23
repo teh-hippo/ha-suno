@@ -68,7 +68,7 @@ async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistan
     coordinator: SunoCoordinator = entry.runtime_data
     mock_suno_client.get_all_songs.side_effect = SunoApiError("Server error")
 
-    with pytest.raises(UpdateFailed, match="Error fetching Suno data"):
+    with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
 
 
@@ -125,20 +125,13 @@ async def test_coordinator_playlists_failure_graceful(hass: HomeAssistant, mock_
     assert coordinator.data.playlists == []
 
 
-async def test_coordinator_uses_cache_ttl_from_options(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Coordinator update_interval comes from options cache_ttl."""
-    entry = make_entry(
-        options={
-            "show_liked": True,
-            "show_recent": True,
-            "recent_count": 20,
-            "show_playlists": True,
-            "cache_ttl_minutes": 45,
-        }
-    )
+async def test_coordinator_uses_default_cache_ttl(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Coordinator update_interval uses hardcoded DEFAULT_CACHE_TTL."""
+    entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
     assert coordinator.update_interval is not None
-    assert coordinator.update_interval.total_seconds() == 45 * 60
+    # DEFAULT_CACHE_TTL is 30 minutes
+    assert coordinator.update_interval.total_seconds() == 30 * 60

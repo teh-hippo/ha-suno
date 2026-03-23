@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SunoConfigEntry
+from .const import CONF_DOWNLOAD_PATH
 from .coordinator import SunoCoordinator, SunoData
 
 PARALLEL_UPDATES = 0
@@ -85,35 +86,58 @@ _LIBRARY_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | N
 ]
 
 
-def _sync_files_breakdown(c: SunoCoordinator) -> dict[str, int]:
-    """Source breakdown for sync_files attributes."""
-    return c.sync.source_breakdown if c.sync else {}
+def _download_files_breakdown(c: SunoCoordinator) -> dict[str, int]:
+    """Source breakdown for downloaded_files attributes."""
+    return c.download_manager.source_breakdown if c.download_manager else {}
 
 
-def _parse_last_sync(c: SunoCoordinator) -> datetime | None:
-    """Parse last_sync ISO string to datetime for TIMESTAMP sensor."""
-    if c.sync and c.sync.last_sync:
+def _parse_last_download(c: SunoCoordinator) -> datetime | None:
+    """Parse last_download ISO string to datetime for TIMESTAMP sensor."""
+    if c.download_manager and c.download_manager.last_download:
         try:
-            return datetime.fromisoformat(c.sync.last_sync)
+            return datetime.fromisoformat(c.download_manager.last_download)
         except ValueError:
             return None
     return None
 
 
-_SYNC_SENSORS: list[tuple[Any, ...]] = [
+_DOWNLOAD_SENSORS: list[tuple[Any, ...]] = [
     (
-        "sync_files",
+        "downloaded_files",
         "mdi:file-music",
-        lambda c: c.sync.total_files if c.sync else 0,
+        lambda c: c.download_manager.total_files if c.download_manager else 0,
         None,
         SensorStateClass.MEASUREMENT,
         None,
-        _sync_files_breakdown,
+        _download_files_breakdown,
     ),
-    ("sync_remaining", "mdi:download", lambda c: c.sync.pending if c.sync else 0, None),
-    ("sync_size", "mdi:harddisk", lambda c: c.sync.library_size_mb if c.sync else 0.0, "MB"),
-    ("sync_last_run", "mdi:clock-check-outline", _parse_last_sync, None, None, SensorDeviceClass.TIMESTAMP),
-    ("sync_result", "mdi:text-box-check-outline", lambda c: c.sync.last_result if c.sync else "", None, None),
+    (
+        "download_remaining",
+        "mdi:download",
+        lambda c: c.download_manager.pending if c.download_manager else 0,
+        None,
+    ),
+    (
+        "download_size",
+        "mdi:harddisk",
+        lambda c: c.download_manager.library_size_mb if c.download_manager else 0.0,
+        "MB",
+    ),
+    (
+        "last_download_run",
+        "mdi:clock-check-outline",
+        _parse_last_download,
+        None,
+        None,
+        SensorDeviceClass.TIMESTAMP,
+    ),
+    (
+        "last_download_result",
+        "mdi:text-box-check-outline",
+        lambda c: c.download_manager.last_result if c.download_manager else "",
+        None,
+        None,
+    ),
 ]
 
 
@@ -173,36 +197,34 @@ class SunoCacheSizeSensor(_SunoSensor):
         return {"cached_files": cache.file_count} if cache is not None else {}
 
 
-class SunoSyncStatusSensor(_SunoSensor):
-    """Sync status: idle, syncing, or error."""
+class SunoDownloadStatusSensor(_SunoSensor):
+    """Download status: idle, downloading, or error."""
 
-    _attr_translation_key = "sync_status"
-    _attr_icon = "mdi:sync"
+    _attr_translation_key = "download_status"
+    _attr_icon = "mdi:download"
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["idle", "syncing", "error"]
+    _attr_options = ["idle", "downloading", "error"]
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, "sync_status")
+        super().__init__(coordinator, entry, "download_status")
 
     @property
     def native_value(self) -> str:
-        sync = self.coordinator.sync
-        if sync is None:
+        dm = self.coordinator.download_manager
+        if dm is None:
             return "idle"
-        if sync.is_running:
-            return "syncing"
-        return "error" if sync.errors > 0 else "idle"
+        if dm.is_running:
+            return "downloading"
+        return "error" if dm.errors > 0 else "idle"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        from .const import CONF_SYNC_PATH  # noqa: PLC0415
-
         attrs: dict[str, Any] = {
-            "sync_path": self._entry.options.get(CONF_SYNC_PATH, ""),
+            "download_path": self._entry.options.get(CONF_DOWNLOAD_PATH, ""),
         }
-        sync = self.coordinator.sync
-        if sync is not None:
-            attrs["errors"] = sync.errors
+        dm = self.coordinator.download_manager
+        if dm is not None:
+            attrs["errors"] = dm.errors
         return attrs
 
 
@@ -221,10 +243,8 @@ async def async_setup_entry(
     entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _LIBRARY_SENSORS)
     entities.append(SunoCacheSizeSensor(coordinator, entry))
 
-    from .const import CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED  # noqa: PLC0415
-
-    if entry.options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
-        entities.append(SunoSyncStatusSensor(coordinator, entry))
-        entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _SYNC_SENSORS)
+    if entry.options.get(CONF_DOWNLOAD_PATH):
+        entities.append(SunoDownloadStatusSensor(coordinator, entry))
+        entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _DOWNLOAD_SENSORS)
 
     async_add_entities(entities)

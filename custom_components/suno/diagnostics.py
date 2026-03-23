@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 
 from . import SunoConfigEntry
 
-REDACT_KEYS = {"cookie"}
+REDACT_KEYS = {"cookie", "download_path"}
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoConfigEntry) -> dict[str, Any]:

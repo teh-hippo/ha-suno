@@ -1,4 +1,4 @@
-"""Background FLAC sync for the Suno integration."""
+"""Background download manager for the Suno integration."""
 
 from __future__ import annotations
 
@@ -21,33 +21,31 @@ from homeassistant.helpers.storage import Store
 from .audio import download_and_transcode_to_flac, download_as_mp3
 from .const import (
     CDN_BASE_URL,
-    CONF_SYNC_ALL_PLAYLISTS,
-    CONF_SYNC_ENABLED,
-    CONF_SYNC_LATEST_COUNT,
-    CONF_SYNC_LATEST_DAYS,
-    CONF_SYNC_LIKED,
-    CONF_SYNC_MODE_LATEST,
-    CONF_SYNC_MODE_LIKED,
-    CONF_SYNC_MODE_PLAYLISTS,
-    CONF_SYNC_PATH,
-    CONF_SYNC_PLAYLISTS,
-    CONF_SYNC_PLAYLISTS_M3U,
-    CONF_SYNC_QUALITY_LATEST,
-    CONF_SYNC_QUALITY_LIKED,
-    CONF_SYNC_QUALITY_PLAYLISTS,
-    DEFAULT_SYNC_ALL_PLAYLISTS,
-    DEFAULT_SYNC_ENABLED,
-    DEFAULT_SYNC_LATEST_COUNT,
-    DEFAULT_SYNC_LATEST_DAYS,
-    DEFAULT_SYNC_LIKED,
-    DEFAULT_SYNC_MODE,
+    CONF_ALL_PLAYLISTS,
+    CONF_CREATE_PLAYLISTS,
+    CONF_DOWNLOAD_MODE_LATEST,
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    CONF_LATEST_COUNT,
+    CONF_LATEST_DAYS,
+    CONF_PLAYLISTS,
+    CONF_QUALITY_LATEST,
+    CONF_QUALITY_LIKED,
+    CONF_QUALITY_PLAYLISTS,
+    CONF_SHOW_LIKED,
+    DEFAULT_ALL_PLAYLISTS,
+    DEFAULT_DOWNLOAD_MODE,
+    DEFAULT_LATEST_COUNT,
+    DEFAULT_LATEST_DAYS,
+    DEFAULT_SHOW_LIKED,
     DOMAIN,
+    DOWNLOAD_DELAY,
+    DOWNLOAD_MAX_BOOTSTRAP,
+    DOWNLOAD_MAX_PER_RUN,
+    DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
-    SYNC_DOWNLOAD_DELAY,
-    SYNC_MAX_DOWNLOADS_BOOTSTRAP,
-    SYNC_MAX_DOWNLOADS_PER_RUN,
-    SYNC_MODE_SYNC,
 )
 from .models import SunoClip, clip_meta_hash
 
@@ -59,14 +57,14 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
-_SERVICE_SYNC = "sync_media"
-_MANIFEST_FILENAME = ".suno_sync.json"
+_SERVICE_DOWNLOAD = "download_library"
+_MANIFEST_FILENAME = ".suno_download.json"
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 @dataclass
-class SyncItem:
-    """A clip scheduled for sync with its resolved metadata."""
+class DownloadItem:
+    """A clip scheduled for download with its resolved metadata."""
 
     clip: SunoClip
     collection: str
@@ -79,8 +77,8 @@ def _sanitise_filename(name: str, max_len: int = 200) -> str:
     return safe[:max_len] if safe else "untitled"
 
 
-def _build_sync_summary(downloaded: int, removed: int, meta_updates: int) -> str:
-    """Build a human-readable summary of sync results."""
+def _build_download_summary(downloaded: int, removed: int, meta_updates: int) -> str:
+    """Build a human-readable summary of download results."""
     parts: list[str] = []
     if downloaded:
         parts.append(f"{downloaded} new song{'s' if downloaded != 1 else ''}")
@@ -91,7 +89,7 @@ def _build_sync_summary(downloaded: int, removed: int, meta_updates: int) -> str
     return ", ".join(parts) if parts else "No change"
 
 
-def _write_m3u8_playlists(base: Path, clips_state: dict[str, Any], desired: list[SyncItem]) -> None:
+def _write_m3u8_playlists(base: Path, clips_state: dict[str, Any], desired: list[DownloadItem]) -> None:
     """Write M3U8 playlist files for Jellyfin/media player compatibility."""
     # Build playlist_name → [(abs_path, title, duration)] from sources
     playlists: dict[str, list[tuple[str, str, int]]] = {}
@@ -141,7 +139,7 @@ def _clip_path(clip: SunoClip, quality: str) -> str:
 
 
 def _add_clip(
-    clip_map: dict[str, SyncItem],
+    clip_map: dict[str, DownloadItem],
     clip: SunoClip,
     collection: str,
     source: str,
@@ -153,7 +151,7 @@ def _add_clip(
         if quality == QUALITY_HIGH:
             item.quality = QUALITY_HIGH
     else:
-        clip_map[clip.id] = SyncItem(clip=clip, collection=collection, sources=[source], quality=quality)
+        clip_map[clip.id] = DownloadItem(clip=clip, collection=collection, sources=[source], quality=quality)
 
 
 def _preserve_by(preserved: set[str], prev_clips: dict[str, Any], pred: Any) -> None:
@@ -198,76 +196,76 @@ async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
 
 
 
-def _source_uses_sync_mode(source: str, options: dict[str, Any]) -> bool:
-    """Check if a source tag's mode is 'sync' (managed, delete removed)."""
+def _source_uses_mirror_mode(source: str, options: dict[str, Any]) -> bool:
+    """Check if a source tag's mode is 'mirror' (managed, delete removed)."""
     if source == "liked":
-        return bool(options.get(CONF_SYNC_MODE_LIKED, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
+        return bool(options.get(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
     if source.startswith("playlist:"):
-        return bool(options.get(CONF_SYNC_MODE_PLAYLISTS, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
+        return bool(options.get(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
     if source == "latest":
-        return bool(options.get(CONF_SYNC_MODE_LATEST, DEFAULT_SYNC_MODE) == SYNC_MODE_SYNC)
-    return True  # Unknown sources default to sync (delete-safe)
+        return bool(options.get(CONF_DOWNLOAD_MODE_LATEST, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
+    return True  # Unknown sources default to mirror (delete-safe)
 
 
-class SunoSync:
-    """Manages background FLAC sync to a local directory."""
+class SunoDownloadManager:
+    """Manages background file downloads to a local directory."""
 
     def __init__(self, hass: HomeAssistant, store_key: str) -> None:
         self.hass = hass
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
-        self._state: dict[str, Any] = {"clips": {}, "last_sync": None}
+        self._state: dict[str, Any] = {"clips": {}, "last_download": None}
         self._cache: SunoCache | None = None
         self._coordinator: SunoCoordinator | None = None
-        self._sync_path = ""
+        self._download_path = ""
         self._running = False
         self._errors = self._pending = 0
         self._last_result = ""
         self._updating_sensors = False
 
     async def async_init(self) -> None:
-        """Load persisted sync state."""
+        """Load persisted download state."""
         if (data := await self._store.async_load()) and isinstance(data, dict):
             self._state = data
 
     @classmethod
     async def async_setup(
         cls, hass: HomeAssistant, entry: ConfigEntry, coordinator: SunoCoordinator, client: SunoClient
-    ) -> SunoSync:
-        """Create, initialise, and wire up sync."""
-        sync = cls(hass, f"suno_sync_{entry.entry_id}")
-        sync._cache = coordinator.cache
-        sync._coordinator = coordinator
-        sync._sync_path = entry.options.get(CONF_SYNC_PATH, "")
-        await sync.async_init()
-        if sync_path := entry.options.get(CONF_SYNC_PATH, ""):
-            await sync.cleanup_tmp_files(sync_path)
+    ) -> SunoDownloadManager:
+        """Create, initialise, and wire up download manager."""
+        mgr = cls(hass, f"suno_sync_{entry.entry_id}")
+        mgr._cache = coordinator.cache
+        mgr._coordinator = coordinator
+        mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
+        await mgr.async_init()
+        if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
+            await mgr.cleanup_tmp_files(download_path)
 
         def _on_coordinator_update() -> None:
-            if not sync.is_running and not sync._updating_sensors:
+            if not mgr.is_running and not mgr._updating_sensors:
                 hass.async_create_task(
-                    sync.async_sync(dict(entry.options), client, coordinator_data=coordinator.data),
-                    f"suno_sync_refresh_{entry.entry_id}",
+                    mgr.async_download(dict(entry.options), client, coordinator_data=coordinator.data),
+                    f"suno_download_refresh_{entry.entry_id}",
                 )
 
         entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
-        async def _handle_sync_service(call: ServiceCall) -> None:
-            await sync.async_sync(dict(entry.options), client, force=call.data.get("force", False))
+        async def _handle_download_service(call: ServiceCall) -> None:
+            await mgr.async_download(dict(entry.options), client, force=call.data.get("force", False))
 
-        if not hass.services.has_service(DOMAIN, _SERVICE_SYNC):
-            hass.services.async_register(DOMAIN, _SERVICE_SYNC, _handle_sync_service)
-            entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, _SERVICE_SYNC))
+        if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
+            hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
+            entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD))
 
-        async def _initial_sync() -> None:
+        async def _initial_download() -> None:
             await asyncio.sleep(60)
-            await sync.async_sync(dict(entry.options), client)
+            await mgr.async_download(dict(entry.options), client)
 
-        entry.async_create_background_task(hass, _initial_sync(), f"suno_sync_init_{entry.entry_id}")
-        return sync
+        entry.async_create_background_task(hass, _initial_download(), f"suno_download_init_{entry.entry_id}")
+        return mgr
 
     # fmt: off
     @property
-    def last_sync(self) -> str | None: return self._state.get("last_sync")
+    def last_download(self) -> str | None: return self._state.get("last_download") or self._state.get("last_sync")
     @property
     def last_result(self) -> str: return self._last_result
     @property
@@ -296,43 +294,41 @@ class SunoSync:
                 counts[src] += 1
         return dict(counts)
 
-    def get_synced_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
-        """Return absolute path to a synced FLAC if it exists and is fresh."""
-        if not self._sync_path:
+    def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
+        """Return absolute path to a downloaded file if it exists and is fresh."""
+        if not self._download_path:
             return None
         if not (entry := self._state.get("clips", {}).get(clip_id)):
             return None
         if meta_hash and entry.get("meta_hash") and entry["meta_hash"] != meta_hash:
             return None
-        path = Path(self._sync_path) / str(entry["path"])
+        path = Path(self._download_path) / str(entry["path"])
         return path if path.is_file() else None
 
-    async def async_sync(
+    async def async_download(
         self,
         options: dict[str, Any],
         client: Any,
         force: bool = False,
         coordinator_data: SunoData | None = None,
     ) -> None:
-        """Run a full sync cycle."""
+        """Run a full download cycle."""
         if self._running:
-            _LOGGER.debug("Sync already running, skipping")
+            _LOGGER.debug("Download already running, skipping")
             return
-        if not options.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED):
-            return
-        if not (sync_path := options.get(CONF_SYNC_PATH)):
-            _LOGGER.warning("Sync enabled but no sync_path configured")
+        if not (download_path := options.get(CONF_DOWNLOAD_PATH)):
+            _LOGGER.warning("No download_path configured")
             return
         self._running = True
         self._errors = self._pending = 0
         self._notify_coordinator()
         try:
-            await self._run_sync(options, client, sync_path, force, coordinator_data)
+            await self._run_download(options, client, download_path, force, coordinator_data)
         except asyncio.CancelledError:
-            _LOGGER.info("Sync cancelled")
+            _LOGGER.info("Download cancelled")
             raise
         except Exception:
-            _LOGGER.exception("Sync failed")
+            _LOGGER.exception("Download failed")
             self._errors += 1
         finally:
             self._running = False
@@ -345,15 +341,15 @@ class SunoSync:
             self._coordinator.async_set_updated_data(self._coordinator.data)
             self._updating_sensors = False
 
-    async def _run_sync(
+    async def _run_download(
         self,
         options: dict[str, Any],
         client: Any,
-        sync_path: str,
+        download_path: str,
         force: bool,
         coordinator_data: SunoData | None = None,
     ) -> None:
-        base = Path(sync_path)
+        base = Path(download_path)
         # Clean up legacy .trash directory if it exists
         trash_dir = base / ".trash"
         if await self.hass.async_add_executor_job(trash_dir.is_dir):
@@ -364,7 +360,7 @@ class SunoSync:
         self._state.pop("trash", None)
         desired, preserved_ids = await self._build_desired(options, client, coordinator_data)
         clips_state = dict(self._state.get("clips", {}))
-        to_download: list[SyncItem] = []
+        to_download: list[DownloadItem] = []
         meta_updates = 0
         seen_ids: set[str] = set()
         for item in desired:
@@ -394,21 +390,26 @@ class SunoSync:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            # Only delete if ALL sources use "sync" mode
+            # Only delete if ALL sources use "mirror" mode
             # Empty sources → all() returns True → delete (orphan cleanup)
-            if all(_source_uses_sync_mode(src, options) for src in sources):
+            if all(_source_uses_mirror_mode(src, options) for src in sources):
                 to_delete.append(cid)
         self._pending = len(to_download)
         self._notify_coordinator()
-        _LOGGER.info("Sync: %d to download, %d to remove, %d current", len(to_download), len(to_delete), len(seen_ids))
+        _LOGGER.info(
+            "Download: %d to download, %d to remove, %d current",
+            len(to_download),
+            len(to_delete),
+            len(seen_ids),
+        )
         try:
             await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
         except OSError:
-            _LOGGER.error("Cannot create sync directory: %s", sync_path)
+            _LOGGER.error("Cannot create download directory: %s", download_path)
             self._errors += 1
             return
-        is_bootstrap = self.total_files == 0 and len(to_download) > SYNC_MAX_DOWNLOADS_PER_RUN
-        max_dl = SYNC_MAX_DOWNLOADS_BOOTSTRAP if is_bootstrap else SYNC_MAX_DOWNLOADS_PER_RUN
+        is_bootstrap = self.total_files == 0 and len(to_download) > DOWNLOAD_MAX_PER_RUN
+        max_dl = DOWNLOAD_MAX_BOOTSTRAP if is_bootstrap else DOWNLOAD_MAX_PER_RUN
         if is_bootstrap:
             _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
         downloaded = 0
@@ -433,16 +434,16 @@ class SunoSync:
                 self._errors += 1
             if downloaded < len(to_download):
                 self._notify_coordinator()
-                await asyncio.sleep(SYNC_DOWNLOAD_DELAY)
+                await asyncio.sleep(DOWNLOAD_DELAY)
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
         self._state["clips"] = clips_state
-        self._state["last_sync"] = datetime.now(tz=UTC).isoformat()
+        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded)
-        self._last_result = _build_sync_summary(downloaded, len(to_delete), meta_updates)
+        self._last_result = _build_download_summary(downloaded, len(to_delete), meta_updates)
         await self._save_state(base)
-        if options.get(CONF_SYNC_PLAYLISTS_M3U):
+        if options.get(CONF_CREATE_PLAYLISTS):
             await self.hass.async_add_executor_job(_write_m3u8_playlists, base, clips_state, desired)
 
         orphans = await self._reconcile_disk(base, clips_state)
@@ -450,7 +451,7 @@ class SunoSync:
             _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
 
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
-        """Remove orphaned audio files not tracked in sync state."""
+        """Remove orphaned audio files not tracked in download state."""
         known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
 
         def _scan_and_remove(base_path: Path, known: set[str]) -> int:
@@ -481,12 +482,12 @@ class SunoSync:
         options: dict[str, Any],
         client: Any,
         coordinator_data: SunoData | None = None,
-    ) -> tuple[list[SyncItem], set[str]]:
-        clip_map: dict[str, SyncItem] = {}
+    ) -> tuple[list[DownloadItem], set[str]]:
+        clip_map: dict[str, DownloadItem] = {}
         preserved: set[str] = set()
         prev_clips = self._state.get("clips", {})
-        if options.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED):
-            liked_quality = options.get(CONF_SYNC_QUALITY_LIKED, QUALITY_HIGH)
+        if options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
+            liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
             try:
                 liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
                 for clip in liked:
@@ -494,10 +495,10 @@ class SunoSync:
             except Exception:
                 _LOGGER.warning("Failed to fetch liked songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
-        sync_all = options.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS)
-        selected_ids = options.get(CONF_SYNC_PLAYLISTS, []) or []
+        sync_all = options.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS)
+        selected_ids = options.get(CONF_PLAYLISTS, []) or []
         if sync_all or selected_ids:
-            playlist_quality = options.get(CONF_SYNC_QUALITY_PLAYLISTS, QUALITY_HIGH)
+            playlist_quality = options.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH)
             try:
                 playlists = coordinator_data.playlists if coordinator_data else await client.get_playlists()
                 for pl in playlists:
@@ -513,10 +514,10 @@ class SunoSync:
             except Exception:
                 _LOGGER.warning("Failed to fetch playlists for sync")
                 _preserve_by(preserved, prev_clips, lambda s: any(x.startswith("playlist:") for x in s))
-        latest_count = options.get(CONF_SYNC_LATEST_COUNT, DEFAULT_SYNC_LATEST_COUNT)
-        latest_days = options.get(CONF_SYNC_LATEST_DAYS, DEFAULT_SYNC_LATEST_DAYS)
+        latest_count = options.get(CONF_LATEST_COUNT, DEFAULT_LATEST_COUNT)
+        latest_days = options.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS)
         if latest_count or latest_days:
-            latest_quality = options.get(CONF_SYNC_QUALITY_LATEST, QUALITY_STANDARD)
+            latest_quality = options.get(CONF_QUALITY_LATEST, QUALITY_STANDARD)
             try:
                 all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
 
@@ -554,7 +555,7 @@ class SunoSync:
         preserved -= clip_map.keys()
         return list(clip_map.values()), preserved
 
-    async def _download_clip(self, client: Any, item: SyncItem, base: Path, rel_path: str) -> int | None:
+    async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
         if await self.hass.async_add_executor_job(target.exists):
             return await self.hass.async_add_executor_job(lambda: target.stat().st_size)
@@ -587,7 +588,7 @@ class SunoSync:
                 return None
 
             await _write_file(self.hass, target, data)
-            _LOGGER.info("Synced: %s (%d bytes)", rel_path, len(data))
+            _LOGGER.info("Downloaded: %s (%d bytes)", rel_path, len(data))
 
             # Write-through to cache
             if self._cache is not None:
@@ -605,8 +606,8 @@ class SunoSync:
             return None
 
     # fmt: off
-    async def cleanup_tmp_files(self, sync_path: str) -> None:
-        """Remove stale .tmp files from the sync directory."""
+    async def cleanup_tmp_files(self, download_path: str) -> None:
+        """Remove stale .tmp files from the download directory."""
         def _cleanup(p: str) -> None:
             base = Path(p)
             if not base.exists():
@@ -614,7 +615,7 @@ class SunoSync:
             for tmp in base.rglob("*.tmp"):
                 tmp.unlink(missing_ok=True)
                 _LOGGER.debug("Cleaned up: %s", tmp)
-        await self.hass.async_add_executor_job(_cleanup, sync_path)
+        await self.hass.async_add_executor_job(_cleanup, download_path)
 
     async def _save_state(self, base: Path) -> None:
         await self._store.async_save(self._state)

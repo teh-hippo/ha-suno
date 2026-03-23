@@ -186,34 +186,14 @@ async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_
 # ── RIFF INFO builder ───────────────────────────────────────────────
 
 
-async def test_view_wav_url_construction(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """When quality is high, the proxy should build a .wav CDN URL."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
-
-    entry = make_entry(
-        options={
-            **make_entry().options,
-            CONF_AUDIO_QUALITY: "high",
-        }
-    )
-    with patch_suno_setup(mock_suno_client):
-        await setup_entry(hass, entry)
-
-    view = SunoMediaProxyView(hass)
-    opts = view._get_entry_options()
-    assert opts.get(CONF_AUDIO_QUALITY) == "high"
-
-
 async def test_view_cache_hit_serves_file(
     hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client, tmp_path
 ) -> None:
     """When cache has a file, the proxy should serve it directly."""
-    from custom_components.suno.const import CONF_CACHE_ENABLED
 
     entry = make_entry(
         options={
             **make_entry().options,
-            CONF_CACHE_ENABLED: True,
         }
     )
     with patch_suno_setup(mock_suno_client):
@@ -254,19 +234,6 @@ async def test_find_clip_skips_entries_without_runtime_data(hass: HomeAssistant,
     assert clip is not None
 
 
-async def test_get_entry_options_returns_empty_when_no_runtime_data(
-    hass: HomeAssistant,
-) -> None:
-    """When no entry has runtime_data, _get_entry_options returns {} (line 130)."""
-    # Add an entry but don't set it up
-    entry = make_entry()
-    entry.add_to_hass(hass)
-
-    view = SunoMediaProxyView(hass)
-    opts = view._get_entry_options()
-    assert opts == {}
-
-
 # ── Streaming handler tests ─────────────────────────────────────────
 
 
@@ -278,9 +245,8 @@ async def _async_iter(chunks):
 
 async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """MP3 streaming should inject ID3 header and collect chunks for cache (lines 211-246)."""
-    from custom_components.suno.const import CONF_CACHE_ENABLED
 
-    entry = make_entry(options={**make_entry().options, CONF_CACHE_ENABLED: True})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -359,13 +325,10 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
 
 async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """High quality should transcode WAV to FLAC and write to cache."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY, CONF_CACHE_ENABLED
 
     entry = make_entry(
         options={
             **make_entry().options,
-            CONF_AUDIO_QUALITY: "high",
-            CONF_CACHE_ENABLED: True,
         }
     )
     with patch_suno_setup(mock_suno_client):
@@ -426,9 +389,8 @@ def _make_test_wav() -> bytes:
 
 async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """High quality without cache should transcode WAV to FLAC."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -471,9 +433,8 @@ async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_clien
 
 async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """Upstream 200 with high quality should transcode WAV to FLAC."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -520,9 +481,8 @@ async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: As
 
 async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """Cache write failure should be silently logged (lines 292-296)."""
-    from custom_components.suno.const import CONF_CACHE_ENABLED
 
-    entry = make_entry(options={**make_entry().options, CONF_CACHE_ENABLED: True})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -550,13 +510,10 @@ async def test_save_to_cache_bytes_failure_is_silent(
     hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
 ) -> None:
     """Cache write failure for WAV should be silently logged (lines 301-304)."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY, CONF_CACHE_ENABLED
 
     entry = make_entry(
         options={
             **make_entry().options,
-            CONF_AUDIO_QUALITY: "high",
-            CONF_CACHE_ENABLED: True,
         }
     )
     with patch_suno_setup(mock_suno_client):
@@ -589,9 +546,8 @@ async def test_wav_to_flac_uses_ffmpeg_manager_binary(
     hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
 ) -> None:
     """_wav_to_flac should resolve the binary path via get_ffmpeg_manager."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -620,9 +576,8 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
     hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
 ) -> None:
     """If ffmpeg returns non-zero, the proxy should return 502."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -653,9 +608,8 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
     hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
 ) -> None:
     """If the ffmpeg binary is missing, the proxy should return 502."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -680,9 +634,8 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
 
 async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """HQ mode should use the API to get/generate WAV URL then transcode."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -710,9 +663,8 @@ async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: Asy
 
 async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """HQ mode should trigger convert_wav then poll when WAV not ready."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -740,9 +692,8 @@ async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client:
 
 async def test_hq_returns_502_when_no_client(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
     """HQ mode should return 502 if no SunoClient is available."""
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
 
-    entry = make_entry(options={**make_entry().options, CONF_AUDIO_QUALITY: "high"})
+    entry = make_entry(options={**make_entry().options})
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
@@ -770,9 +721,9 @@ async def test_serves_synced_mp3_with_correct_mime(
     synced_file = tmp_path / "clip-aaa-111.mp3"
     synced_file.write_bytes(b"ID3" + b"\x00" * 100)
 
-    mock_sync = MagicMock()
-    mock_sync.get_synced_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.sync = mock_sync
+    mock_dm = MagicMock()
+    mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
+    entry.runtime_data.download_manager = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -794,9 +745,9 @@ async def test_skips_synced_flac_when_mp3_requested(
 
     synced_file = Path("/fake/clip-aaa-111.flac")
 
-    mock_sync = MagicMock()
-    mock_sync.get_synced_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.sync = mock_sync
+    mock_dm = MagicMock()
+    mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
+    entry.runtime_data.download_manager = mock_dm
 
     # Falls through to CDN; with no CDN mock it will 502
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -812,10 +763,8 @@ async def test_serves_synced_flac_with_correct_mime(
     """When sync has a FLAC and playback quality is high, serve with audio/flac."""
     from pathlib import Path
 
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
-
     entry = make_entry(
-        options={**make_entry().options, CONF_AUDIO_QUALITY: "high"},
+        options={**make_entry().options},
     )
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -823,9 +772,9 @@ async def test_serves_synced_flac_with_correct_mime(
     synced_file = tmp_path / "clip-aaa-111.flac"
     synced_file.write_bytes(b"fLaC" + b"\x00" * 100)
 
-    mock_sync = MagicMock()
-    mock_sync.get_synced_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.sync = mock_sync
+    mock_dm = MagicMock()
+    mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
+    entry.runtime_data.download_manager = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.flac")
@@ -841,19 +790,17 @@ async def test_skips_synced_mp3_when_flac_requested(
     """When sync has MP3 but playback quality is high, fall through to HQ pipeline."""
     from pathlib import Path
 
-    from custom_components.suno.const import CONF_AUDIO_QUALITY
-
     entry = make_entry(
-        options={**make_entry().options, CONF_AUDIO_QUALITY: "high"},
+        options={**make_entry().options},
     )
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     synced_file = Path("/fake/clip-aaa-111.mp3")
 
-    mock_sync = MagicMock()
-    mock_sync.get_synced_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.sync = mock_sync
+    mock_dm = MagicMock()
+    mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
+    entry.runtime_data.download_manager = mock_dm
 
     # Falls through to HQ pipeline; without mocks it will fail
     client = await hass_client()

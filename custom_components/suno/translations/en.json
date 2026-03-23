@@ -16,16 +16,20 @@
         }
       },
       "reconfigure": {
-        "title": "Suno settings",
+        "title": "Library",
+        "description": "Choose which parts of your Suno library to include.",
         "data": {
-          "show_liked": "Show Liked Songs folder",
-          "show_recent": "Show Recent folder",
-          "recent_count": "Number of recent songs",
-          "show_playlists": "Show Playlists folder",
-          "cache_ttl_minutes": "Cache refresh interval (minutes)",
-          "audio_quality": "Audio quality",
-          "cache_enabled": "Enable local file cache",
+          "show_playlists": "Playlists",
+          "show_liked": "Liked songs",
+          "show_latest": "Your latest",
+          "download_path": "Download directory",
+          "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
+        },
+        "data_description": {
+          "download_path": "Local folder for saving songs. Leave empty for streaming only.",
+          "create_playlists": "Save playlist files alongside your music for other apps.",
+          "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
       }
     },
@@ -42,58 +46,70 @@
   "options": {
     "step": {
       "init": {
-        "title": "Media browser",
+        "title": "Library",
+        "description": "Choose which parts of your Suno library to include.",
         "data": {
-          "show_playlists": "Show Playlists folder",
-          "show_liked": "Show Liked Songs folder",
-          "show_recent": "Show Recent folder",
-          "recent_count": "Number of recent songs",
-          "audio_quality": "Audio quality",
-          "cache_ttl_minutes": "Refresh interval (minutes)",
-          "cache_enabled": "Enable playback cache",
+          "show_playlists": "Playlists",
+          "show_liked": "Liked songs",
+          "show_latest": "Your latest",
+          "download_path": "Download directory",
+          "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
-        }
-      },
-      "sync": {
-        "title": "Sync settings",
-        "data": {
-          "sync_enabled": "Enable sync",
-          "sync_path": "Sync directory",
-          "sync_playlists_m3u": "Create playlist files (M3U8)"
-        }
-      },
-      "sync_sources": {
-        "title": "Sync sources",
-        "description": "Configure what to sync, quality, and retention mode for each source.",
-        "data": {
-          "sync_liked": "Sync liked songs",
-          "sync_quality_liked": "Liked songs quality",
-          "sync_mode_liked": "Liked songs mode",
-          "sync_all_playlists": "Sync all playlists",
-          "sync_quality_playlists": "Playlist quality",
-          "sync_mode_playlists": "Playlist mode",
-          "sync_latest_count": "Latest songs count",
-          "sync_latest_days": "Latest songs lookback (days)",
-          "sync_quality_latest": "Latest songs quality",
-          "sync_mode_latest": "Latest songs mode"
         },
         "data_description": {
-          "sync_latest_count": "Maximum number of latest songs to sync (0 or empty to disable count limit)",
-          "sync_latest_days": "Sync songs created within this many days (0 or empty to disable time limit)",
-          "sync_mode_liked": "Sync: removes local files when songs are un-liked. Copy: keeps all downloaded files.",
-          "sync_mode_playlists": "Sync: removes local files when songs are removed from playlists. Copy: keeps all downloaded files.",
-          "sync_mode_latest": "Sync: removes songs that no longer match latest criteria. Copy: keeps all downloaded files."
+          "download_path": "Local folder for saving songs. Leave empty for streaming only.",
+          "create_playlists": "Save playlist files alongside your music for other apps.",
+          "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
       },
-      "sync_playlists": {
-        "title": "Select playlists",
+      "playlists": {
+        "title": "Playlists",
+        "description": "Download settings for your playlists.",
         "data": {
-          "sync_playlists": "Playlists"
+          "quality_playlists": "Quality",
+          "download_mode_playlists": "Mode",
+          "all_playlists": "Download all playlists"
+        },
+        "data_description": {
+          "download_mode_playlists": "Mirror removes local files when songs are removed from a playlist. Collect keeps all downloads permanently.",
+          "all_playlists": "Download all your playlists. Turn off to choose specific playlists."
+        }
+      },
+      "liked": {
+        "title": "Liked Songs",
+        "description": "Download settings for your liked songs.",
+        "data": {
+          "quality_liked": "Quality",
+          "download_mode_liked": "Mode"
+        },
+        "data_description": {
+          "download_mode_liked": "Mirror removes local files when you unlike a song. Collect keeps all downloads permanently."
+        }
+      },
+      "latest": {
+        "title": "Your Latest",
+        "description": "How many of your latest songs to include and at what quality.",
+        "data": {
+          "quality_latest": "Quality",
+          "download_mode_latest": "Mode",
+          "latest_count": "Maximum songs",
+          "latest_days": "Lookback period (days)"
+        },
+        "data_description": {
+          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Collect keeps all downloads permanently.",
+          "latest_count": "Include up to this many of your latest songs. Set to 0 for no limit.",
+          "latest_days": "Only include songs created within this many days. Set to 0 for no limit."
+        }
+      },
+      "select_playlists": {
+        "title": "Select Playlists",
+        "data": {
+          "playlists": "Playlists to download"
         }
       }
     },
     "error": {
-      "invalid_sync_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission."
+      "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission."
     }
   },
   "entity": {

@@ -31,42 +31,32 @@ from homeassistant.helpers.selector import (
 
 from .auth import ClerkAuth
 from .const import (
-    CONF_AUDIO_QUALITY,
-    CONF_CACHE_ENABLED,
+    CONF_ALL_PLAYLISTS,
     CONF_CACHE_MAX_SIZE,
-    CONF_CACHE_TTL,
     CONF_COOKIE,
-    CONF_RECENT_COUNT,
+    CONF_CREATE_PLAYLISTS,
+    CONF_DOWNLOAD_MODE_LATEST,
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    CONF_LATEST_COUNT,
+    CONF_LATEST_DAYS,
+    CONF_PLAYLISTS,
+    CONF_QUALITY_LATEST,
+    CONF_QUALITY_LIKED,
+    CONF_QUALITY_PLAYLISTS,
+    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
-    CONF_SHOW_RECENT,
-    CONF_SYNC_ALL_PLAYLISTS,
-    CONF_SYNC_ENABLED,
-    CONF_SYNC_LATEST_COUNT,
-    CONF_SYNC_LATEST_DAYS,
-    CONF_SYNC_LIKED,
-    CONF_SYNC_MODE_LATEST,
-    CONF_SYNC_MODE_LIKED,
-    CONF_SYNC_MODE_PLAYLISTS,
-    CONF_SYNC_PATH,
-    CONF_SYNC_PLAYLISTS,
-    CONF_SYNC_PLAYLISTS_M3U,
-    CONF_SYNC_QUALITY_LATEST,
-    CONF_SYNC_QUALITY_LIKED,
-    CONF_SYNC_QUALITY_PLAYLISTS,
-    DEFAULT_AUDIO_QUALITY,
-    DEFAULT_CACHE_ENABLED,
+    DEFAULT_ALL_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
-    DEFAULT_CACHE_TTL,
-    DEFAULT_RECENT_COUNT,
+    DEFAULT_CREATE_PLAYLISTS,
+    DEFAULT_DOWNLOAD_MODE,
+    DEFAULT_LATEST_COUNT,
+    DEFAULT_LATEST_DAYS,
+    DEFAULT_SHOW_LATEST,
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_PLAYLISTS,
-    DEFAULT_SHOW_RECENT,
-    DEFAULT_SYNC_ALL_PLAYLISTS,
-    DEFAULT_SYNC_ENABLED,
-    DEFAULT_SYNC_LIKED,
-    DEFAULT_SYNC_MODE,
-    DEFAULT_SYNC_PLAYLISTS_M3U,
     DOMAIN,
     QUALITY_HIGH,
     QUALITY_STANDARD,
@@ -75,9 +65,26 @@ from .exceptions import SunoAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
+QUALITY_OPTIONS = [
+    SelectOptionDict(value="standard", label="Standard (MP3)"),
+    SelectOptionDict(value="high", label="High (FLAC)"),
+]
+MODE_OPTIONS = [
+    SelectOptionDict(value="mirror", label="Mirror"),
+    SelectOptionDict(value="collect", label="Collect"),
+]
 
-def _display_schema(opts: dict[str, Any]) -> vol.Schema:
-    """Build schema for display and cache options."""
+
+def _quality_selector() -> SelectSelector:
+    return SelectSelector(SelectSelectorConfig(options=QUALITY_OPTIONS, mode=SelectSelectorMode.DROPDOWN))
+
+
+def _mode_selector() -> SelectSelector:
+    return SelectSelector(SelectSelectorConfig(options=MODE_OPTIONS, mode=SelectSelectorMode.DROPDOWN))
+
+
+def _library_schema(opts: dict[str, Any]) -> vol.Schema:
+    """Build schema for the Library options page."""
     return vol.Schema(
         {
             vol.Required(
@@ -89,32 +96,16 @@ def _display_schema(opts: dict[str, Any]) -> vol.Schema:
                 default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
             ): BooleanSelector(),
             vol.Required(
-                CONF_SHOW_RECENT,
-                default=opts.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT),
+                CONF_SHOW_LATEST,
+                default=opts.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST),
             ): BooleanSelector(),
             vol.Required(
-                CONF_RECENT_COUNT,
-                default=opts.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT),
-            ): NumberSelector(NumberSelectorConfig(min=1, max=50, step=1, mode=NumberSelectorMode.SLIDER)),
+                CONF_DOWNLOAD_PATH,
+                default=opts.get(CONF_DOWNLOAD_PATH, ""),
+            ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
             vol.Required(
-                CONF_AUDIO_QUALITY,
-                default=opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY),
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value="standard", label="Standard (MP3)"),
-                        SelectOptionDict(value="high", label="High (FLAC)"),
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(
-                CONF_CACHE_TTL,
-                default=opts.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL),
-            ): NumberSelector(NumberSelectorConfig(min=5, max=120, step=5, mode=NumberSelectorMode.SLIDER)),
-            vol.Required(
-                CONF_CACHE_ENABLED,
-                default=opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED),
+                CONF_CREATE_PLAYLISTS,
+                default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
             ): BooleanSelector(),
             vol.Required(
                 CONF_CACHE_MAX_SIZE,
@@ -135,7 +126,7 @@ def _display_schema(opts: dict[str, Any]) -> vol.Schema:
 class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Suno."""
 
-    VERSION = 2
+    VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: cookie input."""
@@ -162,14 +153,22 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                     title="Suno",
                     data={CONF_COOKIE: cookie},
                     options={
-                        CONF_SHOW_LIKED: DEFAULT_SHOW_LIKED,
-                        CONF_SHOW_RECENT: DEFAULT_SHOW_RECENT,
-                        CONF_RECENT_COUNT: DEFAULT_RECENT_COUNT,
-                        CONF_SHOW_PLAYLISTS: DEFAULT_SHOW_PLAYLISTS,
-                        CONF_CACHE_TTL: DEFAULT_CACHE_TTL,
-                        CONF_AUDIO_QUALITY: DEFAULT_AUDIO_QUALITY,
-                        CONF_CACHE_ENABLED: DEFAULT_CACHE_ENABLED,
+                        CONF_SHOW_PLAYLISTS: True,
+                        CONF_SHOW_LIKED: True,
+                        CONF_SHOW_LATEST: True,
+                        CONF_DOWNLOAD_PATH: "",
+                        CONF_CREATE_PLAYLISTS: True,
                         CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+                        CONF_QUALITY_LIKED: QUALITY_HIGH,
+                        CONF_QUALITY_PLAYLISTS: QUALITY_HIGH,
+                        CONF_QUALITY_LATEST: QUALITY_STANDARD,
+                        CONF_DOWNLOAD_MODE_LIKED: DEFAULT_DOWNLOAD_MODE,
+                        CONF_DOWNLOAD_MODE_PLAYLISTS: DEFAULT_DOWNLOAD_MODE,
+                        CONF_DOWNLOAD_MODE_LATEST: DEFAULT_DOWNLOAD_MODE,
+                        CONF_LATEST_COUNT: DEFAULT_LATEST_COUNT,
+                        CONF_LATEST_DAYS: DEFAULT_LATEST_DAYS,
+                        CONF_ALL_PLAYLISTS: True,
+                        CONF_PLAYLISTS: [],
                     },
                 )
 
@@ -229,17 +228,22 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Handle reconfiguration of display options."""
+        """Handle reconfiguration of library options."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         if not entry:
             return self.async_abort(reason="unknown")
         if user_input is not None:
             return self.async_update_reload_and_abort(entry, options={**entry.options, **user_input})
-        return self.async_show_form(step_id="reconfigure", data_schema=_display_schema(dict(entry.options)))
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_library_schema(dict(entry.options)),
+        )
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlowWithReload:
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> OptionsFlowWithReload:
         return SunoOptionsFlow()
 
 
@@ -248,143 +252,145 @@ class SunoOptionsFlow(OptionsFlowWithReload):
 
     def __init__(self) -> None:
         self._options: dict[str, Any] = {}
+        self._done_playlists = False
+        self._done_liked = False
+        self._done_latest = False
+
+    async def _next_content_step(self) -> ConfigFlowResult:
+        """Route to the next enabled content-type step, or finish."""
+        if self._options.get(CONF_SHOW_PLAYLISTS) and not self._done_playlists:
+            return await self.async_step_playlists()
+        if self._options.get(CONF_SHOW_LIKED) and not self._done_liked:
+            return await self.async_step_liked()
+        if self._options.get(CONF_SHOW_LATEST) and not self._done_latest:
+            return await self.async_step_latest()
+        return self.async_create_entry(data=self._options)
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 1: media browser and cache options."""
-        if user_input is not None:
-            self._options = {**self.config_entry.options, **user_input}
-            return await self.async_step_sync()
-        return self.async_show_form(step_id="init", data_schema=_display_schema(dict(self.config_entry.options)))
-
-    async def async_step_sync(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 2: sync general settings."""
+        """Step 1: Library — content toggles, download path, cache."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            if user_input.get(CONF_SYNC_ENABLED, False):
-                path = user_input.get(CONF_SYNC_PATH, "")
-                if path and not await self._validate_sync_path(path):
-                    errors[CONF_SYNC_PATH] = "invalid_sync_path"
+            path = user_input.get(CONF_DOWNLOAD_PATH, "")
+            if path and not await self._validate_download_path(path):
+                errors[CONF_DOWNLOAD_PATH] = "invalid_download_path"
             if not errors:
-                merged = {**self._options, **user_input}
-                if user_input.get(CONF_SYNC_ENABLED):
-                    self._options = merged
-                    return await self.async_step_sync_sources()
-                merged[CONF_SYNC_PLAYLISTS] = []
-                return self.async_create_entry(data=merged)
-        opts = self.config_entry.options
-        default_path = self._get_default_sync_path()
-        schema: dict[vol.Marker, Any] = {
-            vol.Required(
-                CONF_SYNC_ENABLED, default=opts.get(CONF_SYNC_ENABLED, DEFAULT_SYNC_ENABLED)
-            ): BooleanSelector(),
-            vol.Required(CONF_SYNC_PATH, default=opts.get(CONF_SYNC_PATH, default_path)): TextSelector(
-                TextSelectorConfig(type=TextSelectorType.TEXT)
-            ),
-            vol.Required(
-                CONF_SYNC_PLAYLISTS_M3U,
-                default=opts.get(CONF_SYNC_PLAYLISTS_M3U, DEFAULT_SYNC_PLAYLISTS_M3U),
-            ): BooleanSelector(),
-        }
-        return self.async_show_form(step_id="sync", data_schema=vol.Schema(schema), errors=errors)
-
-    async def async_step_sync_sources(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 3: configure sync sources with quality and mode."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            merged = {**self._options, **user_input}
-            if user_input.get(CONF_SYNC_ALL_PLAYLISTS, True):
-                merged[CONF_SYNC_PLAYLISTS] = []
-                return self.async_create_entry(data=merged)
-            else:
-                self._options = merged
-                return await self.async_step_sync_playlists()
-
-        opts = self.config_entry.options
-        quality_options = [
-            SelectOptionDict(value="standard", label="Standard (MP3)"),
-            SelectOptionDict(value="high", label="High (FLAC)"),
-        ]
-        mode_options = [
-            SelectOptionDict(value="sync", label="Sync (remove deleted songs)"),
-            SelectOptionDict(value="copy", label="Copy (keep all downloads)"),
-        ]
-        quality_selector = SelectSelector(
-            SelectSelectorConfig(options=quality_options, mode=SelectSelectorMode.DROPDOWN)
+                self._options = {**self.config_entry.options, **user_input}
+                return await self._next_content_step()
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_library_schema(dict(self.config_entry.options)),
+            errors=errors,
         )
-        mode_selector = SelectSelector(SelectSelectorConfig(options=mode_options, mode=SelectSelectorMode.DROPDOWN))
 
+    async def async_step_playlists(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure playlist download settings."""
+        if user_input is not None:
+            self._options.update(user_input)
+            self._done_playlists = True
+            if not user_input.get(CONF_ALL_PLAYLISTS, True):
+                return await self.async_step_select_playlists()
+            self._options[CONF_PLAYLISTS] = []
+            return await self._next_content_step()
+
+        opts = self._options
         schema = vol.Schema(
             {
-                # Liked songs
-                vol.Required(CONF_SYNC_LIKED, default=opts.get(CONF_SYNC_LIKED, DEFAULT_SYNC_LIKED)): BooleanSelector(),
                 vol.Required(
-                    CONF_SYNC_QUALITY_LIKED, default=opts.get(CONF_SYNC_QUALITY_LIKED, QUALITY_HIGH)
-                ): quality_selector,
+                    CONF_QUALITY_PLAYLISTS,
+                    default=opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH),
+                ): _quality_selector(),
                 vol.Required(
-                    CONF_SYNC_MODE_LIKED, default=opts.get(CONF_SYNC_MODE_LIKED, DEFAULT_SYNC_MODE)
-                ): mode_selector,
-                # Playlists
+                    CONF_DOWNLOAD_MODE_PLAYLISTS,
+                    default=opts.get(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE),
+                ): _mode_selector(),
                 vol.Required(
-                    CONF_SYNC_ALL_PLAYLISTS,
-                    default=opts.get(CONF_SYNC_ALL_PLAYLISTS, DEFAULT_SYNC_ALL_PLAYLISTS),
+                    CONF_ALL_PLAYLISTS,
+                    default=opts.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS),
                 ): BooleanSelector(),
-                vol.Required(
-                    CONF_SYNC_QUALITY_PLAYLISTS,
-                    default=opts.get(CONF_SYNC_QUALITY_PLAYLISTS, QUALITY_HIGH),
-                ): quality_selector,
-                vol.Required(
-                    CONF_SYNC_MODE_PLAYLISTS,
-                    default=opts.get(CONF_SYNC_MODE_PLAYLISTS, DEFAULT_SYNC_MODE),
-                ): mode_selector,
-                # Latest songs
-                vol.Optional(
-                    CONF_SYNC_LATEST_COUNT,
-                    description={"suggested_value": opts.get(CONF_SYNC_LATEST_COUNT)},
-                ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
-                vol.Optional(
-                    CONF_SYNC_LATEST_DAYS,
-                    description={"suggested_value": opts.get(CONF_SYNC_LATEST_DAYS)},
-                ): NumberSelector(NumberSelectorConfig(min=0, max=365, step=1, mode=NumberSelectorMode.BOX)),
-                vol.Required(
-                    CONF_SYNC_QUALITY_LATEST,
-                    default=opts.get(CONF_SYNC_QUALITY_LATEST, QUALITY_STANDARD),
-                ): quality_selector,
-                vol.Required(
-                    CONF_SYNC_MODE_LATEST, default=opts.get(CONF_SYNC_MODE_LATEST, DEFAULT_SYNC_MODE)
-                ): mode_selector,
             }
         )
+        return self.async_show_form(step_id="playlists", data_schema=schema)
 
-        return self.async_show_form(step_id="sync_sources", data_schema=schema, errors=errors)
-
-    async def async_step_sync_playlists(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Step 4: select specific playlists to sync."""
+    async def async_step_select_playlists(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Select specific playlists to download."""
         if user_input is not None:
-            return self.async_create_entry(data={**self._options, **user_input})
+            self._options.update(user_input)
+            return await self._next_content_step()
+
         coordinator = self.config_entry.runtime_data
         playlist_options = [SelectOptionDict(value=p.id, label=p.name) for p in coordinator.data.playlists]
         return self.async_show_form(
-            step_id="sync_playlists",
+            step_id="select_playlists",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_SYNC_PLAYLISTS, default=self.config_entry.options.get(CONF_SYNC_PLAYLISTS, [])
+                        CONF_PLAYLISTS,
+                        default=self._options.get(CONF_PLAYLISTS, []),
                     ): SelectSelector(
-                        SelectSelectorConfig(options=playlist_options, multiple=True, mode=SelectSelectorMode.LIST)
+                        SelectSelectorConfig(
+                            options=playlist_options,
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
                     ),
                 }
             ),
         )
 
-    def _get_default_sync_path(self) -> str:
-        """Compute default sync path from HA media dirs."""
-        import os
+    async def async_step_liked(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure liked songs download settings."""
+        if user_input is not None:
+            self._options.update(user_input)
+            self._done_liked = True
+            return await self._next_content_step()
 
-        media_dir = self.hass.config.media_dirs.get("local")
-        return os.path.join(media_dir, "suno") if media_dir else self.hass.config.path("media", "suno")
+        opts = self._options
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_QUALITY_LIKED,
+                    default=opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH),
+                ): _quality_selector(),
+                vol.Required(
+                    CONF_DOWNLOAD_MODE_LIKED,
+                    default=opts.get(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
+                ): _mode_selector(),
+            }
+        )
+        return self.async_show_form(step_id="liked", data_schema=schema)
 
-    async def _validate_sync_path(self, path: str) -> bool:
-        """Check that the sync path is writable."""
+    async def async_step_latest(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure latest songs download settings."""
+        if user_input is not None:
+            self._options.update(user_input)
+            self._done_latest = True
+            return await self._next_content_step()
+
+        opts = self._options
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_QUALITY_LATEST,
+                    default=opts.get(CONF_QUALITY_LATEST, QUALITY_STANDARD),
+                ): _quality_selector(),
+                vol.Required(
+                    CONF_DOWNLOAD_MODE_LATEST,
+                    default=opts.get(CONF_DOWNLOAD_MODE_LATEST, DEFAULT_DOWNLOAD_MODE),
+                ): _mode_selector(),
+                vol.Required(
+                    CONF_LATEST_COUNT,
+                    default=opts.get(CONF_LATEST_COUNT, DEFAULT_LATEST_COUNT),
+                ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
+                vol.Required(
+                    CONF_LATEST_DAYS,
+                    default=opts.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS),
+                ): NumberSelector(NumberSelectorConfig(min=0, max=365, step=1, mode=NumberSelectorMode.BOX)),
+            }
+        )
+        return self.async_show_form(step_id="latest", data_schema=schema)
+
+    async def _validate_download_path(self, path: str) -> bool:
+        """Check that the download path is writable."""
         from pathlib import Path as _Path
 
         def _check(p: str) -> bool:

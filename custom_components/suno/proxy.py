@@ -13,21 +13,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .audio import _build_id3_header, _skip_existing_id3, download_and_transcode_to_flac
-from .const import (
-    CDN_BASE_URL,
-    CONF_AUDIO_QUALITY,
-    CONF_CACHE_ENABLED,
-    DEFAULT_AUDIO_QUALITY,
-    DEFAULT_CACHE_ENABLED,
-    DOMAIN,
-    QUALITY_HIGH,
-)
+from .const import CDN_BASE_URL, DOMAIN
 from .coordinator import SunoCoordinator
 from .models import SunoClip, clip_meta_hash
 
 if TYPE_CHECKING:
     from .cache import SunoCache
-    from .sync import SunoSync
+    from .download import SunoDownloadManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,17 +64,13 @@ class SunoMediaProxyView(HomeAssistantView):
                 return coord
         return None
 
-    def _get_entry_options(self) -> dict[str, Any]:
-        """Return options from the first config entry."""
-        return dict(c.config_entry.options) if (c := self._first_coordinator()) else {}
-
     def _get_cache(self) -> SunoCache | None:
         """Return the SunoCache from the first coordinator."""
         return c.cache if (c := self._first_coordinator()) else None
 
-    def _get_sync(self) -> SunoSync | None:
-        """Return the SunoSync from the first coordinator."""
-        return c.sync if (c := self._first_coordinator()) else None
+    def _get_download_manager(self) -> SunoDownloadManager | None:
+        """Return the SunoDownloadManager from the first coordinator."""
+        return c.download_manager if (c := self._first_coordinator()) else None
 
     def _get_client(self) -> Any:
         """Return the SunoClient from the first coordinator."""
@@ -96,24 +84,20 @@ class SunoMediaProxyView(HomeAssistantView):
         genre = (clip.tags if clip else None) or ""
         meta_hash = clip_meta_hash(clip) if clip else ""
 
-        opts = self._get_entry_options()
-        quality = opts.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
-        cache_enabled = opts.get(CONF_CACHE_ENABLED, DEFAULT_CACHE_ENABLED)
-        is_hq = quality == QUALITY_HIGH
+        is_hq = ext == "flac"
         content_type = "audio/flac" if is_hq else "audio/mpeg"
 
-        if (sync := self._get_sync()) is not None:
-            if (synced_path := sync.get_synced_path(clip_id, meta_hash)) is not None:
-                synced_ext = synced_path.suffix.lstrip(".")
-                # Only serve if format matches what was requested
-                if (is_hq and synced_ext == "flac") or (not is_hq and synced_ext == "mp3"):
-                    mime = "audio/flac" if synced_ext == "flac" else "audio/mpeg"
+        if (dm := self._get_download_manager()) is not None:
+            if (dl_path := dm.get_downloaded_path(clip_id, meta_hash)) is not None:
+                dl_ext = dl_path.suffix.lstrip(".")
+                if (is_hq and dl_ext == "flac") or (not is_hq and dl_ext == "mp3"):
+                    mime = "audio/flac" if dl_ext == "flac" else "audio/mpeg"
                     try:
-                        return web.FileResponse(synced_path, headers={"Content-Type": mime})
+                        return web.FileResponse(dl_path, headers={"Content-Type": mime})
                     except FileNotFoundError, OSError:
-                        _LOGGER.debug("Sync file vanished for %s, falling through", clip_id)
+                        _LOGGER.debug("Downloaded file vanished for %s, falling through", clip_id)
 
-        cache = self._get_cache() if cache_enabled else None
+        cache = self._get_cache()
         if cache is not None:
             cache_fmt = "flac" if is_hq else "mp3"
             if (cached_path := await cache.async_get(clip_id, cache_fmt, meta_hash=meta_hash)) is not None:

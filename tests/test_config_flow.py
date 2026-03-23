@@ -11,24 +11,30 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.suno.const import (
-    CONF_AUDIO_QUALITY,
-    CONF_CACHE_ENABLED,
+    CONF_ALL_PLAYLISTS,
     CONF_CACHE_MAX_SIZE,
-    CONF_CACHE_TTL,
     CONF_COOKIE,
-    CONF_RECENT_COUNT,
+    CONF_CREATE_PLAYLISTS,
+    CONF_DOWNLOAD_MODE_LATEST,
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    CONF_LATEST_COUNT,
+    CONF_LATEST_DAYS,
+    CONF_PLAYLISTS,
+    CONF_QUALITY_LATEST,
+    CONF_QUALITY_LIKED,
+    CONF_QUALITY_PLAYLISTS,
+    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
-    CONF_SHOW_RECENT,
-    DEFAULT_AUDIO_QUALITY,
-    DEFAULT_CACHE_ENABLED,
     DEFAULT_CACHE_MAX_SIZE,
-    DEFAULT_CACHE_TTL,
-    DEFAULT_RECENT_COUNT,
-    DEFAULT_SHOW_LIKED,
-    DEFAULT_SHOW_PLAYLISTS,
-    DEFAULT_SHOW_RECENT,
+    DEFAULT_DOWNLOAD_MODE,
+    DEFAULT_LATEST_COUNT,
+    DEFAULT_LATEST_DAYS,
     DOMAIN,
+    QUALITY_HIGH,
+    QUALITY_STANDARD,
 )
 from custom_components.suno.exceptions import SunoAuthError
 
@@ -78,14 +84,22 @@ async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry: AsyncMoc
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Suno"
     assert result["data"][CONF_COOKIE] == MOCK_COOKIE
-    assert result["options"][CONF_SHOW_LIKED] == DEFAULT_SHOW_LIKED
-    assert result["options"][CONF_SHOW_RECENT] == DEFAULT_SHOW_RECENT
-    assert result["options"][CONF_RECENT_COUNT] == DEFAULT_RECENT_COUNT
-    assert result["options"][CONF_SHOW_PLAYLISTS] == DEFAULT_SHOW_PLAYLISTS
-    assert result["options"][CONF_CACHE_TTL] == DEFAULT_CACHE_TTL
-    assert result["options"][CONF_AUDIO_QUALITY] == DEFAULT_AUDIO_QUALITY
-    assert result["options"][CONF_CACHE_ENABLED] == DEFAULT_CACHE_ENABLED
+    assert result["options"][CONF_SHOW_LIKED] is True
+    assert result["options"][CONF_SHOW_LATEST] is True
+    assert result["options"][CONF_SHOW_PLAYLISTS] is True
+    assert result["options"][CONF_DOWNLOAD_PATH] == ""
+    assert result["options"][CONF_CREATE_PLAYLISTS] is True
     assert result["options"][CONF_CACHE_MAX_SIZE] == DEFAULT_CACHE_MAX_SIZE
+    assert result["options"][CONF_QUALITY_LIKED] == QUALITY_HIGH
+    assert result["options"][CONF_QUALITY_PLAYLISTS] == QUALITY_HIGH
+    assert result["options"][CONF_QUALITY_LATEST] == QUALITY_STANDARD
+    assert result["options"][CONF_DOWNLOAD_MODE_LIKED] == DEFAULT_DOWNLOAD_MODE
+    assert result["options"][CONF_DOWNLOAD_MODE_PLAYLISTS] == DEFAULT_DOWNLOAD_MODE
+    assert result["options"][CONF_DOWNLOAD_MODE_LATEST] == DEFAULT_DOWNLOAD_MODE
+    assert result["options"][CONF_LATEST_COUNT] == DEFAULT_LATEST_COUNT
+    assert result["options"][CONF_LATEST_DAYS] == DEFAULT_LATEST_DAYS
+    assert result["options"][CONF_ALL_PLAYLISTS] is True
+    assert result["options"][CONF_PLAYLISTS] == []
 
 
 async def test_user_flow_invalid_cookie(hass: HomeAssistant) -> None:
@@ -154,7 +168,6 @@ async def test_user_flow_unknown_error(hass: HomeAssistant) -> None:
 
 async def test_user_flow_duplicate_entry(hass: HomeAssistant, mock_setup_entry: AsyncMock) -> None:
     """Duplicate user ID aborts with already_configured."""
-    # Create an existing entry with same unique_id
     existing = make_entry()
     existing.add_to_hass(hass)
 
@@ -287,12 +300,10 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
             result["flow_id"],
             {
                 CONF_SHOW_LIKED: False,
-                CONF_SHOW_RECENT: False,
-                CONF_RECENT_COUNT: 10,
+                CONF_SHOW_LATEST: False,
                 CONF_SHOW_PLAYLISTS: False,
-                CONF_CACHE_TTL: 60,
-                CONF_AUDIO_QUALITY: "high",
-                CONF_CACHE_ENABLED: True,
+                CONF_DOWNLOAD_PATH: "",
+                CONF_CREATE_PLAYLISTS: False,
                 CONF_CACHE_MAX_SIZE: 1000,
             },
         )
@@ -301,9 +312,7 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.options[CONF_SHOW_LIKED] is False
-    assert entry.options[CONF_CACHE_TTL] == 60
-    assert entry.options[CONF_AUDIO_QUALITY] == "high"
-    assert entry.options[CONF_CACHE_ENABLED] is True
+    assert entry.options[CONF_SHOW_LATEST] is False
     assert entry.options[CONF_CACHE_MAX_SIZE] == 1000
 
 
@@ -321,6 +330,57 @@ async def test_options_flow_shows_form(hass: HomeAssistant, mock_suno_client: As
     assert result["step_id"] == "init"
 
 
+async def test_options_flow_library_step(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Options flow Library page has the 6 expected fields."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    schema_keys = {str(k) for k in result["data_schema"].schema}
+    assert CONF_SHOW_PLAYLISTS in schema_keys
+    assert CONF_SHOW_LIKED in schema_keys
+    assert CONF_SHOW_LATEST in schema_keys
+    assert CONF_DOWNLOAD_PATH in schema_keys
+    assert CONF_CREATE_PLAYLISTS in schema_keys
+    assert CONF_CACHE_MAX_SIZE in schema_keys
+
+
+async def test_options_flow_conditional_routing(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Only enabled content types get per-source config pages."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Disable all content types
+    with patch.object(
+        type(hass.config_entries.options._progress[result["flow_id"]]),
+        "_validate_download_path",
+        return_value=True,
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: False,
+                CONF_SHOW_LIKED: False,
+                CONF_SHOW_LATEST: False,
+                CONF_DOWNLOAD_PATH: "",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    # Should skip straight to CREATE_ENTRY (no playlists/liked/latest pages)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SHOW_PLAYLISTS] is False
+    assert result["data"][CONF_SHOW_LIKED] is False
+    assert result["data"][CONF_SHOW_LATEST] is False
+
+
 async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Options flow saves updated values across steps."""
     entry = make_entry()
@@ -328,48 +388,72 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
         await setup_entry(hass, entry)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    # Step 1: media browser + cache
+
+    # Step 1: Library page (all content types enabled)
+    with patch.object(
+        type(hass.config_entries.options._progress[result["flow_id"]]),
+        "_validate_download_path",
+        return_value=True,
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_LIKED: True,
+                CONF_SHOW_LATEST: True,
+                CONF_SHOW_PLAYLISTS: True,
+                CONF_DOWNLOAD_PATH: "/media/suno",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: 2000,
+            },
+        )
+
+    # Should advance to playlists step
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "playlists"
+
+    # Step 2: Playlists config
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
-            CONF_SHOW_LIKED: False,
-            CONF_SHOW_RECENT: True,
-            CONF_RECENT_COUNT: 30,
-            CONF_SHOW_PLAYLISTS: True,
-            CONF_CACHE_TTL: 15,
-            CONF_AUDIO_QUALITY: "high",
-            CONF_CACHE_ENABLED: True,
-            CONF_CACHE_MAX_SIZE: 2000,
+            CONF_QUALITY_PLAYLISTS: "standard",
+            CONF_DOWNLOAD_MODE_PLAYLISTS: "collect",
+            CONF_ALL_PLAYLISTS: True,
         },
     )
-    # Should advance to sync step
+    # Should advance to liked step
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "sync"
+    assert result["step_id"] == "liked"
 
-    # Step 2: sync options (all defaults, sync disabled)
-    from custom_components.suno.const import (
-        CONF_SYNC_ENABLED,
-        CONF_SYNC_PATH,
-        CONF_SYNC_PLAYLISTS_M3U,
-    )
-
+    # Step 3: Liked config
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
-            CONF_SYNC_ENABLED: False,
-            CONF_SYNC_PATH: "/media/suno",
-            CONF_SYNC_PLAYLISTS_M3U: False,
+            CONF_QUALITY_LIKED: "high",
+            CONF_DOWNLOAD_MODE_LIKED: "mirror",
+        },
+    )
+    # Should advance to latest step
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "latest"
+
+    # Step 4: Latest config
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_QUALITY_LATEST: "standard",
+            CONF_DOWNLOAD_MODE_LATEST: "mirror",
+            CONF_LATEST_COUNT: 50,
+            CONF_LATEST_DAYS: 14,
         },
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_SHOW_LIKED] is False
-    assert result["data"][CONF_RECENT_COUNT] == 30
-    assert result["data"][CONF_CACHE_TTL] == 15
-    assert result["data"][CONF_AUDIO_QUALITY] == "high"
-    assert result["data"][CONF_CACHE_ENABLED] is True
     assert result["data"][CONF_CACHE_MAX_SIZE] == 2000
-    assert result["data"][CONF_SYNC_ENABLED] is False
+    assert result["data"][CONF_QUALITY_PLAYLISTS] == "standard"
+    assert result["data"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "collect"
+    assert result["data"][CONF_QUALITY_LIKED] == "high"
+    assert result["data"][CONF_DOWNLOAD_MODE_LIKED] == "mirror"
+    assert result["data"][CONF_LATEST_COUNT] == 50
 
 
 # ── Migration ────────────────────────────────────────────────────────
@@ -378,18 +462,6 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
 async def test_migration_v1_to_v2(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Migrating a v1 entry adds per-source quality/mode defaults and renames keys."""
     from custom_components.suno import async_migrate_entry
-    from custom_components.suno.const import (
-        CONF_SYNC_LATEST_COUNT,
-        CONF_SYNC_LATEST_DAYS,
-        CONF_SYNC_MODE_LATEST,
-        CONF_SYNC_MODE_LIKED,
-        CONF_SYNC_MODE_PLAYLISTS,
-        CONF_SYNC_QUALITY_LATEST,
-        CONF_SYNC_QUALITY_LIKED,
-        CONF_SYNC_QUALITY_PLAYLISTS,
-        QUALITY_HIGH,
-        QUALITY_STANDARD,
-    )
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -408,105 +480,131 @@ async def test_migration_v1_to_v2(hass: HomeAssistant, mock_suno_client: AsyncMo
 
     result = await async_migrate_entry(hass, entry)
     assert result is True
-    assert entry.version == 2
+    assert entry.version == 3  # Migrates through v2 to v3
 
     opts = entry.options
     # Per-source quality defaults added
-    assert opts[CONF_SYNC_QUALITY_LIKED] == QUALITY_HIGH
-    assert opts[CONF_SYNC_QUALITY_PLAYLISTS] == QUALITY_HIGH
-    assert opts[CONF_SYNC_QUALITY_LATEST] == QUALITY_STANDARD
-    # Per-source mode defaults added
-    assert opts[CONF_SYNC_MODE_LIKED] == "sync"
-    assert opts[CONF_SYNC_MODE_PLAYLISTS] == "sync"
-    assert opts[CONF_SYNC_MODE_LATEST] == "sync"
-    # Keys renamed from recent → latest
+    assert opts[CONF_QUALITY_LIKED] == QUALITY_HIGH
+    assert opts[CONF_QUALITY_PLAYLISTS] == QUALITY_HIGH
+    assert opts[CONF_QUALITY_LATEST] == QUALITY_STANDARD
+    # Per-source mode defaults added (v2 sets "mirror" as default)
+    assert opts[CONF_DOWNLOAD_MODE_LIKED] == "mirror"
+    assert opts[CONF_DOWNLOAD_MODE_PLAYLISTS] == "mirror"
+    assert opts[CONF_DOWNLOAD_MODE_LATEST] == "mirror"
+    # Keys renamed from recent → latest via v2 then v3
     assert "sync_recent_count" not in opts
     assert "sync_recent_days" not in opts
-    assert opts[CONF_SYNC_LATEST_COUNT] == 25
-    assert opts[CONF_SYNC_LATEST_DAYS] == 7
+    assert opts[CONF_LATEST_COUNT] == 25
+    assert opts[CONF_LATEST_DAYS] == 7
     # Float → int coercion
-    assert opts["cache_ttl_minutes"] == 30
-    assert isinstance(opts["cache_ttl_minutes"], int)
+    assert isinstance(opts[CONF_LATEST_COUNT], int)
 
 
-# ── Sync sources step ───────────────────────────────────────────────
+async def test_migration_v2_to_v3(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Migrating a v2 entry renames sync→download keys, maps mode values, guards sync_enabled."""
+    from custom_components.suno import async_migrate_entry
 
-
-async def test_options_sync_sources_step(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Options flow with sync enabled goes through sync_sources step."""
-    from custom_components.suno.const import (
-        CONF_SYNC_ALL_PLAYLISTS,
-        CONF_SYNC_ENABLED,
-        CONF_SYNC_LATEST_COUNT,
-        CONF_SYNC_LIKED,
-        CONF_SYNC_MODE_LATEST,
-        CONF_SYNC_MODE_LIKED,
-        CONF_SYNC_MODE_PLAYLISTS,
-        CONF_SYNC_PATH,
-        CONF_SYNC_PLAYLISTS_M3U,
-        CONF_SYNC_QUALITY_LATEST,
-        CONF_SYNC_QUALITY_LIKED,
-        CONF_SYNC_QUALITY_PLAYLISTS,
-    )
-
-    entry = make_entry()
-    with patch_suno_setup(mock_suno_client):
-        await setup_entry(hass, entry)
-
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-
-    # Step 1: display + cache
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_SHOW_LIKED: True,
-            CONF_SHOW_RECENT: True,
-            CONF_RECENT_COUNT: 20,
-            CONF_SHOW_PLAYLISTS: True,
-            CONF_CACHE_TTL: 30,
-            CONF_AUDIO_QUALITY: "standard",
-            CONF_CACHE_ENABLED: False,
-            CONF_CACHE_MAX_SIZE: 500,
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Suno",
+        unique_id=MOCK_USER_ID,
+        data={CONF_COOKIE: MOCK_COOKIE},
+        options={
+            "show_liked": True,
+            "show_playlists": True,
+            "show_recent": True,
+            "sync_path": "/media/suno",
+            "sync_enabled": True,
+            "sync_liked": True,
+            "sync_mode_liked": "sync",
+            "sync_mode_playlists": "copy",
+            "sync_mode_latest": "sync",
+            "sync_quality_liked": "high",
+            "sync_quality_playlists": "standard",
+            "sync_quality_latest": "standard",
+            "sync_latest_count": 25,
+            "sync_latest_days": 7,
+            "sync_all_playlists": True,
+            "sync_playlists": ["pl-1"],
+            "sync_playlists_m3u": True,
+            "audio_quality": "high",
+            "cache_ttl_minutes": 30,
+            "cache_enabled": True,
+            "cache_max_size_mb": 500,
+            "quality_liked": "high",
+            "quality_playlists": "high",
+            "quality_latest": "standard",
+            "download_mode_liked": "mirror",
+            "download_mode_playlists": "mirror",
+            "download_mode_latest": "mirror",
         },
+        version=2,
     )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "sync"
+    entry.add_to_hass(hass)
 
-    # Step 2: sync general (enabled)
-    with patch.object(
-        type(hass.config_entries.options._progress[result["flow_id"]]),
-        "_validate_sync_path",
-        return_value=True,
-    ):
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            {
-                CONF_SYNC_ENABLED: True,
-                CONF_SYNC_PATH: "/media/suno",
-                CONF_SYNC_PLAYLISTS_M3U: True,
-            },
-        )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "sync_sources"
+    result = await async_migrate_entry(hass, entry)
+    assert result is True
+    assert entry.version == 3
 
-    # Step 3: sync sources
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_SYNC_LIKED: True,
-            CONF_SYNC_QUALITY_LIKED: "high",
-            CONF_SYNC_MODE_LIKED: "sync",
-            CONF_SYNC_ALL_PLAYLISTS: True,
-            CONF_SYNC_QUALITY_PLAYLISTS: "standard",
-            CONF_SYNC_MODE_PLAYLISTS: "copy",
-            CONF_SYNC_LATEST_COUNT: 50.0,
-            CONF_SYNC_QUALITY_LATEST: "standard",
-            CONF_SYNC_MODE_LATEST: "sync",
+    opts = entry.options
+    # Key renames
+    assert "sync_path" not in opts
+    assert opts[CONF_DOWNLOAD_PATH] == "/media/suno"
+    assert opts["show_latest"] is True  # show_recent → show_latest
+    assert "show_recent" not in opts
+
+    # Mode value renames: sync→mirror, copy→collect
+    assert opts[CONF_DOWNLOAD_MODE_LIKED] == "mirror"
+    assert opts[CONF_DOWNLOAD_MODE_PLAYLISTS] == "collect"
+    assert opts[CONF_DOWNLOAD_MODE_LATEST] == "mirror"
+
+    # Quality keys renamed
+    assert opts[CONF_QUALITY_LIKED] == "high"
+    assert opts[CONF_QUALITY_PLAYLISTS] == "standard"
+
+    # Latest keys renamed
+    assert opts[CONF_LATEST_COUNT] == 25
+    assert opts[CONF_LATEST_DAYS] == 7
+    assert opts["all_playlists"] is True
+    assert opts["playlists"] == ["pl-1"]
+    assert opts["create_playlists"] is True
+
+    # Deprecated keys removed
+    assert "audio_quality" not in opts
+    assert "cache_ttl_minutes" not in opts
+    assert "cache_enabled" not in opts
+    assert "sync_enabled" not in opts
+    assert "sync_liked" not in opts
+
+
+async def test_migration_v2_to_v3_sync_disabled_guard(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """V2→V3: sync_enabled=False should remove download_path to avoid accidental activation."""
+    from custom_components.suno import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Suno",
+        unique_id=MOCK_USER_ID,
+        data={CONF_COOKIE: MOCK_COOKIE},
+        options={
+            "sync_enabled": False,
+            "sync_path": "/old/path",
+            "cache_max_size_mb": 500,
+            "quality_liked": "high",
+            "quality_playlists": "high",
+            "quality_latest": "standard",
+            "download_mode_liked": "mirror",
+            "download_mode_playlists": "mirror",
+            "download_mode_latest": "mirror",
         },
+        version=2,
     )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_SYNC_ENABLED] is True
-    assert result["data"][CONF_SYNC_QUALITY_LIKED] == "high"
-    assert result["data"][CONF_SYNC_QUALITY_PLAYLISTS] == "standard"
-    assert result["data"][CONF_SYNC_MODE_PLAYLISTS] == "copy"
-    assert result["data"][CONF_SYNC_PLAYLISTS_M3U] is True
+    entry.add_to_hass(hass)
+
+    result = await async_migrate_entry(hass, entry)
+    assert result is True
+    assert entry.version == 3
+
+    opts = entry.options
+    # sync_enabled=False means download_path should be removed
+    assert CONF_DOWNLOAD_PATH not in opts or opts.get(CONF_DOWNLOAD_PATH, "") == ""

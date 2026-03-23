@@ -123,7 +123,7 @@ async def test_browse_root(hass: HomeAssistant, mock_suno_client: AsyncMock) -> 
     assert result.title == "Suno"
     titles = [c.title for c in result.children]
     assert any("Liked" in t for t in titles)
-    assert any("Recent" in t for t in titles)
+    assert any("Latest" in t for t in titles)
     assert any("Playlists" in t for t in titles)
     assert any("All Songs" in t for t in titles)
 
@@ -141,11 +141,10 @@ async def test_browse_root_options_disable_folders(hass: HomeAssistant, mock_sun
     """Disabling options hides the corresponding folders."""
     entry = make_entry(
         options={
+            **make_entry().options,
             "show_liked": False,
-            "show_recent": False,
+            "show_latest": False,
             "show_playlists": False,
-            "recent_count": 20,
-            "cache_ttl_minutes": 30,
         }
     )
     with patch_suno_setup(mock_suno_client):
@@ -157,7 +156,7 @@ async def test_browse_root_options_disable_folders(hass: HomeAssistant, mock_sun
 
     titles = [c.title for c in result.children]
     assert not any("Liked" in t for t in titles)
-    assert not any("Recent" in t for t in titles)
+    assert not any("Latest" in t for t in titles)
     assert not any("Playlists" in t for t in titles)
     # "All Songs" is always present
     assert any("All Songs" in t for t in titles)
@@ -179,23 +178,23 @@ async def test_browse_liked(hass: HomeAssistant, mock_suno_client: AsyncMock) ->
     assert result.children[0].identifier == "clip/clip-aaa-111"
 
 
-async def test_browse_recent(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Browsing 'recent' fetches live from get_feed."""
+async def test_browse_latest(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Browsing 'latest' fetches live from get_feed."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     source = SunoMediaSource(hass)
-    item = MediaSourceItem(hass, "suno", "recent", None)
+    item = MediaSourceItem(hass, "suno", "latest", None)
     result = await source.async_browse_media(item)
 
-    assert "Recent" in result.title
+    assert "Latest" in result.title
     assert len(result.children) == 2
     mock_suno_client.get_feed.assert_awaited()
 
 
-async def test_browse_recent_fallback_on_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Recent falls back to cached data when live fetch fails."""
+async def test_browse_latest_fallback_on_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Latest falls back to cached data when live fetch fails."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -204,11 +203,11 @@ async def test_browse_recent_fallback_on_error(hass: HomeAssistant, mock_suno_cl
     mock_suno_client.get_feed.side_effect = Exception("Network error")
 
     source = SunoMediaSource(hass)
-    item = MediaSourceItem(hass, "suno", "recent", None)
+    item = MediaSourceItem(hass, "suno", "latest", None)
     result = await source.async_browse_media(item)
 
     # Falls back to cached clips
-    assert "Recent" in result.title
+    assert "Latest" in result.title
     assert len(result.children) == 2
 
 
@@ -327,8 +326,9 @@ async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: Asyn
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url == "/api/suno/media/clip-aaa-111.mp3"
-    assert result.mime_type == "audio/mpeg"
+    # clip-aaa-111 is liked, and default quality_liked is "high" → FLAC
+    assert result.url == "/api/suno/media/clip-aaa-111.flac"
+    assert result.mime_type == "audio/flac"
 
 
 async def test_resolve_media_unknown_clip(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -393,8 +393,9 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url == "/api/suno/media/clip-aaa-111.mp3"
-    assert result.mime_type == "audio/mpeg"
+    # clip-aaa-111 is liked, quality_liked defaults to "high" → FLAC
+    assert result.url == "/api/suno/media/clip-aaa-111.flac"
+    assert result.mime_type == "audio/flac"
 
 
 async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

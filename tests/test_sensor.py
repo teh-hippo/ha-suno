@@ -10,11 +10,11 @@ from homeassistant.core import HomeAssistant
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.models import SunoCredits
 from custom_components.suno.sensor import (
-    _SYNC_SENSORS,
-    SunoSyncStatusSensor,
-    _parse_last_sync,
+    _DOWNLOAD_SENSORS,
+    SunoDownloadStatusSensor,
+    _download_files_breakdown,
+    _parse_last_download,
     _SimpleSensor,
-    _sync_files_breakdown,
 )
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
@@ -47,7 +47,7 @@ async def test_sensor_setup_creates_all_sensors(hass: HomeAssistant, mock_suno_c
         await setup_entry(hass, entry)
 
     states = hass.states.async_all("sensor")
-    # credits, total_songs, liked_songs, cache_size (sync disabled by default)
+    # credits, total_songs, liked_songs, cache_size (download disabled by default - no path)
     assert len(states) == 4
 
     state_ids = {s.entity_id for s in states}
@@ -121,13 +121,13 @@ async def test_sensor_unique_ids(hass: HomeAssistant, mock_suno_client: AsyncMoc
     assert "test-user-id-123_cache_size" in unique_ids
 
 
-# ── Sync sensor unit tests ─────────────────────────────────────────
+# ── Download sensor unit tests ─────────────────────────────────────
 
 
-def _make_sync_sensor(sensor_cls, sync_mock=None, **kwargs):
-    """Create a sync sensor with a mocked coordinator."""
+def _make_download_sensor(sensor_cls, dm_mock=None, **kwargs):
+    """Create a download sensor with a mocked coordinator."""
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.sync = sync_mock
+    coordinator.download_manager = dm_mock
     coordinator.data = SunoData()
     entry = make_entry()
     if sensor_cls is _SimpleSensor:
@@ -142,202 +142,200 @@ def _make_sync_sensor(sensor_cls, sync_mock=None, **kwargs):
     return sensor
 
 
-def test_sync_status_idle_when_no_sync() -> None:
-    """Returns 'idle' when sync object is None."""
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=None)
+def test_download_status_idle_when_no_dm() -> None:
+    """Returns 'idle' when download_manager is None."""
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=None)
     assert sensor.native_value == "idle"
 
 
-def test_sync_status_syncing_when_running() -> None:
-    """Returns 'syncing' when sync is running."""
-    sync = MagicMock()
-    sync.is_running = True
-    sync.errors = 0
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=sync)
-    assert sensor.native_value == "syncing"
+def test_download_status_downloading_when_running() -> None:
+    """Returns 'downloading' when download manager is running."""
+    dm = MagicMock()
+    dm.is_running = True
+    dm.errors = 0
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=dm)
+    assert sensor.native_value == "downloading"
 
 
-def test_sync_status_error_when_errors() -> None:
-    """Returns 'error' when sync has errors."""
-    sync = MagicMock()
-    sync.is_running = False
-    sync.errors = 3
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=sync)
+def test_download_status_error_when_errors() -> None:
+    """Returns 'error' when download manager has errors."""
+    dm = MagicMock()
+    dm.is_running = False
+    dm.errors = 3
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=dm)
     assert sensor.native_value == "error"
 
 
-def test_sync_status_idle_when_no_errors() -> None:
-    """Returns 'idle' when sync finished with no errors."""
-    sync = MagicMock()
-    sync.is_running = False
-    sync.errors = 0
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=sync)
+def test_download_status_idle_when_no_errors() -> None:
+    """Returns 'idle' when download manager finished with no errors."""
+    dm = MagicMock()
+    dm.is_running = False
+    dm.errors = 0
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=dm)
     assert sensor.native_value == "idle"
 
 
-def test_sync_files_returns_total() -> None:
-    """Returns total_files count from sync."""
-    sync = MagicMock()
-    sync.total_files = 42
-    value_fn = _SYNC_SENSORS[0][2]  # sync_files
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+def test_download_files_returns_total() -> None:
+    """Returns total_files count from download manager."""
+    dm = MagicMock()
+    dm.total_files = 42
+    value_fn = _DOWNLOAD_SENSORS[0][2]  # downloaded_files
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=dm, value_fn=value_fn)
     assert sensor.native_value == 42
 
 
-def test_sync_files_zero_when_no_sync() -> None:
-    """Returns 0 when sync is None."""
-    value_fn = _SYNC_SENSORS[0][2]
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+def test_download_files_zero_when_no_dm() -> None:
+    """Returns 0 when download_manager is None."""
+    value_fn = _DOWNLOAD_SENSORS[0][2]
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
 
-def test_sync_remaining_returns_count() -> None:
-    """Returns pending count from sync."""
-    sync = MagicMock()
-    sync.pending = 5
-    value_fn = _SYNC_SENSORS[1][2]  # sync_remaining
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+def test_download_remaining_returns_count() -> None:
+    """Returns pending count from download manager."""
+    dm = MagicMock()
+    dm.pending = 5
+    value_fn = _DOWNLOAD_SENSORS[1][2]  # download_remaining
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=dm, value_fn=value_fn)
     assert sensor.native_value == 5
 
 
-def test_sync_remaining_zero_when_no_sync() -> None:
-    """Returns 0 when sync is None."""
-    value_fn = _SYNC_SENSORS[1][2]
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+def test_download_remaining_zero_when_no_dm() -> None:
+    """Returns 0 when download_manager is None."""
+    value_fn = _DOWNLOAD_SENSORS[1][2]
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0
 
 
-def test_sync_size_returns_mb() -> None:
-    """Returns library_size_mb from sync."""
-    sync = MagicMock()
-    sync.library_size_mb = 123.4
-    value_fn = _SYNC_SENSORS[2][2]  # sync_size
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+def test_download_size_returns_mb() -> None:
+    """Returns library_size_mb from download manager."""
+    dm = MagicMock()
+    dm.library_size_mb = 123.4
+    value_fn = _DOWNLOAD_SENSORS[2][2]  # download_size
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=dm, value_fn=value_fn)
     assert sensor.native_value == 123.4
 
 
-def test_sync_size_zero_when_no_sync() -> None:
-    """Returns 0.0 when sync is None."""
-    value_fn = _SYNC_SENSORS[2][2]
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+def test_download_size_zero_when_no_dm() -> None:
+    """Returns 0.0 when download_manager is None."""
+    value_fn = _DOWNLOAD_SENSORS[2][2]
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=None, value_fn=value_fn)
     assert sensor.native_value == 0.0
 
 
-# ── Sync last_run and result sensors ───────────────────────────────
+# ── Download last_run and result sensors ───────────────────────────
 
 
-def test_sync_last_run_returns_datetime() -> None:
-    """Returns parsed datetime from sync.last_sync."""
+def test_download_last_run_returns_datetime() -> None:
+    """Returns parsed datetime from download_manager.last_download."""
     from datetime import datetime
 
-    sync = MagicMock()
-    sync.last_sync = "2026-03-22T08:00:00+00:00"
-    value_fn = _SYNC_SENSORS[3][2]  # sync_last_run
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+    dm = MagicMock()
+    dm.last_download = "2026-03-22T08:00:00+00:00"
+    value_fn = _DOWNLOAD_SENSORS[3][2]  # last_download_run
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=dm, value_fn=value_fn)
     result = sensor.native_value
     assert isinstance(result, datetime)
     assert result.year == 2026
     assert result.tzinfo is not None
 
 
-def test_sync_last_run_none_when_no_sync() -> None:
-    """Returns None when sync is None."""
-    value_fn = _SYNC_SENSORS[3][2]
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+def test_download_last_run_none_when_no_dm() -> None:
+    """Returns None when download_manager is None."""
+    value_fn = _DOWNLOAD_SENSORS[3][2]
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=None, value_fn=value_fn)
     assert sensor.native_value is None
 
 
-def test_sync_result_returns_summary() -> None:
-    """Returns last_result string from sync."""
-    sync = MagicMock()
-    sync.last_result = "3 new songs, 1 removal"
-    value_fn = _SYNC_SENSORS[4][2]  # sync_result
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=sync, value_fn=value_fn)
+def test_download_result_returns_summary() -> None:
+    """Returns last_result string from download manager."""
+    dm = MagicMock()
+    dm.last_result = "3 new songs, 1 removal"
+    value_fn = _DOWNLOAD_SENSORS[4][2]  # last_download_result
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=dm, value_fn=value_fn)
     assert sensor.native_value == "3 new songs, 1 removal"
 
 
-def test_sync_result_empty_when_no_sync() -> None:
-    """Returns empty string when sync is None."""
-    value_fn = _SYNC_SENSORS[4][2]
-    sensor = _make_sync_sensor(_SimpleSensor, sync_mock=None, value_fn=value_fn)
+def test_download_result_empty_when_no_dm() -> None:
+    """Returns empty string when download_manager is None."""
+    value_fn = _DOWNLOAD_SENSORS[4][2]
+    sensor = _make_download_sensor(_SimpleSensor, dm_mock=None, value_fn=value_fn)
     assert sensor.native_value == ""
 
 
 # ── Source breakdown + sensor device/state class ───────────────────
 
 
-def test_sync_files_breakdown_returns_source_counts() -> None:
-    """sync_files attr_fn returns source counts from sync."""
-    sync = MagicMock()
-    sync.source_breakdown = {"liked": 10, "latest": 50, "playlist:abc": 5}
+def test_download_files_breakdown_returns_source_counts() -> None:
+    """downloaded_files attr_fn returns source counts from download manager."""
+    dm = MagicMock()
+    dm.source_breakdown = {"liked": 10, "latest": 50, "playlist:abc": 5}
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.sync = sync
-    assert _sync_files_breakdown(coordinator) == {"liked": 10, "latest": 50, "playlist:abc": 5}
+    coordinator.download_manager = dm
+    assert _download_files_breakdown(coordinator) == {"liked": 10, "latest": 50, "playlist:abc": 5}
 
 
-def test_sync_files_breakdown_empty_when_no_sync() -> None:
-    """Returns empty dict when sync is None."""
+def test_download_files_breakdown_empty_when_no_dm() -> None:
+    """Returns empty dict when download_manager is None."""
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.sync = None
-    assert _sync_files_breakdown(coordinator) == {}
+    coordinator.download_manager = None
+    assert _download_files_breakdown(coordinator) == {}
 
 
-def test_parse_last_sync_returns_datetime() -> None:
+def test_parse_last_download_returns_datetime() -> None:
     """Parses ISO string to datetime."""
     from datetime import datetime
 
     coordinator = MagicMock(spec=SunoCoordinator)
-    sync = MagicMock()
-    sync.last_sync = "2026-03-22T10:00:00+00:00"
-    coordinator.sync = sync
-    result = _parse_last_sync(coordinator)
+    dm = MagicMock()
+    dm.last_download = "2026-03-22T10:00:00+00:00"
+    coordinator.download_manager = dm
+    result = _parse_last_download(coordinator)
     assert isinstance(result, datetime)
 
 
-def test_parse_last_sync_none_when_no_sync() -> None:
-    """Returns None when sync is None."""
+def test_parse_last_download_none_when_no_dm() -> None:
+    """Returns None when download_manager is None."""
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.sync = None
-    assert _parse_last_sync(coordinator) is None
+    coordinator.download_manager = None
+    assert _parse_last_download(coordinator) is None
 
 
-def test_sync_last_run_has_no_state_class() -> None:
-    """sync_last_run should NOT have state_class=MEASUREMENT."""
-    from homeassistant.components.sensor import SensorDeviceClass
-
-    cfg = _SYNC_SENSORS[3]  # sync_last_run
+def test_download_last_run_has_no_state_class() -> None:
+    """last_download_run should NOT have state_class=MEASUREMENT."""
+    cfg = _DOWNLOAD_SENSORS[3]  # last_download_run
     # Tuple: (key, icon, value_fn, unit, state_class, device_class)
     assert cfg[4] is None  # state_class
     assert cfg[5] is SensorDeviceClass.TIMESTAMP  # device_class
 
 
-def test_sync_result_has_no_state_class() -> None:
-    """sync_result should NOT have state_class=MEASUREMENT."""
-    cfg = _SYNC_SENSORS[4]  # sync_result
+def test_download_result_has_no_state_class() -> None:
+    """last_download_result should NOT have state_class=MEASUREMENT."""
+    cfg = _DOWNLOAD_SENSORS[4]  # last_download_result
     # Tuple: (key, icon, value_fn, unit, state_class)
     assert cfg[4] is None  # state_class
 
 
-def test_sync_status_has_enum_device_class() -> None:
-    """sync_status sensor has ENUM device class and valid options."""
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=None)
+def test_download_status_has_enum_device_class() -> None:
+    """download_status sensor has ENUM device class and valid options."""
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=None)
     assert sensor.device_class is SensorDeviceClass.ENUM
-    assert sensor._attr_options == ["idle", "syncing", "error"]
+    assert sensor._attr_options == ["idle", "downloading", "error"]
 
 
-def test_sync_status_attributes_include_errors() -> None:
-    """sync_status extra_state_attributes includes error count."""
-    sync = MagicMock()
-    sync.is_running = False
-    sync.errors = 3
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=sync)
+def test_download_status_attributes_include_errors() -> None:
+    """download_status extra_state_attributes includes error count."""
+    dm = MagicMock()
+    dm.is_running = False
+    dm.errors = 3
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=dm)
     attrs = sensor.extra_state_attributes
     assert attrs["errors"] == 3
 
 
-def test_sync_status_attributes_no_errors_key_when_no_sync() -> None:
-    """sync_status omits errors key when sync is None."""
-    sensor = _make_sync_sensor(SunoSyncStatusSensor, sync_mock=None)
+def test_download_status_attributes_no_errors_key_when_no_dm() -> None:
+    """download_status omits errors key when download_manager is None."""
+    sensor = _make_download_sensor(SunoDownloadStatusSensor, dm_mock=None)
     attrs = sensor.extra_state_attributes
     assert "errors" not in attrs
 
@@ -353,7 +351,7 @@ async def test_no_cached_files_entity(hass: HomeAssistant, mock_suno_client: Asy
 
     state_ids = {s.entity_id for s in hass.states.async_all("sensor")}
     assert "sensor.suno_cached_files" not in state_ids
-    # cache_size sensor exists (cached_files is exposed as its attribute when cache is active)
+    # cache_size sensor exists
     assert "sensor.suno_cache_size" in state_ids
 
 

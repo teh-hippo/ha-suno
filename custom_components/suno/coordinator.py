@@ -16,13 +16,13 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import SunoClient
-from .const import CONF_CACHE_TTL, DEFAULT_CACHE_TTL, DOMAIN
+from .const import DEFAULT_CACHE_TTL, DOMAIN
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoCredits, SunoPlaylist
 
 if TYPE_CHECKING:
     from .cache import SunoCache
-    from .sync import SunoSync
+    from .download import SunoDownloadManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,12 +46,12 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=entry.options.get(CONF_CACHE_TTL, DEFAULT_CACHE_TTL)),
+            update_interval=timedelta(minutes=DEFAULT_CACHE_TTL),
             config_entry=entry,
         )
         self.client = client
         self.cache: SunoCache | None = None
-        self.sync: SunoSync | None = None
+        self.download_manager: SunoDownloadManager | None = None
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
 
     async def async_load_stored_data(self) -> SunoData | None:

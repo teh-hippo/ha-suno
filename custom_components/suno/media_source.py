@@ -10,18 +10,17 @@ from homeassistant.core import HomeAssistant
 
 from . import SunoConfigEntry
 from .const import (
-    CONF_AUDIO_QUALITY,
-    CONF_RECENT_COUNT,
+    CONF_QUALITY_LIKED,
+    CONF_QUALITY_PLAYLISTS,
+    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
     CONF_SHOW_PLAYLISTS,
-    CONF_SHOW_RECENT,
-    DEFAULT_AUDIO_QUALITY,
-    DEFAULT_RECENT_COUNT,
+    DEFAULT_SHOW_LATEST,
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_PLAYLISTS,
-    DEFAULT_SHOW_RECENT,
     DOMAIN,
     QUALITY_HIGH,
+    QUALITY_STANDARD,
 )
 from .coordinator import SunoCoordinator, SunoData
 from .models import SunoClip
@@ -80,13 +79,20 @@ class SunoMediaSource(MediaSource):
                 return entry, entry.runtime_data
         return None
 
-    def _get_mime_type(self, entry: SunoConfigEntry) -> str:
-        """Return the MIME type based on audio quality."""
-        return (
-            "audio/flac"
-            if entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY) == QUALITY_HIGH
-            else "audio/mpeg"
-        )
+    def _get_clip_quality(self, clip: SunoClip, entry: SunoConfigEntry, coordinator: SunoCoordinator) -> str:
+        """Determine quality for a clip based on source membership."""
+        opts = entry.options
+        if opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED) and clip.is_liked:
+            if opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH) == QUALITY_HIGH:
+                return QUALITY_HIGH
+        if opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS):
+            if opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH) == QUALITY_HIGH:
+                for pl_clips in coordinator.data.playlist_clips.values():
+                    if any(c.id == clip.id for c in pl_clips):
+                        return QUALITY_HIGH
+        # Clips not in a FLAC source default to standard (MP3).
+        # "Latest" membership is expensive to check and not worth computing per-resolve.
+        return QUALITY_STANDARD
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
@@ -95,12 +101,15 @@ class SunoMediaSource(MediaSource):
             raise BrowseError(f"Unknown media identifier: {identifier}")
         if not (result := self._get_entry_and_coordinator()):
             raise BrowseError("Suno integration not configured")
-        entry, _ = result
-        quality = entry.options.get(CONF_AUDIO_QUALITY, DEFAULT_AUDIO_QUALITY)
+        entry, coordinator = result
+        clip_id = identifier.removeprefix("clip/")
+        clip = next((c for c in coordinator.data.clips if c.id == clip_id), None)
+        if not clip:
+            clip = next((c for c in coordinator.data.liked_clips if c.id == clip_id), None)
+        quality = self._get_clip_quality(clip, entry, coordinator) if clip else QUALITY_STANDARD
         ext = "flac" if quality == QUALITY_HIGH else "mp3"
-        return PlayMedia(
-            url=f"/api/suno/media/{identifier.removeprefix('clip/')}.{ext}", mime_type=self._get_mime_type(entry)
-        )
+        mime = "audio/flac" if quality == QUALITY_HIGH else "audio/mpeg"
+        return PlayMedia(url=f"/api/suno/media/{clip_id}.{ext}", mime_type=mime)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the Suno library."""
@@ -108,13 +117,13 @@ class SunoMediaSource(MediaSource):
             return _folder("", "Suno", [])
         entry, coordinator = result
         identifier = item.identifier or ""
-        ct = self._get_mime_type(entry)
+        ct = "audio/mpeg"
         if not identifier:
             return await self._browse_root(entry, coordinator, ct)
         if identifier == "liked":
             return self._browse_liked(coordinator, ct)
-        if identifier == "recent":
-            return await self._browse_recent(entry, coordinator, ct)
+        if identifier == "latest":
+            return await self._browse_latest(entry, coordinator, ct)
         if identifier == "playlists":
             return self._browse_playlists(coordinator)
         if identifier.startswith("playlist/"):
@@ -131,8 +140,8 @@ class SunoMediaSource(MediaSource):
         data: SunoData = coordinator.data
         if entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             children.append(_folder("liked", f"Liked Songs ({len(data.liked_clips)})"))
-        if entry.options.get(CONF_SHOW_RECENT, DEFAULT_SHOW_RECENT):
-            children.append(_folder("recent", "Recent"))
+        if entry.options.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST):
+            children.append(_folder("latest", "Your Latest"))
         if entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS) and data.playlists:
             children.append(_folder("playlists", f"Playlists ({len(data.playlists)})"))
         children.append(_folder("all", f"All Songs ({len(data.clips)})"))
@@ -143,17 +152,15 @@ class SunoMediaSource(MediaSource):
         liked = coordinator.data.liked_clips
         return _folder("liked", f"Liked Songs ({len(liked)})", [_clip_to_media(c, ct) for c in liked])
 
-    async def _browse_recent(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
-        """Show recent songs."""
-        count = int(entry.options.get(CONF_RECENT_COUNT, DEFAULT_RECENT_COUNT))
+    async def _browse_latest(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+        """Show latest songs from the feed."""
         try:
             clips, _ = await coordinator.client.get_feed(0)
-            clips = clips[:count]
         except Exception:
-            _LOGGER.warning("Could not fetch recent songs live, falling back to cache")
-            clips = coordinator.data.clips[:count]
+            _LOGGER.warning("Could not fetch latest songs live, falling back to cache")
+            clips = coordinator.data.clips[:20]
         children = [_clip_to_media(c, ct) for c in clips]
-        return _folder("recent", f"Recent ({len(children)})", children)
+        return _folder("latest", f"Your Latest ({len(children)})", children)
 
     def _browse_playlists(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
         """Show playlist folders."""

@@ -1,10 +1,10 @@
-sync_media:
-  name: Sync media
-  description: Trigger a sync of Suno songs to the configured directory.
+download_library:
+  name: Download library
+  description: Trigger a download of your Suno library to the configured directory.
   fields:
     force:
       name: Force
-      description: Re-download all files, ignoring sync state.
+      description: Re-download all files, ignoring download state.
       required: false
       default: false
       selector:

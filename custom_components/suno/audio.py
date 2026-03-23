@@ -7,7 +7,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from .const import SYNC_FFMPEG_TIMEOUT
+from .const import DOWNLOAD_FFMPEG_TIMEOUT
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -80,13 +80,13 @@ async def wav_to_flac(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(input=wav_data), timeout=SYNC_FFMPEG_TIMEOUT)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(input=wav_data), timeout=DOWNLOAD_FFMPEG_TIMEOUT)
         if proc.returncode != 0:
             _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
             return None
         return stdout
     except TimeoutError:
-        _LOGGER.error("ffmpeg transcode timed out after %ds", SYNC_FFMPEG_TIMEOUT)
+        _LOGGER.error("ffmpeg transcode timed out after %ds", DOWNLOAD_FFMPEG_TIMEOUT)
         if proc and proc.returncode is None:
             proc.kill()
             await proc.wait()
