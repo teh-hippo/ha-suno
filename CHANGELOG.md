@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.4.0 (2026-03-24)
+
+### Bug Fixes
+
+- FLAC album art not shown in Jellyfin (picture type 0→3)
+  ([`e472617`](https://github.com/teh-hippo/ha-suno/commit/e4726176e0d57b861f50c05ac608d296caae3d98))
+
+### Features
+
+- Rich metadata for Jellyfin — album, lyrics, date, albumartist
+  ([`6a554ee`](https://github.com/teh-hippo/ha-suno/commit/6a554ee0ac83393fc3542bde9d1367b537746def))
+
+
 ## v3.3.2 (2026-03-24)
 
 ### Bug Fixes
