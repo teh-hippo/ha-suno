@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.3.2 (2026-03-24)
+
+### Bug Fixes
+
+- Auto-continue downloads and skip delays for existing files
+  ([`bc94f34`](https://github.com/teh-hippo/ha-suno/commit/bc94f34ef9209babb88f083327cf466139828fcd))
+
+### Continuous Integration
+
+- Enable global automerge and fix semantic-release patch_tags
+  ([`b62ff3d`](https://github.com/teh-hippo/ha-suno/commit/b62ff3ddb624d0b7812a2d86c63e1b475c9ef778))
+
+
 ## v3.3.1 (2026-03-23)
 
 ### Bug Fixes
