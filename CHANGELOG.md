@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.5.0 (2026-03-24)
+
+### Features
+
+- Fix Jellyfin metadata and simplify downloads
+  ([`4e1504e`](https://github.com/teh-hippo/ha-suno/commit/4e1504ec98f713bbc89d4ff58564ab1eb050d488))
+
+
 ## v3.4.2 (2026-03-24)
 
 ### Bug Fixes
