@@ -236,6 +236,8 @@ class SunoDownloadManager:
         self._state: dict[str, Any] = {"clips": {}, "last_download": None}
         self._cache: SunoCache | None = None
         self._coordinator: SunoCoordinator | None = None
+        self._client: SunoClient | None = None
+        self._entry: ConfigEntry | None = None
         self._download_path = ""
         self._running = False
         self._errors = self._pending = 0
@@ -256,6 +258,8 @@ class SunoDownloadManager:
         mgr = cls(hass, f"suno_sync_{entry.entry_id}")
         mgr._cache = coordinator.cache
         mgr._coordinator = coordinator
+        mgr._client = client
+        mgr._entry = entry
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
         await mgr.async_init()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
@@ -354,6 +358,7 @@ class SunoDownloadManager:
         finally:
             self._running = False
             self._notify_coordinator()
+        self._maybe_continue()
 
     def _notify_coordinator(self) -> None:
         """Push sensor updates via the coordinator without re-triggering sync."""
@@ -361,6 +366,17 @@ class SunoDownloadManager:
             self._updating_sensors = True
             self._coordinator.async_set_updated_data(self._coordinator.data)
             self._updating_sensors = False
+
+    def _maybe_continue(self) -> None:
+        """Schedule the next batch immediately if items remain and no errors."""
+        if self._pending <= 0 or self._errors > 0 or self._entry is None or self._client is None:
+            return
+        _LOGGER.info("Continuing download: %d remaining", self._pending)
+        self._entry.async_create_background_task(
+            self.hass,
+            self.async_download(dict(self._entry.options), self._client),
+            f"suno_download_continue_{self._entry.entry_id}",
+        )
 
     async def _run_download(
         self,
@@ -434,11 +450,28 @@ class SunoDownloadManager:
         if is_bootstrap:
             _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
         downloaded = 0
+        reconciled = 0
         for item in to_download:
+            rel_path = _clip_path(item.clip, item.quality)
+            target = base / rel_path
+            if await self.hass.async_add_executor_job(target.exists):
+                # File already on disk -- register in state without counting
+                # against the download cap or adding a delay.
+                stat = await self.hass.async_add_executor_job(target.stat)
+                clips_state[item.clip.id] = {
+                    "path": rel_path,
+                    "title": item.clip.title,
+                    "created": item.clip.created_at[:10] if item.clip.created_at else None,
+                    "sources": item.sources,
+                    "size": stat.st_size,
+                    "meta_hash": clip_meta_hash(item.clip),
+                    "quality": item.quality,
+                }
+                reconciled += 1
+                continue
             if downloaded >= max_dl:
                 _LOGGER.info("Reached max downloads (%d), continuing next sync", max_dl)
                 break
-            rel_path = _clip_path(item.clip, item.quality)
             if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
                 clips_state[item.clip.id] = {
                     "path": rel_path,
@@ -450,18 +483,19 @@ class SunoDownloadManager:
                     "quality": item.quality,
                 }
                 downloaded += 1
-                self._pending = max(0, len(to_download) - downloaded)
             else:
                 self._errors += 1
-            if downloaded < len(to_download):
-                self._notify_coordinator()
-                await asyncio.sleep(DOWNLOAD_DELAY)
+            self._pending = max(0, len(to_download) - downloaded - reconciled)
+            self._notify_coordinator()
+            await asyncio.sleep(DOWNLOAD_DELAY)
+        if reconciled:
+            _LOGGER.info("Reconciled %d files already on disk", reconciled)
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
         self._state["clips"] = clips_state
         self._state["last_download"] = datetime.now(tz=UTC).isoformat()
-        self._pending = max(0, len(to_download) - downloaded)
+        self._pending = max(0, len(to_download) - downloaded - reconciled)
         if self._pending > 0:
             self._last_result = f"Downloading ({self._pending} remaining)"
         else:
@@ -591,8 +625,6 @@ class SunoDownloadManager:
 
     async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
-        if await self.hass.async_add_executor_job(target.exists):
-            return await self.hass.async_add_executor_job(lambda: target.stat().st_size)
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         try:
             session = async_get_clientsession(self.hass)
