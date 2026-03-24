@@ -38,6 +38,9 @@ class SunoClip:
     duration: float
     clip_type: str
     has_vocal: bool
+    lyrics: str = ""
+    prompt: str = ""
+    gpt_description_prompt: str = ""
 
     @classmethod
     def from_api_response(cls, raw: dict[str, Any]) -> SunoClip:
@@ -62,6 +65,9 @@ class SunoClip:
             duration=metadata.get("duration") or 0.0,
             clip_type=metadata.get("type", ""),
             has_vocal=metadata.get("has_vocal", False),
+            lyrics=raw.get("lyrics", ""),
+            prompt=metadata.get("prompt", ""),
+            gpt_description_prompt=metadata.get("gpt_description_prompt", ""),
         )
 
 

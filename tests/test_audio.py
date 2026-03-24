@@ -160,10 +160,12 @@ def test_fix_flac_cover_type_patches_type_zero() -> None:
     mime = b"image/jpeg"
     pic_payload = (
         struct.pack(">I", 0)  # type 0
-        + struct.pack(">I", len(mime)) + mime
+        + struct.pack(">I", len(mime))
+        + mime
         + struct.pack(">I", 0)
         + struct.pack(">IIII", 1, 1, 24, 0)
-        + struct.pack(">I", 2) + b"\xff\xd8"
+        + struct.pack(">I", 2)
+        + b"\xff\xd8"
     )
     picture = b"\x86" + len(pic_payload).to_bytes(3, "big") + pic_payload
     data = b"fLaC" + streaminfo + picture
@@ -322,7 +324,7 @@ def test_skip_existing_id3_large_tag() -> None:
     """Correctly strips an ID3 tag when the syncsafe size has overlapping bits."""
     # Tag body of 248 bytes: syncsafe = [0, 0, 1, 120]
     # This exercises the operator precedence fix: + 10 must apply after |
-    tag_body = b"\xAB" * 248
+    tag_body = b"\xab" * 248
     syncsafe_bytes = bytes([0, 0, 1, 120])
     id3_header = b"ID3\x04\x00\x00" + syncsafe_bytes + tag_body
     audio_data = b"\xff\xfb\x90\x00" * 10

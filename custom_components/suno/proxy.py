@@ -128,7 +128,7 @@ class SunoMediaProxyView(HomeAssistantView):
         meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
-        id3_header = _build_id3_header(title=title, artist=artist, genre=genre)
+        id3_header = _build_id3_header(title=title, artist=artist, genre=genre, album=title)
         collected: list[bytes] = [id3_header] if cache is not None else []
         response = web.StreamResponse(
             status=200,
@@ -213,6 +213,8 @@ class SunoMediaProxyView(HomeAssistantView):
             artist=artist,
             genre=genre,
             image_url=clip.image_large_url or clip.image_url if clip else None,
+            album=title,
+            album_artist="Suno",
         )
 
     @staticmethod

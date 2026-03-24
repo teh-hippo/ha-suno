@@ -454,7 +454,7 @@ class SunoDownloadManager:
         for item in to_download:
             rel_path = _clip_path(item.clip, item.quality)
             target = base / rel_path
-            if await self.hass.async_add_executor_job(target.exists):
+            if not force and await self.hass.async_add_executor_job(target.exists):
                 # File already on disk -- register in state without counting
                 # against the download cap or adding a delay.
                 stat = await self.hass.async_add_executor_job(target.stat)
@@ -626,6 +626,15 @@ class SunoDownloadManager:
     async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
+        clip = item.clip
+        date = clip.created_at[:10] if clip.created_at else ""
+        common_meta = {
+            "album": clip.title or "Suno",
+            "album_artist": "Suno",
+            "date": date,
+            "lyrics": clip.lyrics,
+            "comment": clip.gpt_description_prompt or clip.prompt,
+        }
         try:
             session = async_get_clientsession(self.hass)
 
@@ -634,19 +643,21 @@ class SunoDownloadManager:
                     client,
                     session,
                     get_ffmpeg_manager(self.hass).binary,
-                    item.clip.id,
-                    item.clip.title or "Suno",
-                    genre=item.clip.tags or "",
-                    image_url=item.clip.image_large_url or item.clip.image_url or None,
+                    clip.id,
+                    clip.title or "Suno",
+                    genre=clip.tags or "",
+                    image_url=clip.image_large_url or clip.image_url or None,
+                    **common_meta,
                 )
                 fmt = "flac"
             else:
-                audio_url = item.clip.audio_url or f"{CDN_BASE_URL}/{item.clip.id}.mp3"
+                audio_url = clip.audio_url or f"{CDN_BASE_URL}/{clip.id}.mp3"
                 data = await download_as_mp3(
                     session,
                     audio_url,
-                    title=item.clip.title or "Suno",
-                    genre=item.clip.tags or "",
+                    title=clip.title or "Suno",
+                    genre=clip.tags or "",
+                    **common_meta,
                 )
                 fmt = "mp3"
 

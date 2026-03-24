@@ -15,13 +15,36 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _build_id3_header(title: str, artist: str, genre: str = "") -> bytes:
-    """Build a minimal ID3v2.4 header with title, artist, and genre frames."""
-    tag_fields = [("TIT2", title), ("TPE1", artist)] + ([("TCON", genre)] if genre else [])
+def _build_id3_header(
+    title: str,
+    artist: str,
+    genre: str = "",
+    album: str = "",
+    album_artist: str = "",
+    date: str = "",
+    lyrics: str = "",
+    comment: str = "",
+) -> bytes:
+    """Build a minimal ID3v2.4 header with metadata frames."""
+    tag_fields: list[tuple[str, str]] = [("TIT2", title), ("TPE1", artist)]
+    if album:
+        tag_fields.append(("TALB", album))
+    if genre:
+        tag_fields.append(("TCON", genre))
+    if album_artist:
+        tag_fields.append(("TPE2", album_artist))
+    if date:
+        tag_fields.append(("TDRC", date))
+    if comment:
+        tag_fields.append(("COMM", comment))
     frames = b""
     for frame_id, text in tag_fields:
         text_bytes = b"\x03" + text.encode("utf-8")
         frames += frame_id.encode("ascii") + len(text_bytes).to_bytes(4, "big") + b"\x00\x00" + text_bytes
+    if lyrics:
+        # USLT: encoding(1) + language(3) + content_descriptor(\x00) + text
+        uslt_body = b"\x03" + b"eng" + b"\x00" + lyrics.encode("utf-8")
+        frames += b"USLT" + len(uslt_body).to_bytes(4, "big") + b"\x00\x00" + uslt_body
     size = len(frames)
     syncsafe = (
         ((size & 0x0FE00000) << 3) | ((size & 0x001FC000) << 2) | ((size & 0x00003F80) << 1) | (size & 0x0000007F)
@@ -75,6 +98,10 @@ async def wav_to_flac(
     album: str = "Suno",
     genre: str = "",
     image_data: bytes | None = None,
+    album_artist: str = "",
+    date: str = "",
+    lyrics: str = "",
+    comment: str = "",
 ) -> bytes | None:
     """Transcode WAV bytes to FLAC with metadata and optional album art."""
     import tempfile  # noqa: PLC0415
@@ -103,6 +130,14 @@ async def wav_to_flac(
         ]
         if genre:
             meta.extend(["-metadata", f"genre={genre}"])
+        if album_artist:
+            meta.extend(["-metadata", f"albumartist={album_artist}"])
+        if date:
+            meta.extend(["-metadata", f"date={date}"])
+        if lyrics:
+            meta.extend(["-metadata", f"LYRICS={lyrics}"])
+        if comment:
+            meta.extend(["-metadata", f"comment={comment}"])
         args.extend(meta + ["-compression_level", "5", "-f", "flac", "pipe:1"])
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -153,6 +188,11 @@ async def download_as_mp3(
     title: str,
     artist: str = "Suno",
     genre: str = "",
+    album: str = "",
+    album_artist: str = "",
+    date: str = "",
+    lyrics: str = "",
+    comment: str = "",
 ) -> bytes | None:
     """Download MP3 from CDN and inject ID3 metadata tags.
 
@@ -170,7 +210,16 @@ async def download_as_mp3(
         _LOGGER.exception("Failed to download MP3 from %s", audio_url)
         return None
 
-    header = _build_id3_header(title=title, artist=artist, genre=genre)
+    header = _build_id3_header(
+        title=title,
+        artist=artist,
+        genre=genre,
+        album=album or title,
+        album_artist=album_artist,
+        date=date,
+        lyrics=lyrics,
+        comment=comment,
+    )
     body = _skip_existing_id3(raw)
     return header + body
 
@@ -194,6 +243,11 @@ async def download_and_transcode_to_flac(
     artist: str = "Suno",
     genre: str = "",
     image_url: str | None = None,
+    album: str = "",
+    album_artist: str = "",
+    date: str = "",
+    lyrics: str = "",
+    comment: str = "",
 ) -> bytes | None:
     """Download WAV from Suno, fetch album art, and transcode to FLAC.
 
@@ -219,4 +273,16 @@ async def download_and_transcode_to_flac(
     finally:
         upstream.close()
     image_data = await fetch_album_art(session, image_url) if image_url else None
-    return await wav_to_flac(ffmpeg_binary, wav_data, title, artist, genre=genre, image_data=image_data)
+    return await wav_to_flac(
+        ffmpeg_binary,
+        wav_data,
+        title,
+        artist,
+        album=album or title,
+        genre=genre,
+        image_data=image_data,
+        album_artist=album_artist,
+        date=date,
+        lyrics=lyrics,
+        comment=comment,
+    )
