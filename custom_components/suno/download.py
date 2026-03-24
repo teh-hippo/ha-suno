@@ -358,7 +358,7 @@ class SunoDownloadManager:
         finally:
             self._running = False
             self._notify_coordinator()
-        self._maybe_continue()
+        self._maybe_continue(force=force)
 
     def _notify_coordinator(self) -> None:
         """Push sensor updates via the coordinator without re-triggering sync."""
@@ -367,14 +367,14 @@ class SunoDownloadManager:
             self._coordinator.async_set_updated_data(self._coordinator.data)
             self._updating_sensors = False
 
-    def _maybe_continue(self) -> None:
+    def _maybe_continue(self, *, force: bool = False) -> None:
         """Schedule the next batch immediately if items remain and no errors."""
         if self._pending <= 0 or self._errors > 0 or self._entry is None or self._client is None:
             return
         _LOGGER.info("Continuing download: %d remaining", self._pending)
         self._entry.async_create_background_task(
             self.hass,
-            self.async_download(dict(self._entry.options), self._client),
+            self.async_download(dict(self._entry.options), self._client, force=force),
             f"suno_download_continue_{self._entry.entry_id}",
         )
 
