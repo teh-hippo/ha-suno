@@ -358,7 +358,7 @@ class SunoDownloadManager:
         finally:
             self._running = False
             self._notify_coordinator()
-        self._maybe_continue(force=force)
+        self._maybe_continue()
 
     def _notify_coordinator(self) -> None:
         """Push sensor updates via the coordinator without re-triggering sync."""
@@ -367,14 +367,14 @@ class SunoDownloadManager:
             self._coordinator.async_set_updated_data(self._coordinator.data)
             self._updating_sensors = False
 
-    def _maybe_continue(self, *, force: bool = False) -> None:
+    def _maybe_continue(self) -> None:
         """Schedule the next batch immediately if items remain and no errors."""
         if self._pending <= 0 or self._errors > 0 or self._entry is None or self._client is None:
             return
         _LOGGER.info("Continuing download: %d remaining", self._pending)
         self._entry.async_create_background_task(
             self.hass,
-            self.async_download(dict(self._entry.options), self._client, force=force),
+            self.async_download(dict(self._entry.options), self._client),
             f"suno_download_continue_{self._entry.entry_id}",
         )
 
@@ -446,8 +446,8 @@ class SunoDownloadManager:
             self._errors += 1
             return
         is_bootstrap = len(to_download) > DOWNLOAD_MAX_PER_RUN
-        max_dl = DOWNLOAD_MAX_BOOTSTRAP if is_bootstrap else DOWNLOAD_MAX_PER_RUN
-        if is_bootstrap:
+        max_dl = len(to_download) if force else (DOWNLOAD_MAX_BOOTSTRAP if is_bootstrap else DOWNLOAD_MAX_PER_RUN)
+        if is_bootstrap and not force:
             _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
         downloaded = 0
         reconciled = 0

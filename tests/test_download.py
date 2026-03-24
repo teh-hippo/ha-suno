@@ -1625,8 +1625,8 @@ async def test_continuation_scheduled_when_pending(hass: HomeAssistant, tmp_path
     coro.close()  # clean up unawaited coroutine
 
 
-async def test_continuation_preserves_force_flag(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Force downloads should propagate force=True to continuations."""
+async def test_force_downloads_all_without_cap(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Force downloads should process ALL clips without hitting bootstrap cap."""
     from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
 
     sync = SunoDownloadManager(hass, "test_sync_state")
@@ -1666,12 +1666,10 @@ async def test_continuation_preserves_force_flag(hass: HomeAssistant, tmp_path: 
     ):
         await sync.async_download(dict(entry.options), client, force=True)
 
-    assert sync.pending > 0
-    entry.async_create_background_task.assert_called_once()
-    # The continuation coroutine should include force=True
-    call_args = entry.async_create_background_task.call_args
-    coro = call_args[0][1]
-    coro.close()  # clean up unawaited coroutine
+    # Force should download ALL clips, no continuation needed
+    assert sync.pending == 0
+    assert sync.total_files == num_clips
+    entry.async_create_background_task.assert_not_called()
 
 
 async def test_no_continuation_on_errors(hass: HomeAssistant, tmp_path: Path) -> None:
