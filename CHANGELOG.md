@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.4.2 (2026-03-24)
+
+### Bug Fixes
+
+- Force downloads skip bootstrap cap to avoid infinite loop
+  ([`94a0aeb`](https://github.com/teh-hippo/ha-suno/commit/94a0aebf8ac08ec5bbad64d8ebd6148193076fe8))
+
+
 ## v3.4.1 (2026-03-24)
 
 ### Bug Fixes
