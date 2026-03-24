@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.suno.audio import (
     _build_id3_header,
+    _fix_flac_cover_type,
     _skip_existing_id3,
     download_as_mp3,
     ensure_wav_url,
@@ -101,6 +102,97 @@ async def test_wav_to_flac_with_album_art(tmp_path: object) -> None:
     import os
 
     assert not os.path.exists(created_tmp_files[0])
+
+
+async def test_wav_to_flac_with_album_art_fixes_picture_type() -> None:
+    """wav_to_flac patches PICTURE block type 0 to Front Cover (3)."""
+    import struct
+
+    # Build a minimal FLAC with a PICTURE block (type=0)
+    streaminfo_data = b"\x00" * 34
+    streaminfo_block = b"\x00" + len(streaminfo_data).to_bytes(3, "big") + streaminfo_data
+
+    mime = b"image/jpeg"
+    pic_data = b"\xff\xd8" + b"\x00" * 10
+    picture_payload = (
+        struct.pack(">I", 0)  # picture type 0 (Other)
+        + struct.pack(">I", len(mime))
+        + mime
+        + struct.pack(">I", 0)  # description length
+        + struct.pack(">III", 100, 100, 24)  # width, height, depth
+        + struct.pack(">I", 0)  # colors
+        + struct.pack(">I", len(pic_data))
+        + pic_data
+    )
+    # is_last=1 for PICTURE block (type 6 | 0x80 = 0x86)
+    picture_block = b"\x86" + len(picture_payload).to_bytes(3, "big") + picture_payload
+
+    fake_flac = b"fLaC" + streaminfo_block + picture_block
+
+    proc = AsyncMock()
+    proc.communicate = AsyncMock(return_value=(fake_flac, b""))
+    proc.returncode = 0
+
+    with (
+        patch("asyncio.create_subprocess_exec", return_value=proc),
+        patch("tempfile.mkstemp", return_value=(999, "/fake/img.jpg")),
+        patch("os.write"),
+        patch("os.close"),
+        patch("os.unlink"),
+    ):
+        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist", image_data=b"\xff\xd8")
+
+    assert result is not None
+    # The PICTURE block type should now be 3 (Front Cover)
+    pic_block_offset = 4 + 4 + 34  # fLaC + streaminfo header + streaminfo data
+    pic_type = struct.unpack(">I", result[pic_block_offset + 4 : pic_block_offset + 8])[0]
+    assert pic_type == 3
+
+
+# ── _fix_flac_cover_type ────────────────────────────────────────────
+
+
+def test_fix_flac_cover_type_patches_type_zero() -> None:
+    """PICTURE block type 0 is changed to 3 (Front Cover)."""
+    import struct
+
+    streaminfo = b"\x00" + (34).to_bytes(3, "big") + b"\x00" * 34
+    mime = b"image/jpeg"
+    pic_payload = (
+        struct.pack(">I", 0)  # type 0
+        + struct.pack(">I", len(mime)) + mime
+        + struct.pack(">I", 0)
+        + struct.pack(">IIII", 1, 1, 24, 0)
+        + struct.pack(">I", 2) + b"\xff\xd8"
+    )
+    picture = b"\x86" + len(pic_payload).to_bytes(3, "big") + pic_payload
+    data = b"fLaC" + streaminfo + picture
+
+    result = _fix_flac_cover_type(data)
+
+    # Parse the picture type from result
+    pic_offset = 4 + 4 + 34
+    pic_type = struct.unpack(">I", result[pic_offset + 4 : pic_offset + 8])[0]
+    assert pic_type == 3
+
+
+def test_fix_flac_cover_type_no_picture_block() -> None:
+    """Data without a PICTURE block is returned unchanged."""
+    streaminfo = b"\x80" + (34).to_bytes(3, "big") + b"\x00" * 34  # is_last=True
+    data = b"fLaC" + streaminfo
+    assert _fix_flac_cover_type(data) == data
+
+
+def test_fix_flac_cover_type_not_flac() -> None:
+    """Non-FLAC data is returned unchanged."""
+    data = b"RIFF" + b"\x00" * 20
+    assert _fix_flac_cover_type(data) == data
+
+
+def test_fix_flac_cover_type_too_short() -> None:
+    """Data shorter than 8 bytes is returned unchanged."""
+    assert _fix_flac_cover_type(b"fLaC") == b"fLaC"
+    assert _fix_flac_cover_type(b"") == b""
 
 
 # ── ensure_wav_url ──────────────────────────────────────────────────
@@ -223,6 +315,21 @@ def test_skip_existing_id3_no_tag() -> None:
     """Returns the chunk unchanged when no ID3 tag is present."""
     audio_data = b"\xff\xfb\x90\x00" * 10
     result = _skip_existing_id3(audio_data)
+    assert result == audio_data
+
+
+def test_skip_existing_id3_large_tag() -> None:
+    """Correctly strips an ID3 tag when the syncsafe size has overlapping bits."""
+    # Tag body of 248 bytes: syncsafe = [0, 0, 1, 120]
+    # This exercises the operator precedence fix: + 10 must apply after |
+    tag_body = b"\xAB" * 248
+    syncsafe_bytes = bytes([0, 0, 1, 120])
+    id3_header = b"ID3\x04\x00\x00" + syncsafe_bytes + tag_body
+    audio_data = b"\xff\xfb\x90\x00" * 10
+
+    chunk = id3_header + audio_data
+    result = _skip_existing_id3(chunk)
+
     assert result == audio_data
 
 

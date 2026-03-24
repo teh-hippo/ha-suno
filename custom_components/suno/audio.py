@@ -34,7 +34,37 @@ def _skip_existing_id3(chunk: bytes) -> bytes:
     if len(chunk) < 10 or chunk[:3] != b"ID3":
         return chunk
     raw = chunk[6:10]
-    return chunk[(raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3] + 10 :]
+    return chunk[((raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]) + 10 :]
+
+
+_FLAC_PICTURE_TYPE = 6
+_FLAC_COVER_FRONT = 3
+
+
+def _fix_flac_cover_type(data: bytes) -> bytes:
+    """Set the first PICTURE block's type to Front Cover (3).
+
+    ffmpeg's FLAC muxer writes picture type 0 ("Other") regardless of
+    stream disposition.  Jellyfin and many players only display art
+    tagged as type 3 ("Cover (front)").
+    """
+    if len(data) < 8 or data[:4] != b"fLaC":
+        return data
+    buf = bytearray(data)
+    pos = 4
+    while pos + 4 <= len(buf):
+        header_byte = buf[pos]
+        is_last = (header_byte & 0x80) != 0
+        block_type = header_byte & 0x7F
+        block_length = int.from_bytes(buf[pos + 1 : pos + 4], "big")
+        if block_type == _FLAC_PICTURE_TYPE and block_length >= 4:
+            # Overwrite the 4-byte picture-type field at start of block data
+            buf[pos + 4 : pos + 8] = _FLAC_COVER_FRONT.to_bytes(4, "big")
+            break
+        pos += 4 + block_length
+        if is_last:
+            break
+    return bytes(buf)
 
 
 async def wav_to_flac(
@@ -60,7 +90,7 @@ async def wav_to_flac(
             args.extend(["-i", tmp_img_path])
         args.extend(["-map", "0:a:0"])
         if image_data:
-            args.extend(["-map", "1:v:0", "-c:v", "mjpeg", "-disposition:v:0", "attached_pic"])
+            args.extend(["-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic"])
         meta = [
             "-c:a",
             "flac",
@@ -84,7 +114,7 @@ async def wav_to_flac(
         if proc.returncode != 0:
             _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
             return None
-        return stdout
+        return _fix_flac_cover_type(stdout) if image_data else stdout
     except TimeoutError:
         _LOGGER.error("ffmpeg transcode timed out after %ds", DOWNLOAD_FFMPEG_TIMEOUT)
         if proc and proc.returncode is None:
