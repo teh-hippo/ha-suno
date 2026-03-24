@@ -1535,16 +1535,13 @@ async def test_last_result_persisted_and_restored(hass: HomeAssistant) -> None:
 # ── Bootstrap remaining display ───────────────────────────────────
 
 
-async def test_bootstrap_shows_remaining(hass: HomeAssistant, tmp_path: Path) -> None:
-    """During bootstrap, last_result shows 'Downloading (X remaining)'."""
-    from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
-
+async def test_downloads_all_without_cap(hass: HomeAssistant, tmp_path: Path) -> None:
+    """All clips download in one run — no batch caps or continuation."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
         await sync.async_init()
 
-    # Create enough clips to trigger bootstrap AND exceed bootstrap cap
-    num_clips = DOWNLOAD_MAX_BOOTSTRAP + 5
+    num_clips = 30
     clips = [_make_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
     client = AsyncMock()
     client.get_liked_songs = AsyncMock(return_value=clips)
@@ -1571,152 +1568,12 @@ async def test_bootstrap_shows_remaining(hass: HomeAssistant, tmp_path: Path) ->
         }
         await sync.async_download(opts, client)
 
-    # Bootstrap caps downloads, so pending > 0 → shows remaining message
-    assert "remaining" in sync.last_result
-    assert sync._state["last_result"] == sync.last_result
-
-
-async def test_continuation_scheduled_when_pending(hass: HomeAssistant, tmp_path: Path) -> None:
-    """After bootstrap caps a batch, _maybe_continue schedules the next run."""
-    from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
-
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    with patch.object(sync._store, "async_load", return_value=None):
-        await sync.async_init()
-
-    num_clips = DOWNLOAD_MAX_BOOTSTRAP + 5
-    clips = [_make_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
-    client = AsyncMock()
-    client.get_liked_songs = AsyncMock(return_value=clips)
-    client.get_playlists = AsyncMock(return_value=[])
-    client.get_all_songs = AsyncMock(return_value=[])
-    sync._client = client
-
-    entry = MagicMock()
-    entry.options = {
-        CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
-        CONF_SHOW_LIKED: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-    }
-    entry.entry_id = "test_entry"
-    entry.async_create_background_task = MagicMock()
-    sync._entry = entry
-
-    fake_flac = b"fLaC" + b"\x00" * 50
-
-    with (
-        patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
-            new_callable=AsyncMock,
-            return_value=fake_flac,
-        ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch.object(sync._store, "async_save"),
-    ):
-        await sync.async_download(dict(entry.options), client)
-
-    assert sync.pending > 0
-    entry.async_create_background_task.assert_called_once()
-    # Continuation should NOT pass force (normal download)
-    call_args = entry.async_create_background_task.call_args
-    coro = call_args[0][1]
-    coro.close()  # clean up unawaited coroutine
-
-
-async def test_force_downloads_all_without_cap(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Force downloads should process ALL clips without hitting bootstrap cap."""
-    from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
-
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    with patch.object(sync._store, "async_load", return_value=None):
-        await sync.async_init()
-
-    num_clips = DOWNLOAD_MAX_BOOTSTRAP + 5
-    clips = [_make_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
-    client = AsyncMock()
-    client.get_liked_songs = AsyncMock(return_value=clips)
-    client.get_playlists = AsyncMock(return_value=[])
-    client.get_all_songs = AsyncMock(return_value=[])
-    sync._client = client
-
-    entry = MagicMock()
-    entry.options = {
-        CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
-        CONF_SHOW_LIKED: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-    }
-    entry.entry_id = "test_entry"
-    entry.async_create_background_task = MagicMock()
-    sync._entry = entry
-
-    fake_flac = b"fLaC" + b"\x00" * 50
-
-    with (
-        patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
-            new_callable=AsyncMock,
-            return_value=fake_flac,
-        ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch.object(sync._store, "async_save"),
-    ):
-        await sync.async_download(dict(entry.options), client, force=True)
-
-    # Force should download ALL clips, no continuation needed
     assert sync.pending == 0
     assert sync.total_files == num_clips
-    entry.async_create_background_task.assert_not_called()
 
 
-async def test_no_continuation_on_errors(hass: HomeAssistant, tmp_path: Path) -> None:
-    """When downloads fail, _maybe_continue should NOT schedule a follow-up."""
-    from custom_components.suno.const import DOWNLOAD_MAX_BOOTSTRAP
-
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    with patch.object(sync._store, "async_load", return_value=None):
-        await sync.async_init()
-
-    num_clips = DOWNLOAD_MAX_BOOTSTRAP + 5
-    clips = [_make_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
-    client = AsyncMock()
-    client.get_liked_songs = AsyncMock(return_value=clips)
-    client.get_playlists = AsyncMock(return_value=[])
-    client.get_all_songs = AsyncMock(return_value=[])
-    sync._client = client
-
-    entry = MagicMock()
-    entry.options = {
-        CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
-        CONF_SHOW_LIKED: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-    }
-    entry.entry_id = "test_entry"
-    entry.async_create_background_task = MagicMock()
-    sync._entry = entry
-
-    with (
-        patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
-            new_callable=AsyncMock,
-            return_value=None,  # all downloads fail
-        ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch.object(sync._store, "async_save"),
-    ):
-        await sync.async_download(dict(entry.options), client)
-
-    assert sync.errors > 0
-    entry.async_create_background_task.assert_not_called()
-
-
-async def test_no_continuation_when_all_downloaded(hass: HomeAssistant, tmp_path: Path) -> None:
-    """When all items download in one batch, no continuation is scheduled."""
+async def test_initial_sync_label(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Initial sync shows 'Initial sync' in status, not generic label."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
         await sync.async_init()
@@ -1726,20 +1583,17 @@ async def test_no_continuation_when_all_downloaded(hass: HomeAssistant, tmp_path
     client.get_liked_songs = AsyncMock(return_value=clips)
     client.get_playlists = AsyncMock(return_value=[])
     client.get_all_songs = AsyncMock(return_value=[])
-    sync._client = client
-
-    entry = MagicMock()
-    entry.options = {
-        CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
-        CONF_SHOW_LIKED: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-    }
-    entry.entry_id = "test_entry"
-    entry.async_create_background_task = MagicMock()
-    sync._entry = entry
 
     fake_flac = b"fLaC" + b"\x00" * 50
+
+    results_during: list[str] = []
+    original_notify = sync._notify_coordinator
+
+    def capture_notify() -> None:
+        results_during.append(sync.last_result)
+        original_notify()
+
+    sync._notify_coordinator = capture_notify  # type: ignore[method-assign]
 
     with (
         patch(
@@ -1751,7 +1605,13 @@ async def test_no_continuation_when_all_downloaded(hass: HomeAssistant, tmp_path
         patch("custom_components.suno.download.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
-        await sync.async_download(dict(entry.options), client)
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client, initial=True)
 
-    assert sync.pending == 0
-    entry.async_create_background_task.assert_not_called()
+    # At least one progress update should contain "Initial sync"
+    assert any("Initial sync" in r for r in results_during)

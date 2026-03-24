@@ -18,7 +18,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .audio import download_and_transcode_to_flac, download_as_mp3
+from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art
 from .const import (
     CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
@@ -42,9 +42,6 @@ from .const import (
     DEFAULT_LATEST_MINIMUM,
     DEFAULT_SHOW_LIKED,
     DOMAIN,
-    DOWNLOAD_DELAY,
-    DOWNLOAD_MAX_BOOTSTRAP,
-    DOWNLOAD_MAX_PER_RUN,
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
@@ -281,11 +278,14 @@ class SunoDownloadManager:
             hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
             entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD))
 
-        async def _initial_download() -> None:
-            await asyncio.sleep(60)
-            await mgr.async_download(dict(entry.options), client)
+        async def _on_ha_started(_event: Any) -> None:
+            """Run initial sync once Home Assistant is fully started."""
+            _LOGGER.info("Home Assistant started — beginning initial sync")
+            await mgr.async_download(dict(entry.options), client, initial=True)
 
-        entry.async_create_background_task(hass, _initial_download(), f"suno_download_init_{entry.entry_id}")
+        from homeassistant.helpers.start import async_at_started  # noqa: PLC0415
+
+        async_at_started(hass, _on_ha_started)
         return mgr
 
     # fmt: off
@@ -336,6 +336,7 @@ class SunoDownloadManager:
         client: Any,
         force: bool = False,
         coordinator_data: SunoData | None = None,
+        initial: bool = False,
     ) -> None:
         """Run a full download cycle."""
         if self._running:
@@ -348,7 +349,7 @@ class SunoDownloadManager:
         self._errors = self._pending = 0
         self._notify_coordinator()
         try:
-            await self._run_download(options, client, download_path, force, coordinator_data)
+            await self._run_download(options, client, download_path, force, coordinator_data, initial=initial)
         except asyncio.CancelledError:
             _LOGGER.info("Download cancelled")
             raise
@@ -358,7 +359,6 @@ class SunoDownloadManager:
         finally:
             self._running = False
             self._notify_coordinator()
-        self._maybe_continue()
 
     def _notify_coordinator(self) -> None:
         """Push sensor updates via the coordinator without re-triggering sync."""
@@ -367,17 +367,6 @@ class SunoDownloadManager:
             self._coordinator.async_set_updated_data(self._coordinator.data)
             self._updating_sensors = False
 
-    def _maybe_continue(self) -> None:
-        """Schedule the next batch immediately if items remain and no errors."""
-        if self._pending <= 0 or self._errors > 0 or self._entry is None or self._client is None:
-            return
-        _LOGGER.info("Continuing download: %d remaining", self._pending)
-        self._entry.async_create_background_task(
-            self.hass,
-            self.async_download(dict(self._entry.options), self._client),
-            f"suno_download_continue_{self._entry.entry_id}",
-        )
-
     async def _run_download(
         self,
         options: dict[str, Any],
@@ -385,6 +374,7 @@ class SunoDownloadManager:
         download_path: str,
         force: bool,
         coordinator_data: SunoData | None = None,
+        initial: bool = False,
     ) -> None:
         base = Path(download_path)
         # Clean up legacy .trash directory if it exists
@@ -445,18 +435,18 @@ class SunoDownloadManager:
             _LOGGER.error("Cannot create download directory: %s", download_path)
             self._errors += 1
             return
-        is_bootstrap = len(to_download) > DOWNLOAD_MAX_PER_RUN
-        max_dl = len(to_download) if force else (DOWNLOAD_MAX_BOOTSTRAP if is_bootstrap else DOWNLOAD_MAX_PER_RUN)
-        if is_bootstrap and not force:
-            _LOGGER.info("Bootstrap mode: downloading up to %d files", max_dl)
+        label = "Initial sync" if initial else "Syncing"
+        if initial:
+            _LOGGER.info("Initial sync: %d files to download", len(to_download))
         downloaded = 0
         reconciled = 0
+        cover_dirs: set[str] = set()
         for item in to_download:
             rel_path = _clip_path(item.clip, item.quality)
             target = base / rel_path
             if not force and await self.hass.async_add_executor_job(target.exists):
-                # File already on disk -- register in state without counting
-                # against the download cap or adding a delay.
+                # File already on disk -- register in state without
+                # re-downloading.
                 stat = await self.hass.async_add_executor_job(target.stat)
                 clips_state[item.clip.id] = {
                     "path": rel_path,
@@ -469,9 +459,6 @@ class SunoDownloadManager:
                 }
                 reconciled += 1
                 continue
-            if downloaded >= max_dl:
-                _LOGGER.info("Reached max downloads (%d), continuing next sync", max_dl)
-                break
             if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
                 clips_state[item.clip.id] = {
                     "path": rel_path,
@@ -483,11 +470,13 @@ class SunoDownloadManager:
                     "quality": item.quality,
                 }
                 downloaded += 1
+                # Track directory for cover.jpg writing
+                cover_dirs.add(str(target.parent))
             else:
                 self._errors += 1
             self._pending = max(0, len(to_download) - downloaded - reconciled)
+            self._last_result = f"{label} ({self._pending} remaining)" if self._pending > 0 else label
             self._notify_coordinator()
-            await asyncio.sleep(DOWNLOAD_DELAY)
         if reconciled:
             _LOGGER.info("Reconciled %d files already on disk", reconciled)
         for clip_id in to_delete:
@@ -632,11 +621,14 @@ class SunoDownloadManager:
             "album": clip.title or "Suno",
             "album_artist": "Suno",
             "date": date,
-            "lyrics": clip.lyrics,
-            "comment": clip.gpt_description_prompt or clip.prompt,
+            "lyrics": clip.prompt,
+            "comment": clip.gpt_description_prompt,
+            "suno_style": clip.tags,
+            "suno_style_summary": clip.gpt_description_prompt,
         }
         try:
             session = async_get_clientsession(self.hass)
+            image_url = clip.image_large_url or clip.image_url or None
 
             if item.quality == QUALITY_HIGH:
                 data = await download_and_transcode_to_flac(
@@ -645,21 +637,28 @@ class SunoDownloadManager:
                     get_ffmpeg_manager(self.hass).binary,
                     clip.id,
                     clip.title or "Suno",
-                    genre=clip.tags or "",
-                    image_url=clip.image_large_url or clip.image_url or None,
+                    image_url=image_url,
+                    duration=clip.duration,
                     **common_meta,
                 )
                 fmt = "flac"
             else:
                 audio_url = clip.audio_url or f"{CDN_BASE_URL}/{clip.id}.mp3"
+                image_data = await fetch_album_art(session, image_url) if image_url else None
                 data = await download_as_mp3(
                     session,
                     audio_url,
                     title=clip.title or "Suno",
-                    genre=clip.tags or "",
+                    image_data=image_data,
                     **common_meta,
                 )
                 fmt = "mp3"
+
+                # Write cover.jpg for MP3 directories (FLAC art comes from embedded PICTURE)
+                if image_data:
+                    cover_path = target.parent / "cover.jpg"
+                    if not await self.hass.async_add_executor_job(cover_path.exists):
+                        await _write_file(self.hass, cover_path, image_data)
 
             if data is None:
                 return None

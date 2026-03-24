@@ -410,12 +410,11 @@ async def test_download_as_mp3_strips_existing_id3() -> None:
         )
     )
 
-    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "New Title", genre="Pop")
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "New Title")
 
     assert result is not None
     assert result[:3] == b"ID3"
     assert b"New Title" in result
-    assert b"Pop" in result
     # Old null-filled tag body should not appear as a contiguous block
     assert old_id3 not in result
     assert result.endswith(audio_frames)
@@ -447,3 +446,84 @@ def test_clip_meta_hash_deterministic() -> None:
     assert hash1 == hash2
     assert len(hash1) == 12
     assert isinstance(hash1, str)
+
+
+# ── _fix_flac_total_samples ────────────────────────────────────────
+
+
+def test_fix_flac_total_samples_patches_streaminfo() -> None:
+    """Correctly patches total_samples into STREAMINFO block."""
+    from custom_components.suno.audio import _fix_flac_total_samples
+
+    # Build a minimal valid FLAC header with STREAMINFO
+    # STREAMINFO: 34 bytes
+    streaminfo = bytearray(34)
+    # Sample rate 48000 Hz at bytes 10-12 (offset from streaminfo start)
+    # 48000 = 0xBB80, 20 bits → upper 20 of 24 bits
+    sr_packed = 48000 << 4  # shift left 4 to fill upper 20 of 24 bits
+    streaminfo[10:13] = sr_packed.to_bytes(3, "big")
+    # channels-1 (1 = stereo) and bps-1 (15 = 16-bit) in remaining bits
+    streaminfo[12] = (streaminfo[12] & 0xF0) | ((1 << 1) | (15 >> 4))
+    streaminfo[13] = (15 & 0x0F) << 4  # upper nibble = lower 4 bits of bps-1
+    # total_samples bytes 13-17 (lower nibble of 13 + bytes 14-17) = 0
+
+    block_header = b"\x80"  # is_last=True, type=0 (STREAMINFO)
+    block_length = len(streaminfo).to_bytes(3, "big")
+    data = b"fLaC" + block_header + block_length + bytes(streaminfo)
+
+    result = _fix_flac_total_samples(data, 120.0)
+    # Should have patched total_samples = 120 * 48000 = 5760000
+    buf = bytearray(result)
+    total_samples = ((buf[21] & 0x0F) << 32) | int.from_bytes(buf[22:26], "big")
+    assert total_samples == 5760000
+
+
+def test_fix_flac_total_samples_zero_duration() -> None:
+    """Duration 0 leaves data unchanged."""
+    from custom_components.suno.audio import _fix_flac_total_samples
+
+    data = b"fLaC" + b"\x00" * 40
+    assert _fix_flac_total_samples(data, 0.0) is data
+
+
+def test_fix_flac_total_samples_not_flac() -> None:
+    """Non-FLAC data is returned unchanged."""
+    from custom_components.suno.audio import _fix_flac_total_samples
+
+    data = b"NOT_FLAC" + b"\x00" * 40
+    assert _fix_flac_total_samples(data, 120.0) is data
+
+
+# ── APIC frame in ID3 ──────────────────────────────────────────────
+
+
+def test_build_id3_header_with_apic() -> None:
+    """APIC frame is included when image_data is provided."""
+    image = b"\xff\xd8\xff\xe0" + b"\x00" * 100  # Fake JPEG
+    header = _build_id3_header("Song", "Artist", image_data=image)
+
+    assert b"APIC" in header
+    assert b"image/jpeg" in header
+    assert image in header
+
+
+def test_build_id3_header_txxx_frames() -> None:
+    """TXXX frames are included for Suno custom metadata."""
+    header = _build_id3_header(
+        "Song",
+        "Artist",
+        suno_style="Dark hardstyle",
+        suno_style_summary="Hardstyle",
+    )
+
+    assert b"TXXX" in header
+    assert b"SUNO_STYLE" in header
+    assert b"Dark hardstyle" in header
+    assert b"SUNO_STYLE_SUMMARY" in header
+    assert b"Hardstyle" in header
+
+
+def test_build_id3_header_no_genre() -> None:
+    """Genre (TCON) frame is never written."""
+    header = _build_id3_header("Song", "Artist")
+    assert b"TCON" not in header

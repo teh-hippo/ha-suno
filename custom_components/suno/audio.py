@@ -18,19 +18,19 @@ _LOGGER = logging.getLogger(__name__)
 def _build_id3_header(
     title: str,
     artist: str,
-    genre: str = "",
     album: str = "",
     album_artist: str = "",
     date: str = "",
     lyrics: str = "",
     comment: str = "",
+    image_data: bytes | None = None,
+    suno_style: str = "",
+    suno_style_summary: str = "",
 ) -> bytes:
     """Build a minimal ID3v2.4 header with metadata frames."""
     tag_fields: list[tuple[str, str]] = [("TIT2", title), ("TPE1", artist)]
     if album:
         tag_fields.append(("TALB", album))
-    if genre:
-        tag_fields.append(("TCON", genre))
     if album_artist:
         tag_fields.append(("TPE2", album_artist))
     if date:
@@ -45,6 +45,15 @@ def _build_id3_header(
         # USLT: encoding(1) + language(3) + content_descriptor(\x00) + text
         uslt_body = b"\x03" + b"eng" + b"\x00" + lyrics.encode("utf-8")
         frames += b"USLT" + len(uslt_body).to_bytes(4, "big") + b"\x00\x00" + uslt_body
+    # TXXX frames for Suno-specific metadata
+    for desc, value in [("SUNO_STYLE", suno_style), ("SUNO_STYLE_SUMMARY", suno_style_summary)]:
+        if value:
+            txxx_body = b"\x03" + desc.encode("utf-8") + b"\x00" + value.encode("utf-8")
+            frames += b"TXXX" + len(txxx_body).to_bytes(4, "big") + b"\x00\x00" + txxx_body
+    # APIC frame for album art
+    if image_data:
+        apic_body = b"\x00" + b"image/jpeg\x00" + b"\x03" + b"\x00" + image_data
+        frames += b"APIC" + len(apic_body).to_bytes(4, "big") + b"\x00\x00" + apic_body
     size = len(frames)
     syncsafe = (
         ((size & 0x0FE00000) << 3) | ((size & 0x001FC000) << 2) | ((size & 0x00003F80) << 1) | (size & 0x0000007F)
@@ -90,18 +99,49 @@ def _fix_flac_cover_type(data: bytes) -> bytes:
     return bytes(buf)
 
 
+def _fix_flac_total_samples(data: bytes, duration: float) -> bytes:
+    """Write the correct total_samples into the FLAC STREAMINFO block.
+
+    When ffmpeg outputs FLAC to a pipe (non-seekable), it cannot seek
+    back to write total_samples, leaving it as 0.  This causes players
+    like Jellyfin to report unknown/zero duration.
+
+    We read the sample rate from STREAMINFO and compute total_samples
+    from the known clip duration.
+    """
+    if duration <= 0 or len(data) < 26 or data[:4] != b"fLaC":
+        return data
+    # STREAMINFO is always the first metadata block (FLAC spec).
+    # Block header at byte 4, data starts at byte 8.
+    block_type = data[4] & 0x7F
+    if block_type != 0:  # 0 = STREAMINFO
+        return data
+    # Sample rate is 20 bits at bytes 18-20 (upper 20 of 24 bits)
+    sample_rate = int.from_bytes(data[18:21], "big") >> 4
+    if sample_rate == 0:
+        return data
+    total_samples = int(duration * sample_rate)
+    buf = bytearray(data)
+    # total_samples is 36 bits: upper 4 in byte 21 lower nibble, lower 32 in bytes 22-25
+    buf[21] = (buf[21] & 0xF0) | ((total_samples >> 32) & 0x0F)
+    buf[22:26] = (total_samples & 0xFFFFFFFF).to_bytes(4, "big")
+    return bytes(buf)
+
+
 async def wav_to_flac(
     ffmpeg_binary: str,
     wav_data: bytes,
     title: str,
     artist: str = "Suno",
     album: str = "Suno",
-    genre: str = "",
     image_data: bytes | None = None,
     album_artist: str = "",
     date: str = "",
     lyrics: str = "",
     comment: str = "",
+    duration: float = 0.0,
+    suno_style: str = "",
+    suno_style_summary: str = "",
 ) -> bytes | None:
     """Transcode WAV bytes to FLAC with metadata and optional album art."""
     import tempfile  # noqa: PLC0415
@@ -128,8 +168,6 @@ async def wav_to_flac(
             "-metadata",
             f"album={album}",
         ]
-        if genre:
-            meta.extend(["-metadata", f"genre={genre}"])
         if album_artist:
             meta.extend(["-metadata", f"albumartist={album_artist}"])
         if date:
@@ -138,6 +176,10 @@ async def wav_to_flac(
             meta.extend(["-metadata", f"LYRICS={lyrics}"])
         if comment:
             meta.extend(["-metadata", f"comment={comment}"])
+        if suno_style:
+            meta.extend(["-metadata", f"SUNO_STYLE={suno_style}"])
+        if suno_style_summary:
+            meta.extend(["-metadata", f"SUNO_STYLE_SUMMARY={suno_style_summary}"])
         args.extend(meta + ["-compression_level", "5", "-f", "flac", "pipe:1"])
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -149,7 +191,8 @@ async def wav_to_flac(
         if proc.returncode != 0:
             _LOGGER.warning("ffmpeg transcode failed: %s", stderr.decode()[:200])
             return None
-        return _fix_flac_cover_type(stdout) if image_data else stdout
+        result = _fix_flac_cover_type(stdout) if image_data else stdout
+        return _fix_flac_total_samples(result, duration)
     except TimeoutError:
         _LOGGER.error("ffmpeg transcode timed out after %ds", DOWNLOAD_FFMPEG_TIMEOUT)
         if proc and proc.returncode is None:
@@ -187,12 +230,14 @@ async def download_as_mp3(
     audio_url: str,
     title: str,
     artist: str = "Suno",
-    genre: str = "",
     album: str = "",
     album_artist: str = "",
     date: str = "",
     lyrics: str = "",
     comment: str = "",
+    image_data: bytes | None = None,
+    suno_style: str = "",
+    suno_style_summary: str = "",
 ) -> bytes | None:
     """Download MP3 from CDN and inject ID3 metadata tags.
 
@@ -213,12 +258,14 @@ async def download_as_mp3(
     header = _build_id3_header(
         title=title,
         artist=artist,
-        genre=genre,
         album=album or title,
         album_artist=album_artist,
         date=date,
         lyrics=lyrics,
         comment=comment,
+        image_data=image_data,
+        suno_style=suno_style,
+        suno_style_summary=suno_style_summary,
     )
     body = _skip_existing_id3(raw)
     return header + body
@@ -241,13 +288,15 @@ async def download_and_transcode_to_flac(
     clip_id: str,
     title: str,
     artist: str = "Suno",
-    genre: str = "",
     image_url: str | None = None,
     album: str = "",
     album_artist: str = "",
     date: str = "",
     lyrics: str = "",
     comment: str = "",
+    duration: float = 0.0,
+    suno_style: str = "",
+    suno_style_summary: str = "",
 ) -> bytes | None:
     """Download WAV from Suno, fetch album art, and transcode to FLAC.
 
@@ -279,10 +328,12 @@ async def download_and_transcode_to_flac(
         title,
         artist,
         album=album or title,
-        genre=genre,
         image_data=image_data,
         album_artist=album_artist,
         date=date,
         lyrics=lyrics,
         comment=comment,
+        duration=duration,
+        suno_style=suno_style,
+        suno_style_summary=suno_style_summary,
     )

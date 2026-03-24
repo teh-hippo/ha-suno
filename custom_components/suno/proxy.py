@@ -73,7 +73,6 @@ class SunoMediaProxyView(HomeAssistantView):
             coordinator = self._first_coordinator()
         title = clip.title if clip else "Suno"
         artist = "Suno"
-        genre = (clip.tags if clip else None) or ""
         meta_hash = clip_meta_hash(clip) if clip else ""
 
         is_hq = ext == "flac"
@@ -97,9 +96,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
         if is_hq:
             client = coordinator.client if coordinator else None
-            return await self._handle_hq(
-                request, clip_id, clip, title, artist, genre, content_type, cache, meta_hash, client
-            )
+            return await self._handle_hq(request, clip_id, clip, title, artist, content_type, cache, meta_hash, client)
 
         audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
@@ -113,22 +110,33 @@ class SunoMediaProxyView(HomeAssistantView):
             upstream.close()
             return web.Response(status=502, text=f"Upstream returned {upstream.status}")
 
-        return await self._handle_mp3(request, upstream, clip_id, title, artist, genre, content_type, cache, meta_hash)
+        return await self._handle_mp3(request, upstream, clip_id, clip, title, artist, content_type, cache, meta_hash)
 
     async def _handle_mp3(
         self,
         request: web.Request,
         upstream: ClientResponse,
         clip_id: str,
+        clip: SunoClip | None,
         title: str,
         artist: str,
-        genre: str,
         content_type: str,
         cache: SunoCache | None,
         meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
-        id3_header = _build_id3_header(title=title, artist=artist, genre=genre, album=title)
+        date = clip.created_at[:10] if clip and clip.created_at else ""
+        id3_header = _build_id3_header(
+            title=title,
+            artist=artist,
+            album=title,
+            album_artist="Suno",
+            date=date,
+            lyrics=clip.prompt if clip else "",
+            comment=clip.gpt_description_prompt if clip else "",
+            suno_style=clip.tags if clip else "",
+            suno_style_summary=clip.gpt_description_prompt if clip else "",
+        )
         collected: list[bytes] = [id3_header] if cache is not None else []
         response = web.StreamResponse(
             status=200,
@@ -163,7 +171,6 @@ class SunoMediaProxyView(HomeAssistantView):
         clip: SunoClip | None,
         title: str,
         artist: str,
-        genre: str,
         content_type: str,
         cache: SunoCache | None,
         meta_hash: str,
@@ -182,7 +189,7 @@ class SunoMediaProxyView(HomeAssistantView):
         fut: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._inflight[key] = fut
         try:
-            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, genre, client)
+            flac_data = await self._run_hq_pipeline(clip_id, clip, title, artist, client)
             fut.set_result(flac_data)
         except BaseException as exc:
             fut.set_result(None)
@@ -199,11 +206,12 @@ class SunoMediaProxyView(HomeAssistantView):
         return web.Response(body=flac_data, content_type=content_type)
 
     async def _run_hq_pipeline(
-        self, clip_id: str, clip: SunoClip | None, title: str, artist: str, genre: str, client: Any = None
+        self, clip_id: str, clip: SunoClip | None, title: str, artist: str, client: Any = None
     ) -> bytes | None:
         """Execute the full WAV-to-FLAC pipeline."""
         if client is None:
             return None
+        date = clip.created_at[:10] if clip and clip.created_at else ""
         return await download_and_transcode_to_flac(
             client,
             async_get_clientsession(self.hass),
@@ -211,10 +219,15 @@ class SunoMediaProxyView(HomeAssistantView):
             clip_id,
             title,
             artist=artist,
-            genre=genre,
             image_url=clip.image_large_url or clip.image_url if clip else None,
             album=title,
             album_artist="Suno",
+            date=date,
+            lyrics=clip.prompt if clip else "",
+            comment=clip.gpt_description_prompt if clip else "",
+            duration=clip.duration if clip else 0.0,
+            suno_style=clip.tags if clip else "",
+            suno_style_summary=clip.gpt_description_prompt if clip else "",
         )
 
     @staticmethod
