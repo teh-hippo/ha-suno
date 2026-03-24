@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.4.1 (2026-03-24)
+
+### Bug Fixes
+
+- Propagate force flag through download continuation
+  ([`7ee9439`](https://github.com/teh-hippo/ha-suno/commit/7ee94395acad16a9487772163f1b9b06ded7f102))
+
+
 ## v3.4.0 (2026-03-24)
 
 ### Bug Fixes
