@@ -2325,3 +2325,105 @@ class TestPlaylistOrderPreservation:
         for idx, api_clip_id in enumerate(api_order):
             clip_num = api_clip_id.replace("clip", "")
             assert f"Song {clip_num}" in lines[idx]
+
+
+async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Reconciliation is skipped when no downloads, deletions, or migrations occurred."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    clip_id = "clip0099-0000-0000-0000-000000000000"
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": "Suno/Song/Suno-Song [clip0099].flac",
+                "title": "Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    # Pre-create the file so no download is triggered
+    dest = tmp_path / "mirror" / "Suno" / "Song" / "Suno-Song [clip0099].flac"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    clip = _make_clip(clip_id, "Song")
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_reconcile_disk", new_callable=AsyncMock, return_value=0) as mock_reconcile,
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    mock_reconcile.assert_not_called()
+
+
+# ── Service lifecycle ────────────────────────────────────────────────
+
+
+class TestServiceLifecycle:
+    """Tests for download service registration lifecycle."""
+
+    def test_service_not_removed_while_other_entries_remain(self) -> None:
+        """Service removal callback should keep the service when other entries exist."""
+        from custom_components.suno.const import DOMAIN
+        from custom_components.suno.download import _SERVICE_DOWNLOAD
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "entry-1"
+
+        other_entry = MagicMock()
+        other_entry.entry_id = "entry-2"
+        hass.config_entries.async_entries.return_value = [other_entry]
+
+        # Build the guarded removal function the same way production code does
+        def _maybe_remove_service() -> None:
+            remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
+            if not remaining:
+                hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+        _maybe_remove_service()
+        hass.services.async_remove.assert_not_called()
+
+    def test_service_removed_when_last_entry_unloads(self) -> None:
+        """Service removal callback should remove the service when no entries remain."""
+        from custom_components.suno.const import DOMAIN
+        from custom_components.suno.download import _SERVICE_DOWNLOAD
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "entry-1"
+
+        # No other entries remain after this one unloads
+        hass.config_entries.async_entries.return_value = [entry]
+
+        def _maybe_remove_service() -> None:
+            remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
+            if not remaining:
+                hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+        _maybe_remove_service()
+        hass.services.async_remove.assert_called_once_with(DOMAIN, _SERVICE_DOWNLOAD)

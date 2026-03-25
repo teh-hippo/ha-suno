@@ -141,7 +141,7 @@ class SunoMediaProxyView(HomeAssistantView):
             suno_parent=clip.edited_clip_id if clip else "",
             suno_lineage=clip.suno_lineage if clip else "",
         )
-        collected: list[bytes] = [id3_header] if cache is not None else []
+        cache_buf = bytearray(id3_header) if cache is not None else None
         response = web.StreamResponse(
             status=200,
             headers={"Content-Type": content_type, "Accept-Ranges": "none", "Cache-Control": "no-cache"},
@@ -157,15 +157,15 @@ class SunoMediaProxyView(HomeAssistantView):
                     if not chunk:
                         continue
                 await response.write(chunk)
-                if cache is not None:
-                    collected.append(chunk)
+                if cache_buf is not None:
+                    cache_buf.extend(chunk)
         except ConnectionResetError:
             _LOGGER.debug("Client disconnected while streaming %s", clip_id)
-            collected.clear()
+            cache_buf = None
         finally:
             upstream.close()
-        if cache is not None and collected:
-            await self._save_to_cache(cache, clip_id, "mp3", b"".join(collected), meta_hash)
+        if cache is not None and cache_buf is not None:
+            await self._save_to_cache(cache, clip_id, "mp3", bytes(cache_buf), meta_hash)
         return response
 
     async def _handle_hq(

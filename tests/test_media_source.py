@@ -15,7 +15,7 @@ from custom_components.suno.media_source import (
     _folder,
     async_get_media_source,
 )
-from custom_components.suno.models import SunoClip
+from custom_components.suno.models import SunoClip, SunoCredits
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
 
@@ -396,6 +396,66 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
     # clip-aaa-111 is liked, quality_liked defaults to "high" → FLAC
     assert result.url == "/api/suno/media/clip-aaa-111.flac"
     assert result.mime_type == "audio/flac"
+
+
+async def test_resolve_searches_all_entries(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Resolving a clip searches all loaded entries, not just the first."""
+    # Entry 1: has clip-aaa-111 and clip-bbb-222
+    entry1 = make_entry(unique_id="user-1")
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry1)
+
+    # Entry 2: has a unique clip only in this account
+    second_clip = SunoClip(
+        id="clip-second-only",
+        title="Second Account Song",
+        audio_url="https://cdn1.suno.ai/clip-second-only.mp3",
+        image_url="",
+        image_large_url="",
+        is_liked=True,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=60.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    mock_suno_client2 = AsyncMock()
+    mock_suno_client2.user_id = "user-2"
+    mock_suno_client2.display_name = "Suno 2"
+    mock_suno_client2.suno_display_name = None
+    mock_suno_client2._auth = AsyncMock()
+    mock_suno_client2._auth.user_id = "user-2"
+    mock_suno_client2._auth.display_name = "Suno 2"
+    mock_suno_client2._auth.authenticate = AsyncMock(return_value="user-2")
+    mock_suno_client2._auth.ensure_jwt = AsyncMock(return_value="mock-jwt-2")
+    mock_suno_client2.authenticate = AsyncMock(return_value="user-2")
+    mock_suno_client2.get_feed = AsyncMock(return_value=([second_clip], False))
+    mock_suno_client2.get_all_songs = AsyncMock(return_value=[second_clip])
+    mock_suno_client2.get_liked_songs = AsyncMock(return_value=[second_clip])
+    mock_suno_client2.get_playlists = AsyncMock(return_value=[])
+    mock_suno_client2.get_playlist_clips = AsyncMock(return_value=[])
+    mock_suno_client2.get_credits = AsyncMock(
+        return_value=SunoCredits(credits_left=500, monthly_limit=1000, monthly_usage=500, period="2026-03")
+    )
+
+    entry2 = make_entry(unique_id="user-2")
+    with patch_suno_setup(mock_suno_client2):
+        await setup_entry(hass, entry2)
+
+    source = SunoMediaSource(hass)
+
+    # Clip from entry 2 should be found even though entry 1 is first
+    item = MediaSourceItem(hass, "suno", "clip/clip-second-only", None)
+    result = await source.async_resolve_media(item)
+    # clip-second-only is liked, quality_liked defaults to "high" → FLAC
+    assert result.url == "/api/suno/media/clip-second-only.flac"
+    assert result.mime_type == "audio/flac"
+
+    # Clip from entry 1 should still resolve fine
+    item1 = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
+    result1 = await source.async_resolve_media(item1)
+    assert result1.url == "/api/suno/media/clip-aaa-111.flac"
 
 
 async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

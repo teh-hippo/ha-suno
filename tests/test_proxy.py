@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -818,7 +819,6 @@ async def test_skips_synced_mp3_when_flac_requested(
 
 async def test_hq_inflight_coalescing(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """When an inflight future exists, _handle_hq awaits it instead of running a new pipeline."""
-    import asyncio
 
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
@@ -842,7 +842,6 @@ async def test_hq_inflight_coalescing(hass: HomeAssistant, mock_suno_client: Asy
 
 async def test_hq_inflight_timeout_returns_none(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """When inflight future times out, result is None and pipeline runs fresh."""
-    import asyncio
 
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
@@ -934,3 +933,110 @@ async def test_mp3_connection_reset_handled(hass: HomeAssistant, mock_suno_clien
             )
             # Should complete without raising — ConnectionResetError is caught
             assert resp is not None
+
+
+# ── TC-8 addendum: concurrency and disconnect ───────────────────────
+
+
+async def test_concurrent_hq_coalesce(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Two concurrent HQ requests for the same clip_id coalesce — only one pipeline runs."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    view = SunoMediaProxyView(hass)
+    request = MagicMock()
+    gate = asyncio.Event()
+    flac_bytes = b"fLaC" + b"\x00" * 100
+    call_count = 0
+
+    async def slow_pipeline(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        await gate.wait()
+        return flac_bytes
+
+    with patch.object(view, "_run_hq_pipeline", slow_pipeline):
+        task1 = asyncio.create_task(
+            view._handle_hq(request, "clip-aaa-111", None, "T", "A", "audio/flac", None, "", object())
+        )
+        await asyncio.sleep(0)
+        task2 = asyncio.create_task(
+            view._handle_hq(request, "clip-aaa-111", None, "T", "A", "audio/flac", None, "", object())
+        )
+        await asyncio.sleep(0)
+
+        gate.set()
+        resp1, resp2 = await asyncio.gather(task1, task2)
+
+    assert resp1.status == 200
+    assert resp2.status == 200
+    assert resp1.body == flac_bytes
+    assert resp2.body == flac_bytes
+    assert call_count == 1
+
+
+async def test_inflight_timeout_produces_502(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When the inflight future resolves to None, the fallback pipeline returns 502."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    view = SunoMediaProxyView(hass)
+    fut: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
+    fut.set_result(None)
+    view._inflight["clip-aaa-111.flac"] = fut
+
+    request = MagicMock()
+    # client=None → _run_hq_pipeline returns None → 502
+    resp = await view._handle_hq(request, "clip-aaa-111", None, "T", "A", "audio/flac", None, "", None)
+    assert resp.status == 502
+
+
+async def test_connection_reset_clears_collected(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """ConnectionResetError during MP3 streaming clears collected — cache is not written."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get = AsyncMock(return_value=None)
+    mock_cache.async_put = AsyncMock()
+    entry.runtime_data.cache = mock_cache
+
+    audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
+
+    async def _error_after_chunk(_size):
+        yield audio_data
+        raise ConnectionResetError("gone")
+
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.content.iter_chunked = _error_after_chunk
+    mock_response.close = MagicMock()
+
+    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
+
+    assert resp.status == 200
+    # collected was cleared so cache must not be written
+    mock_cache.async_put.assert_not_awaited()
+
+
+async def test_cancelled_error_in_hq_reraised(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """CancelledError during HQ pipeline is re-raised and inflight future cleaned up."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    view = SunoMediaProxyView(hass)
+    request = MagicMock()
+
+    view._run_hq_pipeline = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with pytest.raises(asyncio.CancelledError):
+        await view._handle_hq(request, "clip-aaa-111", None, "T", "A", "audio/flac", None, "", object())
+
+    assert "clip-aaa-111.flac" not in view._inflight

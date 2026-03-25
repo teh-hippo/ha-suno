@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,8 +12,17 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
+from custom_components.suno.models import SunoPlaylist
 
-from .conftest import make_entry, patch_suno_setup, sample_clips, sample_credits, setup_entry
+from .conftest import (
+    make_entry,
+    patch_suno_setup,
+    sample_clips,
+    sample_credits,
+    sample_liked_clips,
+    sample_playlists,
+    setup_entry,
+)
 
 
 def test_suno_data_defaults() -> None:
@@ -282,3 +292,124 @@ async def test_playlist_clip_fetch_partial_failure(hass: HomeAssistant, mock_sun
     assert "pl-ok" in coordinator.data.playlist_clips
     # pl-fail should not be in playlist_clips because it errored
     assert "pl-fail" not in coordinator.data.playlist_clips
+
+
+# ── TC-9 addendum: stored data recovery ─────────────────────────────
+
+
+async def test_corrupt_non_dict_stored_data_returns_none(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """async_load_stored_data with corrupt non-dict data logs warning and returns None."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Dict with entries that cannot construct a SunoClip → except → warning → None
+    corrupt = {"clips": [{"title": "only title, missing required fields"}]}
+    with patch.object(coordinator._store, "async_load", return_value=corrupt):
+        result = await coordinator.async_load_stored_data()
+    assert result is None
+
+
+async def test_valid_stored_data_restores_coordinator(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """async_load_stored_data with valid data restores clips and playlists."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    stored = {
+        "clips": [asdict(c) for c in sample_clips()],
+        "liked_clips": [asdict(c) for c in sample_liked_clips()],
+        "playlists": [asdict(p) for p in sample_playlists()],
+        "playlist_clips": {},
+    }
+    with patch.object(coordinator._store, "async_load", return_value=stored):
+        result = await coordinator.async_load_stored_data()
+
+    assert result is not None
+    assert len(result.clips) == 2
+    assert result.clips[0].title == "Test Song Alpha"
+    assert len(result.liked_clips) == 1
+    assert len(result.playlists) == 1
+    assert coordinator.data is result
+
+
+async def test_store_exception_caught_returns_none(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When store load raises an exception, it is caught and returns None."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Dict with non-iterable clips value → TypeError during list comprehension
+    with patch.object(coordinator._store, "async_load", return_value={"clips": 42}):
+        result = await coordinator.async_load_stored_data()
+    assert result is None
+
+
+# ── TC-10 addendum: playlist-clip fanout ─────────────────────────────
+
+
+async def test_multiple_playlists_clips_fanout(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Multiple playlists are fetched and their clips populated into data.playlist_clips."""
+    playlists = [
+        SunoPlaylist(id="pl-001", name="Favourites", image_url="https://cdn1.suno.ai/pl1.jpg", num_clips=5),
+        SunoPlaylist(id="pl-002", name="Rock Anthems", image_url="https://cdn1.suno.ai/pl2.jpg", num_clips=3),
+    ]
+    clips_a = sample_clips()[:1]
+    clips_b = sample_clips()[1:2]
+    mock_suno_client.get_playlists.return_value = playlists
+    mock_suno_client.get_playlist_clips = AsyncMock(side_effect=lambda pl_id: clips_a if pl_id == "pl-001" else clips_b)
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert len(coordinator.data.playlist_clips) == 2
+    assert len(coordinator.data.playlist_clips["pl-001"]) == 1
+    assert len(coordinator.data.playlist_clips["pl-002"]) == 1
+
+
+async def test_partial_playlist_failure_others_succeed(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When one playlist fetch fails, other playlists still succeed."""
+    playlists = [
+        SunoPlaylist(id="pl-good", name="Good", image_url="", num_clips=1),
+        SunoPlaylist(id="pl-bad", name="Bad", image_url="", num_clips=1),
+    ]
+    mock_suno_client.get_playlists.return_value = playlists
+
+    def _side_effect(pl_id):
+        if pl_id == "pl-bad":
+            raise Exception("Network error")
+        return sample_clips()[:1]
+
+    mock_suno_client.get_playlist_clips = AsyncMock(side_effect=_side_effect)
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert "pl-good" in coordinator.data.playlist_clips
+    assert "pl-bad" not in coordinator.data.playlist_clips
+    assert len(coordinator.data.playlist_clips["pl-good"]) == 1
+
+
+async def test_playlist_clips_keys_match_ids(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """data.playlist_clips keys match playlist IDs."""
+    playlists = [
+        SunoPlaylist(id="pl-alpha", name="Alpha", image_url="", num_clips=2),
+        SunoPlaylist(id="pl-beta", name="Beta", image_url="", num_clips=1),
+        SunoPlaylist(id="pl-gamma", name="Gamma", image_url="", num_clips=4),
+    ]
+    mock_suno_client.get_playlists.return_value = playlists
+    mock_suno_client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert set(coordinator.data.playlist_clips.keys()) == {"pl-alpha", "pl-beta", "pl-gamma"}

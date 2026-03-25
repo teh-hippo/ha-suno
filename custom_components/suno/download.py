@@ -297,7 +297,16 @@ class SunoDownloadManager:
 
         if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
             hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
-            entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD))
+
+            def _maybe_remove_service() -> None:
+                remaining = [
+                    e for e in hass.config_entries.async_entries(DOMAIN)
+                    if e.entry_id != entry.entry_id
+                ]
+                if not remaining:
+                    hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+            entry.async_on_unload(_maybe_remove_service)
 
         async def _on_ha_started(_event: Any) -> None:
             """Run initial sync once Home Assistant is fully started."""
@@ -588,9 +597,10 @@ class SunoDownloadManager:
                 _write_m3u8_playlists, base, clips_state, desired, source_to_name, playlist_order
             )
 
-        orphans = await self._reconcile_disk(base, clips_state)
-        if orphans:
-            _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
+        if downloaded or to_delete or migrated or force:
+            orphans = await self._reconcile_disk(base, clips_state)
+            if orphans:
+                _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
 
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
         """Remove orphaned audio files not tracked in download state."""

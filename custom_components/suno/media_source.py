@@ -95,19 +95,33 @@ class SunoMediaSource(MediaSource):
         # "Latest" membership is expensive to check and not worth computing per-resolve.
         return QUALITY_STANDARD
 
+    def _find_clip_entry(self, clip_id: str) -> tuple[SunoConfigEntry, SunoCoordinator, SunoClip] | None:
+        """Find which entry owns a specific clip by searching all loaded entries."""
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
+                continue
+            coordinator: SunoCoordinator = entry.runtime_data
+            clip = next((c for c in coordinator.data.clips if c.id == clip_id), None)
+            if not clip:
+                clip = next((c for c in coordinator.data.liked_clips if c.id == clip_id), None)
+            if clip:
+                return entry, coordinator, clip
+        return None
+
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
         identifier = item.identifier or ""
         if not identifier.startswith("clip/"):
             raise BrowseError(f"Unknown media identifier: {identifier}")
-        if not (result := self._get_entry_and_coordinator()):
-            raise BrowseError("Suno integration not configured")
-        entry, coordinator = result
         clip_id = identifier.removeprefix("clip/")
-        clip = next((c for c in coordinator.data.clips if c.id == clip_id), None)
-        if not clip:
-            clip = next((c for c in coordinator.data.liked_clips if c.id == clip_id), None)
-        quality = self._get_clip_quality(clip, entry, coordinator) if clip else QUALITY_STANDARD
+        result = self._find_clip_entry(clip_id)
+        if result:
+            entry, coordinator, clip = result
+            quality = self._get_clip_quality(clip, entry, coordinator)
+        else:
+            if not self._get_entry_and_coordinator():
+                raise BrowseError("Suno integration not configured")
+            quality = QUALITY_STANDARD
         ext = "flac" if quality == QUALITY_HIGH else "mp3"
         mime = "audio/flac" if quality == QUALITY_HIGH else "audio/mpeg"
         return PlayMedia(url=f"/api/suno/media/{clip_id}.{ext}", mime_type=mime)
