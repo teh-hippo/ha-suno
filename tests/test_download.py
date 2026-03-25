@@ -559,7 +559,7 @@ class TestWriteM3u8Playlists:
         """Playlist entries must use absolute paths for Jellyfin compatibility."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "2026-03-15/Test Song [clip1].flac", "title": "Test Song"}}
-        desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality=QUALITY_HIGH)]
+        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -571,7 +571,7 @@ class TestWriteM3u8Playlists:
         """Duration in #EXTINF should come from clip metadata, not hardcoded -1."""
         clip = self._make_clip(duration=95.7)
         clips_state = {"clip1": {"path": "2026-03-15/Test Song [clip1].flac", "title": "Test Song"}}
-        desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality=QUALITY_HIGH)]
+        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -582,7 +582,7 @@ class TestWriteM3u8Playlists:
         """Duration falls back to -1 when clip has no duration."""
         clip = self._make_clip(duration=0)
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality=QUALITY_HIGH)]
+        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -593,7 +593,7 @@ class TestWriteM3u8Playlists:
         """M3U8 files must start with #EXTM3U and include #PLAYLIST tag."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [DownloadItem(clip=clip, collection="My Playlist", sources=["playlist:pl1"], quality=QUALITY_HIGH)]
+        desired = [DownloadItem(clip=clip, sources=["playlist:pl1"], quality=QUALITY_HIGH)]
         source_to_name = {"playlist:pl1": "My Playlist"}
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
@@ -606,9 +606,7 @@ class TestWriteM3u8Playlists:
         """Clips with both liked and playlist sources appear in both M3U8 files."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [
-            DownloadItem(clip=clip, collection="Favourites", sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)
-        ]
+        desired = [DownloadItem(clip=clip, sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)]
         source_to_name = {"liked": "Liked Songs", "playlist:pl1": "Favourites"}
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
@@ -620,9 +618,7 @@ class TestWriteM3u8Playlists:
         """A liked clip also in a playlist appears once in each M3U8, not twice in Liked Songs."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [
-            DownloadItem(clip=clip, collection="Liked Songs", sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)
-        ]
+        desired = [DownloadItem(clip=clip, sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)]
         source_to_name = {"liked": "Liked Songs", "playlist:pl1": "The Second album"}
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
@@ -636,9 +632,7 @@ class TestWriteM3u8Playlists:
         """A clip in two playlists appears in both M3U8 files."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [
-            DownloadItem(clip=clip, collection="Playlist A", sources=["playlist:a", "playlist:b"], quality=QUALITY_HIGH)
-        ]
+        desired = [DownloadItem(clip=clip, sources=["playlist:a", "playlist:b"], quality=QUALITY_HIGH)]
         source_to_name = {"playlist:a": "Playlist A", "playlist:b": "Playlist B"}
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
@@ -657,7 +651,6 @@ class TestWriteM3u8Playlists:
         desired = [
             DownloadItem(
                 clip=clip,
-                collection="Liked Songs",
                 sources=["liked", "playlist:a", "playlist:b"],
                 quality=QUALITY_HIGH,
             )
@@ -677,7 +670,7 @@ class TestWriteM3u8Playlists:
         """Clips with only a 'latest' source produce no M3U8 file."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [DownloadItem(clip=clip, collection="Latest", sources=["latest"], quality=QUALITY_STANDARD)]
+        desired = [DownloadItem(clip=clip, sources=["latest"], quality=QUALITY_STANDARD)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -696,7 +689,7 @@ class TestWriteM3u8Playlists:
         """Clips missing a path in state are excluded from playlists."""
         clip = self._make_clip()
         clips_state = {"clip1": {"title": "Song"}}  # no "path" key
-        desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality=QUALITY_HIGH)]
+        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -738,7 +731,7 @@ async def test_quality_change_triggers_redownload(hass: HomeAssistant, tmp_path:
         await sync.async_init()
 
     clip = _make_clip(clip_id, "Song")
-    desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality="standard")]
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="standard")]
     client = AsyncMock()
 
     fake_mp3 = b"ID3" + b"\x00" * 50
@@ -942,7 +935,7 @@ async def test_download_clip_mp3_path(hass: HomeAssistant, tmp_path: Path) -> No
         await sync.async_init()
 
     clip = _make_clip("clip-mp3-00000-0000-0000-000000000000", "MP3 Song")
-    desired = [DownloadItem(clip=clip, collection="Liked Songs", sources=["liked"], quality="standard")]
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="standard")]
     client = AsyncMock()
 
     fake_mp3 = b"ID3" + b"\x00" * 50
@@ -1171,8 +1164,8 @@ class TestAddClipQualityMerge:
         """When a clip appears first as MP3 then FLAC, quality upgrades to FLAC."""
         clip = _make_clip("clip-merge-1", "Merged")
         clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "Liked Songs", "liked", QUALITY_STANDARD)
-        _add_clip(clip_map, clip, "Playlist X", "playlist:x", QUALITY_HIGH)
+        _add_clip(clip_map, clip, "liked", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "playlist:x", QUALITY_HIGH)
         assert clip_map["clip-merge-1"].quality == QUALITY_HIGH
         assert set(clip_map["clip-merge-1"].sources) == {"liked", "playlist:x"}
 
@@ -1180,8 +1173,8 @@ class TestAddClipQualityMerge:
         """When a clip appears first as FLAC then MP3, quality stays FLAC."""
         clip = _make_clip("clip-merge-2", "Stays High")
         clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "Liked Songs", "liked", QUALITY_HIGH)
-        _add_clip(clip_map, clip, "Latest", "latest", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "liked", QUALITY_HIGH)
+        _add_clip(clip_map, clip, "latest", QUALITY_STANDARD)
         assert clip_map["clip-merge-2"].quality == QUALITY_HIGH
         assert set(clip_map["clip-merge-2"].sources) == {"liked", "latest"}
 
@@ -1189,18 +1182,17 @@ class TestAddClipQualityMerge:
         """Same quality from both sources stays unchanged."""
         clip = _make_clip("clip-merge-3", "Same")
         clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "Liked Songs", "liked", QUALITY_STANDARD)
-        _add_clip(clip_map, clip, "Latest", "latest", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "liked", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "latest", QUALITY_STANDARD)
         assert clip_map["clip-merge-3"].quality == QUALITY_STANDARD
 
     def test_first_add_creates_entry(self) -> None:
         """First add creates a new DownloadItem with correct fields."""
         clip = _make_clip("clip-new", "New Song")
         clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "Liked Songs", "liked", QUALITY_HIGH)
+        _add_clip(clip_map, clip, "liked", QUALITY_HIGH)
         item = clip_map["clip-new"]
         assert item.clip is clip
-        assert item.collection == "Liked Songs"
         assert item.sources == ["liked"]
         assert item.quality == QUALITY_HIGH
 
@@ -1617,3 +1609,719 @@ async def test_initial_sync_label(hass: HomeAssistant, tmp_path: Path) -> None:
 
     # At least one progress update should contain "Initial sync"
     assert any("Initial sync" in r for r in results_during)
+
+
+# ── TC-2: Migration logic ─────────────────────────────────────────
+
+
+def _make_clip_with_display(
+    clip_id: str,
+    title: str = "Song",
+    created: str = "2026-03-15T10:00:00Z",
+    display_name: str = "testuser",
+    video_url: str = "",
+    image_url: str | None = None,
+    image_large_url: str | None = None,
+):
+    """Build a SunoClip with optional display_name, video_url, and image fields."""
+    from custom_components.suno.models import SunoClip
+
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url=image_url,
+        image_large_url=image_large_url,
+        is_liked=True,
+        status="complete",
+        created_at=created,
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        display_name=display_name,
+        video_url=video_url,
+    )
+
+
+async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When _clip_path returns a different path, file is renamed, not re-downloaded."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": old_rel,
+                "title": "Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc123",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(clip_id, "Song", display_name="newartist")
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="high")]
+    client = AsyncMock()
+
+    with (
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Old file should be gone, new path should exist
+    assert not old_file.exists()
+    new_rel = _clip_path(clip, "high")
+    new_file = sync_dir / new_rel
+    assert new_file.exists()
+    assert sync._state["clips"][clip_id]["path"] == new_rel
+
+
+async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video .mp4 sidecar is moved alongside audio during migration."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+    old_video = old_file.with_suffix(".mp4")
+    old_video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": old_rel,
+                "title": "Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc123",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(clip_id, "Song", display_name="newartist")
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="high")]
+    client = AsyncMock()
+
+    with (
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    new_rel = _clip_path(clip, "high")
+    new_video = (sync_dir / new_rel).with_suffix(".mp4")
+    assert new_video.exists()
+    assert not old_video.exists()
+
+
+async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Empty parent directories are cleaned up after migration."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/OldTitle/old_artist-OldTitle [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": old_rel,
+                "title": "OldTitle",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc123",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(clip_id, "NewTitle", display_name="newartist")
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="high")]
+    client = AsyncMock()
+
+    with (
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Old parent dirs should be cleaned up (old_artist/OldTitle/ should not exist)
+    assert not (sync_dir / "old_artist" / "OldTitle").exists()
+    assert not (sync_dir / "old_artist").exists()
+
+
+# ── TC-3: Cover art handling ──────────────────────────────────────
+
+
+async def test_cover_jpg_written_on_download(hass: HomeAssistant, tmp_path: Path) -> None:
+    """cover.jpg is written when a clip is downloaded with an image URL."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(
+        "clip-cover-0000-0000-0000-000000000000",
+        "Cover Song",
+        image_url="https://cdn2.suno.ai/image_abcd.jpeg",
+    )
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    fake_image = b"\xff\xd8\xff\xe0JFIF"
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=fake_image,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    cover_path = (tmp_path / "mirror" / rel_path).parent / "cover.jpg"
+    assert cover_path.exists()
+    assert cover_path.read_bytes() == fake_image
+
+
+async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path: Path) -> None:
+    """.cover_hash file is written alongside cover.jpg."""
+    import hashlib
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    image_url = "https://cdn2.suno.ai/image_hashtest.jpeg"
+    clip = _make_clip_with_display(
+        "clip-hash-0000-0000-0000-000000000000",
+        "Hash Song",
+        image_url=image_url,
+    )
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    fake_image = b"\xff\xd8\xff\xe0JFIF"
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=fake_image,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    hash_path = (tmp_path / "mirror" / rel_path).parent / ".cover_hash"
+    assert hash_path.exists()
+    expected_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    assert hash_path.read_text().strip() == expected_hash
+
+
+async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Cover art is refreshed when image URL hash differs from stored .cover_hash."""
+    import hashlib
+
+    clip_id = "clip-refresh-000-0000-0000-000000000000"
+    new_image_url = "https://cdn2.suno.ai/new_image.jpeg"
+    clip = _make_clip_with_display(clip_id, "Refresh Song", image_url=new_image_url)
+    rel_path = _clip_path(clip, "high")
+
+    sync_dir = tmp_path / "mirror"
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    # Pre-existing cover with OLD hash
+    cover_path = target.parent / "cover.jpg"
+    hash_path = target.parent / ".cover_hash"
+    cover_path.write_bytes(b"old_image_data")
+    hash_path.write_text("old_hash_value")
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": rel_path,
+                "title": "Refresh Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc123",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="high")]
+    client = AsyncMock()
+    new_image_data = b"\xff\xd8\xff\xe0NEW_IMAGE"
+
+    with (
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=new_image_data,
+        ) as mock_fetch,
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Cover should be updated
+    assert cover_path.read_bytes() == new_image_data
+    expected_hash = hashlib.md5(new_image_url.encode()).hexdigest()[:12]  # noqa: S324
+    assert hash_path.read_text().strip() == expected_hash
+    mock_fetch.assert_called()
+
+
+async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Cover art is NOT re-fetched when .cover_hash matches current image URL."""
+    import hashlib
+
+    clip_id = "clip-cached-000-0000-0000-000000000000"
+    image_url = "https://cdn2.suno.ai/same_image.jpeg"
+    clip = _make_clip_with_display(clip_id, "Cached Song", image_url=image_url)
+    rel_path = _clip_path(clip, "high")
+
+    sync_dir = tmp_path / "mirror"
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    # Pre-existing cover with MATCHING hash
+    cover_path = target.parent / "cover.jpg"
+    hash_path = target.parent / ".cover_hash"
+    existing_image = b"existing_cover_data"
+    cover_path.write_bytes(existing_image)
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    hash_path.write_text(url_hash)
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": rel_path,
+                "title": "Cached Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": "abc123",
+                "quality": "high",
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    desired = [DownloadItem(clip=clip, sources=["liked"], quality="high")]
+    client = AsyncMock()
+
+    with (
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=b"should_not_be_used",
+        ) as mock_fetch,
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Cover should NOT be refetched
+    mock_fetch.assert_not_called()
+    # Original image data preserved
+    assert cover_path.read_bytes() == existing_image
+
+
+# ── TC-5: Video download ──────────────────────────────────────────
+
+
+async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video is downloaded alongside audio when video_url is present."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync._download_videos = True
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(
+        "clip-vid-00000-0000-0000-000000000000",
+        "Video Song",
+        video_url="https://cdn1.suno.ai/clip-vid.mp4",
+    )
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    fake_video = b"\x00\x00\x00\x1cftypisom"
+
+    async def _fake_iter_chunked(_size: int):
+        yield fake_video
+
+    mock_content = MagicMock()
+    mock_content.iter_chunked = _fake_iter_chunked
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.content = mock_content
+
+    mock_session = AsyncMock()
+    mock_ctx = AsyncMock(
+        __aenter__=AsyncMock(return_value=mock_resp),
+        __aexit__=AsyncMock(return_value=False),
+    )
+    mock_session.get = MagicMock(return_value=mock_ctx)
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    assert video_path.exists()
+    assert video_path.read_bytes() == fake_video
+
+
+async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download is skipped when _download_videos is False."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync._download_videos = False
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(
+        "clip-novid-000-0000-0000-000000000000",
+        "No Video",
+        video_url="https://cdn1.suno.ai/clip-novid.mp4",
+    )
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+
+    mock_session = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    assert not video_path.exists()
+    # session.get should never have been called for video
+    mock_session.get.assert_not_called()
+
+
+async def test_video_download_handles_non_200(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download handles non-200 response gracefully (no crash, no file)."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync._download_videos = True
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip_with_display(
+        "clip-v404-0000-0000-0000-000000000000",
+        "Video 404",
+        video_url="https://cdn1.suno.ai/clip-v404.mp4",
+    )
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 404
+
+    mock_session = AsyncMock()
+    mock_ctx = AsyncMock(
+        __aenter__=AsyncMock(return_value=mock_resp),
+        __aexit__=AsyncMock(return_value=False),
+    )
+    mock_session.get = MagicMock(return_value=mock_ctx)
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    assert not video_path.exists()
+    # Audio should still succeed
+    assert sync.errors == 0
+    assert sync.total_files == 1
+
+
+async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download is skipped when clip has no video_url."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync._download_videos = True
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    # Default _make_clip has no video_url
+    clip = _make_clip("clip-nourl-000-0000-0000-000000000000", "No URL")
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+
+    mock_session = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch(
+            "custom_components.suno.download.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    rel_path = _clip_path(clip, "high")
+    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    assert not video_path.exists()
+    mock_session.get.assert_not_called()
+
+
+# ── TC-7: Playlist order preservation ─────────────────────────────
+
+
+class TestPlaylistOrderPreservation:
+    def _make_clip(self, clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
+        clip = MagicMock()
+        clip.id = clip_id
+        clip.title = title
+        clip.duration = duration
+        return clip
+
+    def test_playlist_order_uses_playlist_order_dict(self, tmp_path: Path) -> None:
+        """Entries are sorted according to playlist_order dict."""
+        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(4)]
+        clips_state = {f"clip{i}": {"path": f"Song {i}.flac", "title": f"Song {i}"} for i in range(4)}
+        desired = [DownloadItem(clip=clips[i], sources=["liked"], quality=QUALITY_HIGH) for i in range(4)]
+        # API order: clip3, clip1, clip0, clip2
+        playlist_order = {"liked": ["clip3", "clip1", "clip0", "clip2"]}
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order=playlist_order)
+
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
+        assert "Song 3" in lines[0]
+        assert "Song 1" in lines[1]
+        assert "Song 0" in lines[2]
+        assert "Song 2" in lines[3]
+
+    def test_fallback_ordering_without_playlist_order(self, tmp_path: Path) -> None:
+        """Without playlist_order, entries appear in desired iteration order."""
+        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(3)]
+        clips_state = {f"clip{i}": {"path": f"Song {i}.flac", "title": f"Song {i}"} for i in range(3)}
+        desired = [DownloadItem(clip=clips[i], sources=["liked"], quality=QUALITY_HIGH) for i in range(3)]
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order={})
+
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
+        assert len(lines) == 3
+        assert "Song 0" in lines[0]
+        assert "Song 1" in lines[1]
+        assert "Song 2" in lines[2]
+
+    def test_playlist_order_matches_api_response_order(self, tmp_path: Path) -> None:
+        """Playlist output order matches the API response order (reversed from default)."""
+        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(5)]
+        clips_state = {f"clip{i}": {"path": f"Song {i}.flac", "title": f"Song {i}"} for i in range(5)}
+        desired = [DownloadItem(clip=clips[i], sources=["playlist:abc"], quality=QUALITY_HIGH) for i in range(5)]
+        source_to_name = {"playlist:abc": "My Playlist"}
+        # API returned clips in reverse order
+        api_order = ["clip4", "clip3", "clip2", "clip1", "clip0"]
+        playlist_order = {"playlist:abc": api_order}
+
+        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name, playlist_order)
+
+        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
+        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
+        assert len(lines) == 5
+        for idx, api_clip_id in enumerate(api_order):
+            clip_num = api_clip_id.replace("clip", "")
+            assert f"Song {clip_num}" in lines[idx]

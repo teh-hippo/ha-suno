@@ -320,6 +320,7 @@ async def download_and_transcode_to_flac(
     title: str,
     artist: str = "Suno",
     image_url: str | None = None,
+    image_data: bytes | None = None,
     album: str = "",
     album_artist: str = "",
     date: str = "",
@@ -356,7 +357,8 @@ async def download_and_transcode_to_flac(
         return None
     finally:
         upstream.close()
-    image_data = await fetch_album_art(session, image_url) if image_url else None
+    if image_data is None and image_url:
+        image_data = await fetch_album_art(session, image_url)
     return await wav_to_flac(
         ffmpeg_binary,
         wav_data,

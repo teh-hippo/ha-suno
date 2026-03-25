@@ -321,3 +321,62 @@ async def test_cache_async_clear(hass: HomeAssistant, tmp_path: Path) -> None:
 
     assert cache.file_count == 0
     assert not list(cache.cache_dir.iterdir())
+
+
+# ── TC-15: cache persistence lifecycle ─────────────────────────────
+
+
+async def test_schedule_save_debounce(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Multiple rapid puts should only trigger one save via debounce."""
+    cache_dir = str(tmp_path / "suno_cache")
+    with patch.object(hass.config, "cache_path", return_value=cache_dir):
+        cache = SunoCache(hass, max_size_mb=10)
+        await cache.async_init()
+
+    await cache.async_put("clip-1", "mp3", _mp3_bytes())
+    await cache.async_put("clip-2", "mp3", _mp3_bytes())
+    await cache.async_put("clip-3", "mp3", _mp3_bytes())
+
+    # After multiple puts, only one pending timer should exist
+    assert cache._save_pending is True
+    assert cache._save_handle is not None
+
+    # Flush and verify the save completes
+    await cache.async_flush()
+    assert cache._save_pending is False
+    assert cache._save_handle is None
+
+
+async def test_async_init_corrupt_stored_data(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Corrupt stored data triggers reset and wipe."""
+    cache_dir = tmp_path / "suno_cache"
+    cache_dir.mkdir()
+    # Place a file that should be wiped on corrupt reset
+    (cache_dir / "stale.mp3").write_bytes(_mp3_bytes())
+
+    with patch.object(hass.config, "cache_path", return_value=str(cache_dir)):
+        cache = SunoCache(hass, max_size_mb=10)
+
+    with patch.object(cache._store, "async_load", side_effect=Exception("corrupt")):
+        await cache.async_init()
+
+    assert cache._index == {}
+    assert not (cache_dir / "stale.mp3").exists()
+
+
+async def test_async_init_old_schema_numeric_values(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Old-schema data with numeric values triggers wipe."""
+    cache_dir = tmp_path / "suno_cache"
+    cache_dir.mkdir()
+    (cache_dir / "old.mp3").write_bytes(_mp3_bytes())
+
+    old_index = {"old.mp3": 1234567890.0, "other.mp3": 9876543210.0}
+
+    with patch.object(hass.config, "cache_path", return_value=str(cache_dir)):
+        cache = SunoCache(hass, max_size_mb=10)
+
+    with patch.object(cache._store, "async_load", return_value=old_index):
+        await cache.async_init()
+
+    assert cache._index == {}
+    assert not (cache_dir / "old.mp3").exists()

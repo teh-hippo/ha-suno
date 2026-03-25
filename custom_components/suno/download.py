@@ -68,7 +68,6 @@ class DownloadItem:
     """A clip scheduled for download with its resolved metadata."""
 
     clip: SunoClip
-    collection: str
     sources: list[str]
     quality: str  # "high" | "standard"
 
@@ -123,6 +122,7 @@ def _write_m3u8_playlists(
         track_info[item.clip.id] = (abs_path, title, duration)
     # Build playlist_name → ordered [(abs_path, title, duration)]
     playlists: dict[str, list[tuple[str, str, int]]] = {}
+    seen_in_playlist: dict[str, set[str]] = {}
     for item in desired:
         if item.clip.id not in track_info:
             continue
@@ -134,16 +134,17 @@ def _write_m3u8_playlists(
             else:
                 continue
             if name not in playlists:
-                # Use API order if available, otherwise build incrementally
                 order = playlist_order.get(source)
                 if order:
                     playlists[name] = [track_info[cid] for cid in order if cid in track_info]
+                    seen_in_playlist[name] = {cid for cid in order if cid in track_info}
                 else:
                     playlists[name] = []
+                    seen_in_playlist[name] = set()
             if not playlist_order.get(source):
-                info = track_info[item.clip.id]
-                if info not in playlists[name]:
-                    playlists[name].append(info)
+                if item.clip.id not in seen_in_playlist.get(name, set()):
+                    playlists[name].append(track_info[item.clip.id])
+                    seen_in_playlist.setdefault(name, set()).add(item.clip.id)
 
     # Write M3U8 files
     written: set[str] = set()
@@ -181,7 +182,6 @@ def _clip_path(clip: SunoClip, quality: str) -> str:
 def _add_clip(
     clip_map: dict[str, DownloadItem],
     clip: SunoClip,
-    collection: str,
     source: str,
     quality: str,
 ) -> None:
@@ -191,7 +191,7 @@ def _add_clip(
         if quality == QUALITY_HIGH:
             item.quality = QUALITY_HIGH
     else:
-        clip_map[clip.id] = DownloadItem(clip=clip, collection=collection, sources=[source], quality=quality)
+        clip_map[clip.id] = DownloadItem(clip=clip, sources=[source], quality=quality)
 
 
 def _preserve_by(preserved: set[str], prev_clips: dict[str, Any], pred: Any) -> None:
@@ -256,8 +256,6 @@ class SunoDownloadManager:
         self._state: dict[str, Any] = {"clips": {}, "last_download": None}
         self._cache: SunoCache | None = None
         self._coordinator: SunoCoordinator | None = None
-        self._client: SunoClient | None = None
-        self._entry: ConfigEntry | None = None
         self._download_path = ""
         self._download_videos = True
         self._running = False
@@ -279,8 +277,6 @@ class SunoDownloadManager:
         mgr = cls(hass, f"suno_sync_{entry.entry_id}")
         mgr._cache = coordinator.cache
         mgr._coordinator = coordinator
-        mgr._client = client
-        mgr._entry = entry
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
         mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
         await mgr.async_init()
@@ -389,8 +385,10 @@ class SunoDownloadManager:
         """Push sensor updates via the coordinator without re-triggering sync."""
         if self._coordinator and self._coordinator.data:
             self._updating_sensors = True
-            self._coordinator.async_set_updated_data(self._coordinator.data)
-            self._updating_sensors = False
+            try:
+                self._coordinator.async_set_updated_data(self._coordinator.data)
+            finally:
+                self._updating_sensors = False
 
     async def _run_download(
         self,
@@ -485,6 +483,7 @@ class SunoDownloadManager:
         except OSError:
             _LOGGER.error("Cannot create download directory: %s", download_path)
             self._errors += 1
+            self._pending = 0
             return
         label = "Initial sync" if initial else "Syncing"
         if initial:
@@ -496,20 +495,21 @@ class SunoDownloadManager:
             rel_path = _clip_path(item.clip, item.quality)
             target = base / rel_path
             if not force and await self.hass.async_add_executor_job(target.exists):
-                # File already on disk -- register in state without
-                # re-downloading.
                 stat = await self.hass.async_add_executor_job(target.stat)
-                clips_state[item.clip.id] = {
-                    "path": rel_path,
-                    "title": item.clip.title,
-                    "created": item.clip.created_at[:10] if item.clip.created_at else None,
-                    "sources": item.sources,
-                    "size": stat.st_size,
-                    "meta_hash": clip_meta_hash(item.clip),
-                    "quality": item.quality,
-                }
-                reconciled += 1
-                continue
+                if stat.st_size == 0:
+                    _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
+                else:
+                    clips_state[item.clip.id] = {
+                        "path": rel_path,
+                        "title": item.clip.title,
+                        "created": item.clip.created_at[:10] if item.clip.created_at else None,
+                        "sources": item.sources,
+                        "size": stat.st_size,
+                        "meta_hash": clip_meta_hash(item.clip),
+                        "quality": item.quality,
+                    }
+                    reconciled += 1
+                    continue
             if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
                 clips_state[item.clip.id] = {
                     "path": rel_path,
@@ -561,6 +561,19 @@ class SunoDownloadManager:
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
+                # Clean up sidecar files
+                clip_file = base / entry["path"]
+                sidecars = (
+                    clip_file.with_suffix(".mp4"),
+                    clip_file.parent / "cover.jpg",
+                    clip_file.parent / ".cover_hash",
+                )
+                for sidecar in sidecars:
+                    if await self.hass.async_add_executor_job(sidecar.exists):
+                        try:
+                            await self.hass.async_add_executor_job(sidecar.unlink)
+                        except OSError:
+                            pass
         self._state["clips"] = clips_state
         self._state["last_download"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded - reconciled)
@@ -623,7 +636,7 @@ class SunoDownloadManager:
                 liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
                 playlist_order["liked"] = [c.id for c in liked]
                 for clip in liked:
-                    _add_clip(clip_map, clip, "Liked Songs", "liked", liked_quality)
+                    _add_clip(clip_map, clip, "liked", liked_quality)
             except Exception:
                 _LOGGER.warning("Failed to fetch liked songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
@@ -642,7 +655,7 @@ class SunoDownloadManager:
                         pl_clips = await client.get_playlist_clips(pl.id)
                         playlist_order[tag] = [c.id for c in pl_clips]
                         for clip in pl_clips:
-                            _add_clip(clip_map, clip, pl.name, tag, playlist_quality)
+                            _add_clip(clip_map, clip, tag, playlist_quality)
                     except Exception:
                         _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
                         _preserve_by(preserved, prev_clips, lambda s, t=tag: t in s)
@@ -688,7 +701,7 @@ class SunoDownloadManager:
 
                 for clip in all_clips:
                     if clip.id in latest_set:
-                        _add_clip(clip_map, clip, "Latest", "latest", latest_quality)
+                        _add_clip(clip_map, clip, "latest", latest_quality)
             except Exception:
                 _LOGGER.warning("Failed to fetch latest songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "latest" in s)
@@ -728,6 +741,7 @@ class SunoDownloadManager:
                     clip.title or "Suno",
                     artist=artist,
                     image_url=image_url,
+                    image_data=image_data,
                     duration=clip.duration,
                     **common_meta,
                 )
@@ -791,9 +805,26 @@ class SunoDownloadManager:
                 if resp.status != 200:
                     _LOGGER.debug("Video download failed for %s: %d", video_url, resp.status)
                     return
-                video_data = await resp.read()
-            await _write_file(self.hass, video_path, video_data)
-            _LOGGER.info("Downloaded video: %s (%d bytes)", video_path.name, len(video_data))
+                tmp_path = video_path.with_suffix(".mp4.tmp")
+                try:
+                    total = 0
+
+                    def _open_tmp() -> Any:
+                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+                        return open(tmp_path, "wb")  # noqa: SIM115
+
+                    fh = await self.hass.async_add_executor_job(_open_tmp)
+                    try:
+                        async for chunk in resp.content.iter_chunked(256 * 1024):
+                            await self.hass.async_add_executor_job(fh.write, chunk)
+                            total += len(chunk)
+                    finally:
+                        await self.hass.async_add_executor_job(fh.close)
+                    await self.hass.async_add_executor_job(os.replace, str(tmp_path), str(video_path))
+                    _LOGGER.info("Downloaded video: %s (%d bytes)", video_path.name, total)
+                except BaseException:
+                    await self.hass.async_add_executor_job(tmp_path.unlink, True)
+                    raise
         except Exception:
             _LOGGER.debug("Failed to download video from %s", video_url)
 

@@ -41,7 +41,7 @@ class SunoRateLimiter:
         async with self._throttle_lock:
             self._total_429_count += 1
             delay = min(retry_after or 2.0, self.MAX_RETRY_AFTER)
-            self._throttle_until = time.monotonic() + delay
+            self._throttle_until = max(self._throttle_until, time.monotonic() + delay)
             return delay
 
     @property

@@ -677,3 +677,156 @@ def test_clip_meta_hash_includes_display_name() -> None:
         display_name="user2",
     )
     assert clip_meta_hash(clip1) != clip_meta_hash(clip2)
+
+
+# ── TC-11: from_api_response new fields ───────────────────────────
+
+
+def test_from_api_response_parses_video_url() -> None:
+    """from_api_response correctly parses video_url from API data."""
+    raw = {
+        "id": "vid-clip",
+        "status": "complete",
+        "video_url": "https://cdn2.suno.ai/vid-clip.mp4",
+        "metadata": {"type": "gen"},
+    }
+    clip = SunoClip.from_api_response(raw)
+    assert clip.video_url == "https://cdn1.suno.ai/vid-clip.mp4"
+
+
+def test_from_api_response_parses_display_name_and_handle() -> None:
+    """from_api_response correctly parses display_name and handle."""
+    raw = {
+        "id": "dn-clip",
+        "status": "complete",
+        "display_name": "Cool Artist",
+        "handle": "cool-artist-42",
+        "metadata": {"type": "gen"},
+    }
+    clip = SunoClip.from_api_response(raw)
+    assert clip.display_name == "Cool Artist"
+    assert clip.handle == "cool-artist-42"
+
+
+def test_from_api_response_parses_edited_clip_id_and_is_remix() -> None:
+    """from_api_response correctly parses edited_clip_id and is_remix."""
+    raw = {
+        "id": "remix-clip",
+        "status": "complete",
+        "metadata": {
+            "type": "gen",
+            "edited_clip_id": "parent-abcd-1234",
+            "is_remix": True,
+        },
+    }
+    clip = SunoClip.from_api_response(raw)
+    assert clip.edited_clip_id == "parent-abcd-1234"
+    assert clip.is_remix is True
+
+
+# ── TC-12: suno_lineage edge cases ────────────────────────────────
+
+
+def test_suno_lineage_multiple_history_entries() -> None:
+    """suno_lineage with multiple history entries."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        edited_clip_id="aaaa1111-bbbb-cccc-dddd-eeee2222ffff",
+        history=[
+            {
+                "id": "aaaa1111-bbbb-cccc-dddd-eeee2222ffff",
+                "infill_start_s": 0,
+                "infill_end_s": 30,
+                "infill_lyrics": "first edit",
+            },
+            {
+                "id": "bbbb2222-cccc-dddd-eeee-ffff3333aaaa",
+                "infill_start_s": 60,
+                "infill_end_s": 90,
+                "infill_lyrics": "second edit",
+            },
+        ],
+    )
+    result = clip.suno_lineage
+    lines = result.split("\n")
+    assert len(lines) == 3
+    assert "Derived from aaaa1111" in lines[0]
+    assert "Edit 00:00-00:30" in lines[1]
+    assert "first edit" in lines[1]
+    assert "Edit 01:00-01:30" in lines[2]
+    assert "second edit" in lines[2]
+
+
+def test_suno_lineage_remix_empty_edited_clip_id() -> None:
+    """suno_lineage when is_remix=True but edited_clip_id is empty."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        is_remix=True,
+        edited_clip_id="",
+    )
+    assert clip.suno_lineage == ""
+
+
+def test_suno_lineage_history_none() -> None:
+    """suno_lineage when history is None."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        edited_clip_id="",
+        history=None,
+    )
+    assert clip.suno_lineage == ""
+
+
+def test_clip_meta_hash_changes_when_video_url_changes() -> None:
+    """clip_meta_hash changes when video_url changes."""
+    base = dict(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="img.jpg",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        display_name="user",
+    )
+    clip1 = SunoClip(**base, video_url="https://cdn1.suno.ai/v1.mp4")
+    clip2 = SunoClip(**base, video_url="https://cdn1.suno.ai/v2.mp4")
+    assert clip_meta_hash(clip1) != clip_meta_hash(clip2)

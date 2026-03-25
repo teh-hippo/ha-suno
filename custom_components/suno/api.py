@@ -106,7 +106,6 @@ class SunoClient:
             if not data.get("has_more", False):
                 break
             page += 1
-            await asyncio.sleep(0.5)
         return all_clips
 
     async def _api_request(self, method: str, path: str, *, expect_json: bool = True) -> Any:

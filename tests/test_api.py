@@ -1083,6 +1083,31 @@ async def test_api_get_connection_error() -> None:
 # ── Cookie isolation ─────────────────────────────────────────────────
 
 
+# ── TC-13: request_wav ───────────────────────────────────────────────
+
+
+async def test_request_wav_non_2xx_raises() -> None:
+    """request_wav with non-2xx response raises SunoApiError."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.post = MagicMock(return_value=_mock_response(500))
+
+    with pytest.raises(SunoApiError, match="WAV conversion request failed"):
+        await client.request_wav("clip-123")
+
+
+async def test_request_wav_success_does_not_raise() -> None:
+    """request_wav with successful 200 response does not raise."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.post = MagicMock(return_value=_mock_response(200))
+
+    await client.request_wav("clip-123")
+
+
+# ── Cookie isolation ─────────────────────────────────────────────────
+
+
 async def test_client_cookie_only_sent_to_clerk() -> None:
     """Cookie must only be sent to clerk.suno.com, never to the Suno API."""
     session = AsyncMock()

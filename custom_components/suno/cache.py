@@ -163,13 +163,8 @@ class SunoCache:
                 _LOGGER.warning("Failed to write cache file %s, skipping", filename)
                 return None
             self._index[filename] = {"access": time(), "meta_hash": meta_hash}
-            await self._store.async_save(self._index)
+            self._schedule_save()
             return final_path
-
-    async def async_invalidate(self, clip_id: str, fmt: str) -> None:
-        """Remove a cached file and its index entry."""
-        async with self._lock:
-            await self._async_invalidate_locked(clip_id, fmt)
 
     async def _async_invalidate_locked(self, clip_id: str, fmt: str) -> None:
         """Remove a cached file and its index entry (caller holds _lock)."""
@@ -179,7 +174,7 @@ class SunoCache:
             await self._hass.async_add_executor_job((self._cache_dir / filename).unlink, True)
         except OSError:
             pass
-        await self._store.async_save(self._index)
+        self._schedule_save()
 
     async def async_evict(self, needed_bytes: int) -> None:
         """Remove oldest entries until there is room for needed_bytes."""
@@ -206,7 +201,7 @@ class SunoCache:
             except OSError:
                 pass
             self._index.pop(filename, None)
-        await self._store.async_save(self._index)
+        self._schedule_save()
 
     def _total_size(self) -> int:
         """Sum the size of all files in the cache directory."""
@@ -242,7 +237,8 @@ class SunoCache:
         try:
             if not path.is_file() or path.stat().st_size == 0:
                 return False
-            header = path.read_bytes()[:4]
+            with open(path, "rb") as f:
+                header = f.read(4)
             if fmt == "mp3":
                 return header[:3] == _MP3_ID3_MAGIC or (len(header) >= 1 and header[0] == _MP3_SYNC_BYTE)
             return header[:4] == _FLAC_MAGIC if fmt == "flac" else True

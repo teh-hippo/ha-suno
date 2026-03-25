@@ -356,3 +356,26 @@ def test_cache_size_sensor_exposes_cached_files_attr() -> None:
     sensor.coordinator = coordinator
     attrs = sensor.extra_state_attributes
     assert attrs["cached_files"] == 42
+
+
+# ── TC-14: SunoCacheSizeSensor.async_update ────────────────────────
+
+
+async def test_cache_size_sensor_async_update() -> None:
+    """async_update calls cache.async_size_mb() and updates native value."""
+    from custom_components.suno.sensor import SunoCacheSizeSensor
+
+    coordinator = MagicMock(spec=SunoCoordinator)
+    mock_cache = AsyncMock()
+    mock_cache.async_size_mb = AsyncMock(return_value=12.3)
+    coordinator.cache = mock_cache
+    coordinator.data = SunoData()
+
+    sensor = SunoCacheSizeSensor.__new__(SunoCacheSizeSensor)
+    sensor.coordinator = coordinator
+    sensor._cached_size = 0.0
+
+    await sensor.async_update()
+
+    mock_cache.async_size_mb.assert_awaited_once()
+    assert sensor.native_value == 12.3

@@ -107,6 +107,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
+    coordinator: SunoCoordinator | None = getattr(entry, "runtime_data", None)
+    if coordinator is not None and hasattr(coordinator, "cache") and coordinator.cache is not None:
+        try:
+            await coordinator.cache.async_flush()
+        except Exception:
+            _LOGGER.debug("Cache flush on unload failed")
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
