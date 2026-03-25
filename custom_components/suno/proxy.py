@@ -72,7 +72,7 @@ class SunoMediaProxyView(HomeAssistantView):
         if coordinator is None:
             coordinator = self._first_coordinator()
         title = clip.title if clip else "Suno"
-        artist = "Suno"
+        artist = clip.display_name if clip and clip.display_name else "Suno"
         meta_hash = clip_meta_hash(clip) if clip else ""
 
         is_hq = ext == "flac"
@@ -136,6 +136,10 @@ class SunoMediaProxyView(HomeAssistantView):
             comment=clip.gpt_description_prompt if clip else "",
             suno_style=clip.tags if clip else "",
             suno_style_summary=clip.gpt_description_prompt if clip else "",
+            suno_model=clip.suno_model if clip else "",
+            suno_handle=clip.handle if clip else "",
+            suno_parent=clip.edited_clip_id if clip else "",
+            suno_lineage=clip.suno_lineage if clip else "",
         )
         collected: list[bytes] = [id3_header] if cache is not None else []
         response = web.StreamResponse(
@@ -228,6 +232,10 @@ class SunoMediaProxyView(HomeAssistantView):
             duration=clip.duration if clip else 0.0,
             suno_style=clip.tags if clip else "",
             suno_style_summary=clip.gpt_description_prompt if clip else "",
+            suno_model=clip.suno_model if clip else "",
+            suno_handle=clip.handle if clip else "",
+            suno_parent=clip.edited_clip_id if clip else "",
+            suno_lineage=clip.suno_lineage if clip else "",
         )
 
     @staticmethod

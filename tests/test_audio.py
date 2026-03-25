@@ -527,3 +527,153 @@ def test_build_id3_header_no_genre() -> None:
     """Genre (TCON) frame is never written."""
     header = _build_id3_header("Song", "Artist")
     assert b"TCON" not in header
+
+
+def test_build_id3_header_all_custom_fields() -> None:
+    """All Suno custom metadata fields produce TXXX frames."""
+    header = _build_id3_header(
+        "Song",
+        "Artist",
+        suno_model="chirp-crow (v5)",
+        suno_handle="myhandle",
+        suno_parent="abcd1234",
+        suno_lineage="Remix of abcd1234",
+    )
+    assert b"SUNO_MODEL" in header
+    assert b"chirp-crow (v5)" in header
+    assert b"SUNO_HANDLE" in header
+    assert b"myhandle" in header
+    assert b"SUNO_PARENT" in header
+    assert b"SUNO_LINEAGE" in header
+
+
+# ── SunoClip properties ───────────────────────────────────────────
+
+
+def test_suno_model_combined() -> None:
+    """suno_model property combines model_name and major_model_version."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        model_name="chirp-crow",
+        major_model_version="v5",
+    )
+    assert clip.suno_model == "chirp-crow (v5)"
+
+
+def test_suno_model_no_major() -> None:
+    """suno_model with empty major_model_version returns just model_name."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        model_name="chirp-chirp",
+        major_model_version="",
+    )
+    assert clip.suno_model == "chirp-chirp"
+
+
+def test_suno_lineage_remix() -> None:
+    """suno_lineage formats remix with parent ID."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        is_remix=True,
+        edited_clip_id="d57c503f-cbaa-4651-aaf4-628d363ccf4c",
+    )
+    assert clip.suno_lineage == "Remix of d57c503f"
+
+
+def test_suno_lineage_with_history() -> None:
+    """suno_lineage formats edit history with time ranges and lyrics."""
+    clip = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        edited_clip_id="d57c503f-cbaa-4651-aaf4-628d363ccf4c",
+        history=[
+            {
+                "id": "d57c503f-cbaa-4651-aaf4-628d363ccf4c",
+                "infill_start_s": 58.44,
+                "infill_end_s": 61.8,
+                "infill_lyrics": "everybody said\nHISSSSS!",
+            }
+        ],
+    )
+    result = clip.suno_lineage
+    assert "Derived from d57c503f" in result
+    assert "Edit 00:58-01:01" in result
+    assert "everybody said" in result
+
+
+def test_clip_meta_hash_includes_display_name() -> None:
+    """Meta hash changes when display_name changes."""
+    clip1 = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="img.jpg",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        display_name="user1",
+    )
+    clip2 = SunoClip(
+        id="test",
+        title="T",
+        audio_url="",
+        image_url="img.jpg",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0,
+        clip_type="",
+        has_vocal=False,
+        display_name="user2",
+    )
+    assert clip_meta_hash(clip1) != clip_meta_hash(clip2)

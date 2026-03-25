@@ -26,6 +26,10 @@ def _build_id3_header(
     image_data: bytes | None = None,
     suno_style: str = "",
     suno_style_summary: str = "",
+    suno_model: str = "",
+    suno_handle: str = "",
+    suno_parent: str = "",
+    suno_lineage: str = "",
 ) -> bytes:
     """Build a minimal ID3v2.4 header with metadata frames."""
     tag_fields: list[tuple[str, str]] = [("TIT2", title), ("TPE1", artist)]
@@ -46,7 +50,15 @@ def _build_id3_header(
         uslt_body = b"\x03" + b"eng" + b"\x00" + lyrics.encode("utf-8")
         frames += b"USLT" + len(uslt_body).to_bytes(4, "big") + b"\x00\x00" + uslt_body
     # TXXX frames for Suno-specific metadata
-    for desc, value in [("SUNO_STYLE", suno_style), ("SUNO_STYLE_SUMMARY", suno_style_summary)]:
+    custom_fields = [
+        ("SUNO_STYLE", suno_style),
+        ("SUNO_STYLE_SUMMARY", suno_style_summary),
+        ("SUNO_MODEL", suno_model),
+        ("SUNO_HANDLE", suno_handle),
+        ("SUNO_PARENT", suno_parent),
+        ("SUNO_LINEAGE", suno_lineage),
+    ]
+    for desc, value in custom_fields:
         if value:
             txxx_body = b"\x03" + desc.encode("utf-8") + b"\x00" + value.encode("utf-8")
             frames += b"TXXX" + len(txxx_body).to_bytes(4, "big") + b"\x00\x00" + txxx_body
@@ -142,6 +154,10 @@ async def wav_to_flac(
     duration: float = 0.0,
     suno_style: str = "",
     suno_style_summary: str = "",
+    suno_model: str = "",
+    suno_handle: str = "",
+    suno_parent: str = "",
+    suno_lineage: str = "",
 ) -> bytes | None:
     """Transcode WAV bytes to FLAC with metadata and optional album art."""
     import tempfile  # noqa: PLC0415
@@ -176,10 +192,17 @@ async def wav_to_flac(
             meta.extend(["-metadata", f"LYRICS={lyrics}"])
         if comment:
             meta.extend(["-metadata", f"comment={comment}"])
-        if suno_style:
-            meta.extend(["-metadata", f"SUNO_STYLE={suno_style}"])
-        if suno_style_summary:
-            meta.extend(["-metadata", f"SUNO_STYLE_SUMMARY={suno_style_summary}"])
+        # Custom Suno metadata as Vorbis Comments
+        for key, val in [
+            ("SUNO_STYLE", suno_style),
+            ("SUNO_STYLE_SUMMARY", suno_style_summary),
+            ("SUNO_MODEL", suno_model),
+            ("SUNO_HANDLE", suno_handle),
+            ("SUNO_PARENT", suno_parent),
+            ("SUNO_LINEAGE", suno_lineage),
+        ]:
+            if val:
+                meta.extend(["-metadata", f"{key}={val}"])
         args.extend(meta + ["-compression_level", "5", "-f", "flac", "pipe:1"])
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -238,6 +261,10 @@ async def download_as_mp3(
     image_data: bytes | None = None,
     suno_style: str = "",
     suno_style_summary: str = "",
+    suno_model: str = "",
+    suno_handle: str = "",
+    suno_parent: str = "",
+    suno_lineage: str = "",
 ) -> bytes | None:
     """Download MP3 from CDN and inject ID3 metadata tags.
 
@@ -266,6 +293,10 @@ async def download_as_mp3(
         image_data=image_data,
         suno_style=suno_style,
         suno_style_summary=suno_style_summary,
+        suno_model=suno_model,
+        suno_handle=suno_handle,
+        suno_parent=suno_parent,
+        suno_lineage=suno_lineage,
     )
     body = _skip_existing_id3(raw)
     return header + body
@@ -297,6 +328,10 @@ async def download_and_transcode_to_flac(
     duration: float = 0.0,
     suno_style: str = "",
     suno_style_summary: str = "",
+    suno_model: str = "",
+    suno_handle: str = "",
+    suno_parent: str = "",
+    suno_lineage: str = "",
 ) -> bytes | None:
     """Download WAV from Suno, fetch album art, and transcode to FLAC.
 
@@ -336,4 +371,8 @@ async def download_and_transcode_to_flac(
         duration=duration,
         suno_style=suno_style,
         suno_style_summary=suno_style_summary,
+        suno_model=suno_model,
+        suno_handle=suno_handle,
+        suno_parent=suno_parent,
+        suno_lineage=suno_lineage,
     )

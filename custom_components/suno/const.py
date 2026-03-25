@@ -37,6 +37,7 @@ CONF_QUALITY_LATEST = "quality_latest"
 CONF_DOWNLOAD_MODE_LIKED = "download_mode_liked"
 CONF_DOWNLOAD_MODE_PLAYLISTS = "download_mode_playlists"
 CONF_DOWNLOAD_MODE_LATEST = "download_mode_latest"
+CONF_DOWNLOAD_VIDEOS = "download_videos"
 
 # Defaults
 DEFAULT_SHOW_LIKED = True

@@ -27,6 +27,7 @@ from .const import (
     CONF_DOWNLOAD_MODE_LIKED,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
+    CONF_DOWNLOAD_VIDEOS,
     CONF_LATEST_COUNT,
     CONF_LATEST_DAYS,
     CONF_LATEST_MINIMUM,
@@ -236,6 +237,7 @@ class SunoDownloadManager:
         self._client: SunoClient | None = None
         self._entry: ConfigEntry | None = None
         self._download_path = ""
+        self._download_videos = False
         self._running = False
         self._errors = self._pending = 0
         self._last_result = ""
@@ -258,6 +260,7 @@ class SunoDownloadManager:
         mgr._client = client
         mgr._entry = entry
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
+        mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, False)
         await mgr.async_init()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await mgr.cleanup_tmp_files(download_path)
@@ -617,6 +620,7 @@ class SunoDownloadManager:
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         clip = item.clip
         date = clip.created_at[:10] if clip.created_at else ""
+        artist = clip.display_name or "Suno"
         common_meta = {
             "album": clip.title or "Suno",
             "album_artist": "Suno",
@@ -625,6 +629,10 @@ class SunoDownloadManager:
             "comment": clip.gpt_description_prompt,
             "suno_style": clip.tags,
             "suno_style_summary": clip.gpt_description_prompt,
+            "suno_model": clip.suno_model,
+            "suno_handle": clip.handle,
+            "suno_parent": clip.edited_clip_id,
+            "suno_lineage": clip.suno_lineage,
         }
         try:
             session = async_get_clientsession(self.hass)
@@ -638,6 +646,7 @@ class SunoDownloadManager:
                     get_ffmpeg_manager(self.hass).binary,
                     clip.id,
                     clip.title or "Suno",
+                    artist=artist,
                     image_url=image_url,
                     duration=clip.duration,
                     **common_meta,
@@ -649,6 +658,7 @@ class SunoDownloadManager:
                     session,
                     audio_url,
                     title=clip.title or "Suno",
+                    artist=artist,
                     image_data=image_data,
                     **common_meta,
                 )
@@ -666,6 +676,10 @@ class SunoDownloadManager:
                 if not await self.hass.async_add_executor_job(cover_path.exists):
                     await _write_file(self.hass, cover_path, image_data)
 
+            # Download video if enabled and available
+            if self._download_videos and clip.video_url:
+                await self._download_video(session, clip.video_url, target)
+
             # Write-through to cache
             if self._cache is not None:
                 meta_hash = clip_meta_hash(item.clip)
@@ -680,6 +694,22 @@ class SunoDownloadManager:
         except Exception:
             _LOGGER.exception("Failed to download %s", item.clip.id)
             return None
+
+    async def _download_video(self, session: Any, video_url: str, audio_target: Path) -> None:
+        """Download the video file alongside the audio file."""
+        video_path = audio_target.with_suffix(".mp4")
+        if await self.hass.async_add_executor_job(video_path.exists):
+            return
+        try:
+            async with session.get(video_url) as resp:
+                if resp.status != 200:
+                    _LOGGER.debug("Video download failed for %s: %d", video_url, resp.status)
+                    return
+                video_data = await resp.read()
+            await _write_file(self.hass, video_path, video_data)
+            _LOGGER.info("Downloaded video: %s (%d bytes)", video_path.name, len(video_data))
+        except Exception:
+            _LOGGER.debug("Failed to download video from %s", video_url)
 
     # fmt: off
     async def cleanup_tmp_files(self, download_path: str) -> None:
