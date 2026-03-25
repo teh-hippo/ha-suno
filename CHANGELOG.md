@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v4.0.0 (2026-03-25)
+
+### Features
+
+- Per-section download mode with Cache Only option
+  ([`6acea9c`](https://github.com/teh-hippo/ha-suno/commit/6acea9ccf4c70c47734730eecc59d5630ddda580))
+
+### Refactoring
+
+- Consolidate codebase — TrackMetadata dataclass, config flow dedup, sensor/helper cleanup
+  ([`b8426f1`](https://github.com/teh-hippo/ha-suno/commit/b8426f16a4f98dae7826caf7140c295214ad01f5))
+
+### Breaking Changes
+
+- Configuration keys renamed, no migration provided. Existing integrations must be removed and
+  re-added.
+
+
 ## v3.8.0 (2026-03-25)
 
 ### Features
