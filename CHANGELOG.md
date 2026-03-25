@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.7.2 (2026-03-25)
+
+### Bug Fixes
+
+- Audit round 2 — dead code, logic fixes, performance, test coverage
+  ([`61765c1`](https://github.com/teh-hippo/ha-suno/commit/61765c1bdb28aabdf9ebc657ee9bd1b1805a0cf0))
+
+
 ## v3.7.1 (2026-03-25)
 
 ### Bug Fixes
