@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.8.0 (2026-03-25)
+
+### Features
+
+- Rename Download terminology to Library Sync
+  ([`fd803c0`](https://github.com/teh-hippo/ha-suno/commit/fd803c0b12d0dbdbfc165b6409d581545c1ba820))
+
+
 ## v3.7.2 (2026-03-25)
 
 ### Bug Fixes
