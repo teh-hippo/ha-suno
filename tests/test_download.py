@@ -67,27 +67,29 @@ class TestClipPath:
         title: str = "My Song",
         created: str = "2026-01-15T10:00:00Z",
         clip_id: str = "abcd1234-test-clip-id",
+        display_name: str = "testuser",
     ):
         clip = MagicMock()
         clip.id = clip_id
         clip.title = title
         clip.created_at = created
+        clip.display_name = display_name
         return clip
 
     def test_high_quality_flac(self) -> None:
         clip = self._make_clip()
         result = _clip_path(clip, "high")
-        assert result == "2026-01-15/My Song [abcd1234].flac"
+        assert result == "testuser/My Song/testuser-My Song [abcd1234].flac"
 
     def test_standard_quality_mp3(self) -> None:
         clip = self._make_clip()
         result = _clip_path(clip, "standard")
-        assert result == "2026-01-15/My Song [abcd1234].mp3"
+        assert result == "testuser/My Song/testuser-My Song [abcd1234].mp3"
 
-    def test_missing_created_date(self) -> None:
-        clip = self._make_clip(created=None)
+    def test_missing_display_name(self) -> None:
+        clip = self._make_clip(display_name="")
         result = _clip_path(clip, "high")
-        assert result == "unknown/My Song [abcd1234].flac"
+        assert result == "Suno/My Song/Suno-My Song [abcd1234].flac"
 
     def test_different_clips_same_title_get_different_paths(self) -> None:
         clip_a = self._make_clip(clip_id="aaaaaaaa-1111-2222-3333-444444444444")
@@ -385,7 +387,7 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
         CONF_LATEST_DAYS: None,
     }
 
-    desired, preserved, _ = await sync._build_desired(options, client)
+    desired, preserved, _, _ = await sync._build_desired(options, client)
 
     # clip-liked should be preserved since liked API failed
     assert "clip-liked" in preserved
@@ -434,7 +436,7 @@ async def test_latest_count_only(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: 5,
         CONF_LATEST_DAYS: None,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 5
     ids = {d.clip.id for d in desired}
     assert ids == {f"clip-{i}" for i in range(5)}
@@ -470,7 +472,7 @@ async def test_latest_days_only(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: 7,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
     assert "clip-new-1" in ids
     assert "clip-new-2" in ids
@@ -512,7 +514,7 @@ async def test_latest_both_and(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: 3,
         CONF_LATEST_DAYS: 7,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
     # count=3 gives {clip-r0, clip-r1, clip-r2}, days=7 gives all clip-r*, intersection = {clip-r0, clip-r1, clip-r2}
     assert len(ids) == 3
@@ -540,7 +542,7 @@ async def test_latest_both_zero_disabled(hass: HomeAssistant) -> None:
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: None,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 0
     client.get_all_songs.assert_not_called()
 
@@ -754,7 +756,7 @@ async def test_quality_change_triggers_redownload(hass: HomeAssistant, tmp_path:
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
-        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"})),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
         opts = {
             CONF_DOWNLOAD_PATH: str(sync_dir),
@@ -958,7 +960,7 @@ async def test_download_clip_mp3_path(hass: HomeAssistant, tmp_path: Path) -> No
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
-        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"})),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
         opts = {
             CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
@@ -1348,7 +1350,7 @@ async def test_download_manager_skips_disabled_source(hass: HomeAssistant) -> No
         CONF_LATEST_COUNT: None,
         CONF_LATEST_DAYS: None,
     }
-    desired, _, _ = await mgr._build_desired(options, client)
+    desired, _, _, _ = await mgr._build_desired(options, client)
     assert len(desired) == 0
     # get_liked_songs should not be called since show_liked is False
     client.get_liked_songs.assert_not_called()
@@ -1401,7 +1403,7 @@ async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 7,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     # Intersection of top-5 and within-7-days = 3 recent clips
     # Minimum = 7 → pad to 7 with most recent clips
     assert len(desired) == 7
@@ -1431,7 +1433,7 @@ async def test_latest_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 0,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     # count=3, days=7, all clips are old → intersection is empty, minimum=0 → no padding
     assert len(desired) == 0
 
@@ -1456,7 +1458,7 @@ async def test_latest_minimum_alone_triggers_latest(hass: HomeAssistant) -> None
         CONF_LATEST_DAYS: None,
         CONF_LATEST_MINIMUM: 5,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     # count=0, days=0 → empty set, but minimum=5 → pad to 5
     assert len(desired) == 5
 
@@ -1481,7 +1483,7 @@ async def test_latest_minimum_capped_by_library_size(hass: HomeAssistant) -> Non
         CONF_LATEST_DAYS: None,
         CONF_LATEST_MINIMUM: 100,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     # Only 3 clips exist, minimum=100 but capped
     assert len(desired) == 3
 
@@ -1510,7 +1512,7 @@ async def test_latest_minimum_overrides_expired_days(hass: HomeAssistant) -> Non
         CONF_LATEST_DAYS: 7,
         CONF_LATEST_MINIMUM: 5,
     }
-    desired, _, _ = await sync._build_desired(options, client)
+    desired, _, _, _ = await sync._build_desired(options, client)
     # days=7 → no clips match, but minimum=5 → pad with 5 most recent
     assert len(desired) == 5
 

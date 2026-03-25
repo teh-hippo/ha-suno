@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -94,32 +95,55 @@ def _write_m3u8_playlists(
     clips_state: dict[str, Any],
     desired: list[DownloadItem],
     source_to_name: dict[str, str] | None = None,
+    playlist_order: dict[str, list[str]] | None = None,
 ) -> None:
     """Write M3U8 playlist files for Jellyfin/media player compatibility.
 
     Each source tag (e.g. "liked", "playlist:abc") is resolved to a playlist
     name via *source_to_name*.  The "liked" source always maps to
     "Liked Songs"; "latest" sources are intentionally excluded from playlists.
+
+    *playlist_order* maps source tags to ordered clip ID lists as returned
+    by the Suno API, ensuring playlists respect the user's chosen order.
     """
     if source_to_name is None:
         source_to_name = {}
-    # Build playlist_name → [(abs_path, title, duration)] from sources
-    playlists: dict[str, list[tuple[str, str, int]]] = {}
+    if playlist_order is None:
+        playlist_order = {}
+    # Build clip_id → track info lookup
+    track_info: dict[str, tuple[str, str, int]] = {}
     for item in desired:
         entry = clips_state.get(item.clip.id)
         if not entry or not entry.get("path"):
             continue
         abs_path = str(base / entry["path"])
         title = entry.get("title") or item.clip.title or "Untitled"
-        # Strip newlines to prevent M3U8 directive injection
         title = title.replace("\n", " ").replace("\r", "")
         duration = int(item.clip.duration) if item.clip.duration else -1
+        track_info[item.clip.id] = (abs_path, title, duration)
+    # Build playlist_name → ordered [(abs_path, title, duration)]
+    playlists: dict[str, list[tuple[str, str, int]]] = {}
+    for item in desired:
+        if item.clip.id not in track_info:
+            continue
         for source in item.sources:
             if source == "liked":
-                playlists.setdefault("Liked Songs", []).append((abs_path, title, duration))
+                name = "Liked Songs"
             elif source.startswith("playlist:"):
-                playlist_name = source_to_name.get(source, source)
-                playlists.setdefault(playlist_name, []).append((abs_path, title, duration))
+                name = source_to_name.get(source, source)
+            else:
+                continue
+            if name not in playlists:
+                # Use API order if available, otherwise build incrementally
+                order = playlist_order.get(source)
+                if order:
+                    playlists[name] = [track_info[cid] for cid in order if cid in track_info]
+                else:
+                    playlists[name] = []
+            if not playlist_order.get(source):
+                info = track_info[item.clip.id]
+                if info not in playlists[name]:
+                    playlists[name].append(info)
 
     # Write M3U8 files
     written: set[str] = set()
@@ -144,16 +168,14 @@ def _write_m3u8_playlists(
 def _clip_path(clip: SunoClip, quality: str) -> str:
     """Build the relative file path for a clip.
 
-    Uses clip ID prefix for uniqueness (not position index).
-    Extension determined by quality setting.
+    Structure: <display_name>/<title>/<display_name>-<title> [<clip_short>].<ext>
+    Uses clip ID prefix for uniqueness when multiple clips share the same title.
     """
+    artist = _sanitise_filename(clip.display_name or "Suno")
     title = _sanitise_filename(clip.title or "untitled")
-    date_str = clip.created_at[:10] if clip.created_at else "unknown"
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
-        date_str = "unknown"
     clip_short = clip.id[:8]
     ext = "flac" if quality == QUALITY_HIGH else "mp3"
-    return f"{date_str}/{title} [{clip_short}].{ext}"
+    return f"{artist}/{title}/{artist}-{title} [{clip_short}].{ext}"
 
 
 def _add_clip(
@@ -388,7 +410,9 @@ class SunoDownloadManager:
             await self.hass.async_add_executor_job(shutil.rmtree, str(trash_dir), True)
             _LOGGER.info("Removed legacy .trash directory")
         self._state.pop("trash", None)
-        desired, preserved_ids, source_to_name = await self._build_desired(options, client, coordinator_data)
+        desired, preserved_ids, source_to_name, playlist_order = await self._build_desired(
+            options, client, coordinator_data
+        )
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[DownloadItem] = []
         meta_updates = 0
@@ -414,6 +438,30 @@ class SunoDownloadManager:
                         existing["meta_hash"] = new_hash
                         existing["title"] = item.clip.title
                         meta_updates += 1
+        # Migrate files to new paths if the path format changed
+        migrated = 0
+        for item in desired:
+            if item.clip.id not in clips_state:
+                continue
+            existing = clips_state[item.clip.id]
+            old_path = existing.get("path", "")
+            new_path = _clip_path(item.clip, existing.get("quality", item.quality))
+            if old_path and old_path != new_path:
+                old_file = base / old_path
+                new_file = base / new_path
+                if await self.hass.async_add_executor_job(old_file.exists):
+                    await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
+                    await self.hass.async_add_executor_job(old_file.rename, new_file)
+                    # Also move video if it exists
+                    old_video = old_file.with_suffix(".mp4")
+                    if await self.hass.async_add_executor_job(old_video.exists):
+                        await self.hass.async_add_executor_job(old_video.rename, new_file.with_suffix(".mp4"))
+                    existing["path"] = new_path
+                    migrated += 1
+                    _cleanup_empty_dirs(base, old_file)
+        if migrated:
+            _LOGGER.info("Migrated %d files to new path structure", migrated)
+
         to_delete = []
         for cid in clips_state:
             if cid in seen_ids or cid in preserved_ids:
@@ -482,6 +530,34 @@ class SunoDownloadManager:
             self._notify_coordinator()
         if reconciled:
             _LOGGER.info("Reconciled %d files already on disk", reconciled)
+
+        # Reconcile cover art for all clips (fixes stale cover.jpg files)
+        session = async_get_clientsession(self.hass)
+        covers_fixed = 0
+        for item in desired:
+            entry = clips_state.get(item.clip.id)
+            if not entry or not entry.get("path"):
+                continue
+            clip = item.clip
+            image_url = clip.image_large_url or clip.image_url or None
+            if not image_url:
+                continue
+            target = base / entry["path"]
+            cover_path = target.parent / "cover.jpg"
+            hash_path = target.parent / ".cover_hash"
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+            existing_hash = ""
+            if await self.hass.async_add_executor_job(hash_path.exists):
+                existing_hash = (await self.hass.async_add_executor_job(hash_path.read_text)).strip()
+            if url_hash != existing_hash:
+                image_data = await fetch_album_art(session, image_url)
+                if image_data:
+                    await self.hass.async_add_executor_job(cover_path.parent.mkdir, 0o755, True, True)
+                    await _write_file(self.hass, cover_path, image_data)
+                    await self.hass.async_add_executor_job(hash_path.write_text, url_hash)
+                    covers_fixed += 1
+        if covers_fixed:
+            _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
@@ -496,7 +572,7 @@ class SunoDownloadManager:
         await self._save_state(base)
         if options.get(CONF_CREATE_PLAYLISTS):
             await self.hass.async_add_executor_job(
-                _write_m3u8_playlists, base, clips_state, desired, source_to_name
+                _write_m3u8_playlists, base, clips_state, desired, source_to_name, playlist_order
             )
 
         orphans = await self._reconcile_disk(base, clips_state)
@@ -535,15 +611,17 @@ class SunoDownloadManager:
         options: dict[str, Any],
         client: Any,
         coordinator_data: SunoData | None = None,
-    ) -> tuple[list[DownloadItem], set[str], dict[str, str]]:
+    ) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
         clip_map: dict[str, DownloadItem] = {}
         preserved: set[str] = set()
         source_to_name: dict[str, str] = {"liked": "Liked Songs"}
+        playlist_order: dict[str, list[str]] = {}
         prev_clips = self._state.get("clips", {})
         if options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
             try:
                 liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
+                playlist_order["liked"] = [c.id for c in liked]
                 for clip in liked:
                     _add_clip(clip_map, clip, "Liked Songs", "liked", liked_quality)
             except Exception:
@@ -561,7 +639,9 @@ class SunoDownloadManager:
                     tag = f"playlist:{pl.id}"
                     source_to_name[tag] = pl.name
                     try:
-                        for clip in await client.get_playlist_clips(pl.id):
+                        pl_clips = await client.get_playlist_clips(pl.id)
+                        playlist_order[tag] = [c.id for c in pl_clips]
+                        for clip in pl_clips:
                             _add_clip(clip_map, clip, pl.name, tag, playlist_quality)
                     except Exception:
                         _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
@@ -613,7 +693,7 @@ class SunoDownloadManager:
                 _LOGGER.warning("Failed to fetch latest songs for sync")
                 _preserve_by(preserved, prev_clips, lambda s: "latest" in s)
         preserved -= clip_map.keys()
-        return list(clip_map.values()), preserved, source_to_name
+        return list(clip_map.values()), preserved, source_to_name, playlist_order
 
     async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
         target = base / rel_path
@@ -671,10 +751,16 @@ class SunoDownloadManager:
             _LOGGER.info("Downloaded: %s (%d bytes)", rel_path, len(data))
 
             # Write cover.jpg for Jellyfin album art discovery
-            if image_data:
+            if image_data and image_url:
                 cover_path = target.parent / "cover.jpg"
-                if not await self.hass.async_add_executor_job(cover_path.exists):
+                hash_path = target.parent / ".cover_hash"
+                url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+                existing_hash = ""
+                if await self.hass.async_add_executor_job(hash_path.exists):
+                    existing_hash = (await self.hass.async_add_executor_job(hash_path.read_text)).strip()
+                if url_hash != existing_hash:
                     await _write_file(self.hass, cover_path, image_data)
+                    await self.hass.async_add_executor_job(hash_path.write_text, url_hash)
 
             # Download video if enabled and available
             if self._download_videos and clip.video_url:
