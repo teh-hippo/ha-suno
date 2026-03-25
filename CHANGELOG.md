@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.7.1 (2026-03-25)
+
+### Bug Fixes
+
+- Service lifecycle, media source multi-entry, proxy cache, and reconcile optimisation
+  ([`7669e3a`](https://github.com/teh-hippo/ha-suno/commit/7669e3a366fac368afc09cb5ca12028f79ac7e37))
+
+### Refactoring
+
+- Codebase cleanup and test coverage improvements
+  ([`923123c`](https://github.com/teh-hippo/ha-suno/commit/923123c7652a90353236dca0c2d4f2f2db0ad161))
+
+
 ## v3.7.0 (2026-03-25)
 
 ### Features
