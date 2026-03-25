@@ -9,6 +9,14 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from custom_components.suno import async_remove_entry
+from custom_components.suno.const import (
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    DOWNLOAD_MODE_CACHE,
+    DOWNLOAD_MODE_MIRROR,
+)
 from custom_components.suno.coordinator import SunoCoordinator
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
 
@@ -220,3 +228,65 @@ async def test_rate_limiter_shared_across_entries(hass: HomeAssistant, mock_suno
 
     assert "rate_limiter" in hass.data[DOMAIN]
     assert hass.data[DOMAIN]["rate_limiter"] is hass.data[DOMAIN]["rate_limiter"]
+
+
+# ── Download manager creation logic ───────────────────────────────
+
+
+async def test_dm_created_when_mirror_or_archive(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """DM instantiated when any section uses mirror/archive with path set."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/music/suno",
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator = entry.runtime_data
+    assert coordinator.download_manager is not None
+
+
+async def test_dm_not_created_all_cache_with_path(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """No DM when all sections cache, even with download_path set."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/music/suno",
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator = entry.runtime_data
+    assert coordinator.download_manager is None
+
+
+async def test_all_cache_transition_cleanup(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Options change to all-cache with existing state triggers cleanup.
+
+    TODO: Add assertions once __init__.py implements cleanup-on-transition
+    logic for when all sections switch to cache mode. For now, verify the
+    entry can be set up successfully with all-cache options.
+    """
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            CONF_DOWNLOAD_PATH: "/music/suno",
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.download_manager is None

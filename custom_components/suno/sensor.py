@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 
@@ -14,10 +14,28 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SunoConfigEntry
-from .const import CONF_DOWNLOAD_ENABLED, CONF_DOWNLOAD_PATH, DEFAULT_DOWNLOAD_ENABLED
+from .const import (
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
+    CONF_DOWNLOAD_PATH,
+    DEFAULT_DOWNLOAD_MODE,
+    DEFAULT_DOWNLOAD_MODE_MY_SONGS,
+    DOWNLOAD_MODE_CACHE,
+)
 from .coordinator import SunoCoordinator, SunoData
 
 PARALLEL_UPDATES = 0
+
+
+def _has_download_sections(options: Mapping[str, Any]) -> bool:
+    """Return True if any section uses Mirror or Archive download mode."""
+    modes = [
+        options.get(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
+        options.get(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE),
+        options.get(CONF_DOWNLOAD_MODE_MY_SONGS, DEFAULT_DOWNLOAD_MODE_MY_SONGS),
+    ]
+    return any(m != DOWNLOAD_MODE_CACHE for m in modes)
 
 
 # ── Base class ──────────────────────────────────────────────────────
@@ -242,7 +260,7 @@ async def async_setup_entry(
     entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _LIBRARY_SENSORS)
     entities.append(SunoCacheSizeSensor(coordinator, entry))
 
-    if entry.options.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED) and entry.options.get(CONF_DOWNLOAD_PATH):
+    if _has_download_sections(entry.options) and entry.options.get(CONF_DOWNLOAD_PATH):
         entities.append(SunoDownloadStatusSensor(coordinator, entry))
         entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _SYNC_SENSORS)
 

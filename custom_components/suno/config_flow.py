@@ -35,33 +35,35 @@ from .const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
     CONF_CREATE_PLAYLISTS,
-    CONF_DOWNLOAD_ENABLED,
-    CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
-    CONF_LATEST_COUNT,
-    CONF_LATEST_DAYS,
-    CONF_LATEST_MINIMUM,
+    CONF_MY_SONGS_COUNT,
+    CONF_MY_SONGS_DAYS,
+    CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
-    CONF_QUALITY_LATEST,
     CONF_QUALITY_LIKED,
+    CONF_QUALITY_MY_SONGS,
     CONF_QUALITY_PLAYLISTS,
-    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
+    CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
     DEFAULT_ALL_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CREATE_PLAYLISTS,
-    DEFAULT_DOWNLOAD_ENABLED,
     DEFAULT_DOWNLOAD_MODE,
-    DEFAULT_LATEST_COUNT,
-    DEFAULT_LATEST_DAYS,
-    DEFAULT_LATEST_MINIMUM,
-    DEFAULT_SHOW_LATEST,
+    DEFAULT_DOWNLOAD_MODE_MY_SONGS,
+    DEFAULT_MY_SONGS_COUNT,
+    DEFAULT_MY_SONGS_DAYS,
+    DEFAULT_MY_SONGS_MINIMUM,
     DEFAULT_SHOW_LIKED,
+    DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
     DOMAIN,
+    DOWNLOAD_MODE_ARCHIVE,
+    DOWNLOAD_MODE_CACHE,
+    DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
@@ -74,8 +76,9 @@ QUALITY_OPTIONS = [
     SelectOptionDict(value="high", label="High (FLAC)"),
 ]
 MODE_OPTIONS = [
-    SelectOptionDict(value="mirror", label="Mirror"),
-    SelectOptionDict(value="collect", label="Keep"),
+    SelectOptionDict(value=DOWNLOAD_MODE_MIRROR, label="Mirror"),
+    SelectOptionDict(value=DOWNLOAD_MODE_ARCHIVE, label="Archive"),
+    SelectOptionDict(value=DOWNLOAD_MODE_CACHE, label="Cache"),
 ]
 
 
@@ -99,28 +102,21 @@ def _library_schema(opts: dict[str, Any]) -> vol.Schema:
             default=opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED),
         ): BooleanSelector(),
         vol.Required(
-            CONF_SHOW_LATEST,
-            default=opts.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST),
+            CONF_SHOW_MY_SONGS,
+            default=opts.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS),
         ): BooleanSelector(),
         vol.Required(
-            CONF_DOWNLOAD_ENABLED,
-            default=opts.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED),
-        ): BooleanSelector(),
+            CONF_DOWNLOAD_PATH,
+            default=opts.get(CONF_DOWNLOAD_PATH, ""),
+        ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
     }
-    if opts.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED):
+    if opts.get(CONF_DOWNLOAD_PATH):
         schema[
             vol.Required(
-                CONF_DOWNLOAD_PATH,
-                default=opts.get(CONF_DOWNLOAD_PATH, ""),
+                CONF_CREATE_PLAYLISTS,
+                default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
             )
-        ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
-        if opts.get(CONF_DOWNLOAD_PATH):
-            schema[
-                vol.Required(
-                    CONF_CREATE_PLAYLISTS,
-                    default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
-                )
-            ] = BooleanSelector()
+        ] = BooleanSelector()
     schema[
         vol.Required(
             CONF_CACHE_MAX_SIZE,
@@ -170,20 +166,19 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                     options={
                         CONF_SHOW_PLAYLISTS: True,
                         CONF_SHOW_LIKED: True,
-                        CONF_SHOW_LATEST: True,
-                        CONF_DOWNLOAD_ENABLED: DEFAULT_DOWNLOAD_ENABLED,
+                        CONF_SHOW_MY_SONGS: True,
                         CONF_DOWNLOAD_PATH: "",
                         CONF_CREATE_PLAYLISTS: True,
                         CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
                         CONF_QUALITY_LIKED: QUALITY_HIGH,
                         CONF_QUALITY_PLAYLISTS: QUALITY_HIGH,
-                        CONF_QUALITY_LATEST: QUALITY_STANDARD,
+                        CONF_QUALITY_MY_SONGS: QUALITY_STANDARD,
                         CONF_DOWNLOAD_MODE_LIKED: DEFAULT_DOWNLOAD_MODE,
                         CONF_DOWNLOAD_MODE_PLAYLISTS: DEFAULT_DOWNLOAD_MODE,
-                        CONF_DOWNLOAD_MODE_LATEST: DEFAULT_DOWNLOAD_MODE,
-                        CONF_LATEST_COUNT: DEFAULT_LATEST_COUNT,
-                        CONF_LATEST_DAYS: DEFAULT_LATEST_DAYS,
-                        CONF_LATEST_MINIMUM: DEFAULT_LATEST_MINIMUM,
+                        CONF_DOWNLOAD_MODE_MY_SONGS: DEFAULT_DOWNLOAD_MODE_MY_SONGS,
+                        CONF_MY_SONGS_COUNT: DEFAULT_MY_SONGS_COUNT,
+                        CONF_MY_SONGS_DAYS: DEFAULT_MY_SONGS_DAYS,
+                        CONF_MY_SONGS_MINIMUM: DEFAULT_MY_SONGS_MINIMUM,
                         CONF_ALL_PLAYLISTS: True,
                         CONF_PLAYLISTS: [],
                     },
@@ -271,7 +266,7 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         self._options: dict[str, Any] = {}
         self._done_playlists = False
         self._done_liked = False
-        self._done_latest = False
+        self._done_my_songs = False
 
     async def _next_content_step(self) -> ConfigFlowResult:
         """Route to the next enabled content-type step, or finish."""
@@ -279,8 +274,8 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             return await self.async_step_playlists()
         if self._options.get(CONF_SHOW_LIKED) and not self._done_liked:
             return await self.async_step_liked()
-        if self._options.get(CONF_SHOW_LATEST) and not self._done_latest:
-            return await self.async_step_latest()
+        if self._options.get(CONF_SHOW_MY_SONGS) and not self._done_my_songs:
+            return await self.async_step_my_songs()
         return self.async_create_entry(data=self._options)
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -315,13 +310,13 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_QUALITY_PLAYLISTS,
-                    default=opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH),
-                ): _quality_selector(),
-                vol.Required(
                     CONF_DOWNLOAD_MODE_PLAYLISTS,
                     default=opts.get(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE),
                 ): _mode_selector(),
+                vol.Required(
+                    CONF_QUALITY_PLAYLISTS,
+                    default=opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH),
+                ): _quality_selector(),
                 vol.Required(
                     CONF_ALL_PLAYLISTS,
                     default=opts.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS),
@@ -367,50 +362,50 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_QUALITY_LIKED,
-                    default=opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH),
-                ): _quality_selector(),
-                vol.Required(
                     CONF_DOWNLOAD_MODE_LIKED,
                     default=opts.get(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
                 ): _mode_selector(),
+                vol.Required(
+                    CONF_QUALITY_LIKED,
+                    default=opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH),
+                ): _quality_selector(),
             }
         )
         return self.async_show_form(step_id="liked", data_schema=schema)
 
-    async def async_step_latest(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Configure latest songs download settings."""
+    async def async_step_my_songs(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure my songs download settings."""
         if user_input is not None:
             self._options.update(user_input)
-            self._done_latest = True
+            self._done_my_songs = True
             return await self._next_content_step()
 
         opts = self._options
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_QUALITY_LATEST,
-                    default=opts.get(CONF_QUALITY_LATEST, QUALITY_STANDARD),
-                ): _quality_selector(),
-                vol.Required(
-                    CONF_DOWNLOAD_MODE_LATEST,
-                    default=opts.get(CONF_DOWNLOAD_MODE_LATEST, DEFAULT_DOWNLOAD_MODE),
+                    CONF_DOWNLOAD_MODE_MY_SONGS,
+                    default=opts.get(CONF_DOWNLOAD_MODE_MY_SONGS, DEFAULT_DOWNLOAD_MODE_MY_SONGS),
                 ): _mode_selector(),
                 vol.Required(
-                    CONF_LATEST_COUNT,
-                    default=opts.get(CONF_LATEST_COUNT, DEFAULT_LATEST_COUNT),
+                    CONF_QUALITY_MY_SONGS,
+                    default=opts.get(CONF_QUALITY_MY_SONGS, QUALITY_STANDARD),
+                ): _quality_selector(),
+                vol.Required(
+                    CONF_MY_SONGS_COUNT,
+                    default=opts.get(CONF_MY_SONGS_COUNT, DEFAULT_MY_SONGS_COUNT),
                 ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
                 vol.Required(
-                    CONF_LATEST_DAYS,
-                    default=opts.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS),
+                    CONF_MY_SONGS_DAYS,
+                    default=opts.get(CONF_MY_SONGS_DAYS, DEFAULT_MY_SONGS_DAYS),
                 ): NumberSelector(NumberSelectorConfig(min=0, max=365, step=1, mode=NumberSelectorMode.BOX)),
                 vol.Required(
-                    CONF_LATEST_MINIMUM,
-                    default=opts.get(CONF_LATEST_MINIMUM, DEFAULT_LATEST_MINIMUM),
+                    CONF_MY_SONGS_MINIMUM,
+                    default=opts.get(CONF_MY_SONGS_MINIMUM, DEFAULT_MY_SONGS_MINIMUM),
                 ): NumberSelector(NumberSelectorConfig(min=0, max=500, step=1, mode=NumberSelectorMode.BOX)),
             }
         )
-        return self.async_show_form(step_id="latest", data_schema=schema)
+        return self.async_show_form(step_id="my_songs", data_schema=schema)
 
     def _check_download_path_conflict(self, path: str) -> bool:
         """Check if another config entry already uses this download path."""

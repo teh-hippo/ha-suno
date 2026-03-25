@@ -392,3 +392,50 @@ def test_parse_last_sync_malformed_timestamp() -> None:
     coordinator.download_manager = dm
     result = _parse_last_sync(coordinator)
     assert result is None
+
+
+# ── Sync sensor visibility based on download mode ─────────────────
+
+
+async def test_sync_sensors_hidden_all_cache(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Sync sensors not created when all sections use cache mode."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            "download_path": "/music/suno",
+            "download_mode_liked": "cache",
+            "download_mode_playlists": "cache",
+            "download_mode_my_songs": "cache",
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    state_ids = {s.entity_id for s in hass.states.async_all("sensor")}
+    assert "sensor.suno_sync_status" not in state_ids
+    assert "sensor.suno_library_files" not in state_ids
+    assert "sensor.suno_sync_remaining" not in state_ids
+
+
+async def test_sync_sensors_shown_any_mirror_mode(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Sync sensors created when any section uses mirror/archive."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            "download_path": "/music/suno",
+            "download_mode_liked": "mirror",
+            "download_mode_playlists": "cache",
+            "download_mode_my_songs": "cache",
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    from homeassistant.helpers import entity_registry as er_mod
+
+    registry = er_mod.async_get(hass)
+    entities = er_mod.async_entries_for_config_entry(registry, entry.entry_id)
+    unique_ids = {e.unique_id for e in entities if e.domain == "sensor"}
+    assert "test-user-id-123_sync_status" in unique_ids
+    assert "test-user-id-123_library_files" in unique_ids
+    assert "test-user-id-123_sync_remaining" in unique_ids

@@ -24,26 +24,32 @@ from .const import (
     CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
     CONF_CREATE_PLAYLISTS,
-    CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
     CONF_DOWNLOAD_VIDEOS,
-    CONF_LATEST_COUNT,
-    CONF_LATEST_DAYS,
-    CONF_LATEST_MINIMUM,
+    CONF_MY_SONGS_COUNT,
+    CONF_MY_SONGS_DAYS,
+    CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
-    CONF_QUALITY_LATEST,
     CONF_QUALITY_LIKED,
+    CONF_QUALITY_MY_SONGS,
     CONF_QUALITY_PLAYLISTS,
     CONF_SHOW_LIKED,
+    CONF_SHOW_MY_SONGS,
+    CONF_SHOW_PLAYLISTS,
     DEFAULT_ALL_PLAYLISTS,
     DEFAULT_DOWNLOAD_MODE,
-    DEFAULT_LATEST_COUNT,
-    DEFAULT_LATEST_DAYS,
-    DEFAULT_LATEST_MINIMUM,
+    DEFAULT_MY_SONGS_COUNT,
+    DEFAULT_MY_SONGS_DAYS,
+    DEFAULT_MY_SONGS_MINIMUM,
     DEFAULT_SHOW_LIKED,
+    DEFAULT_SHOW_MY_SONGS,
+    DEFAULT_SHOW_PLAYLISTS,
     DOMAIN,
+    DOWNLOAD_MODE_ARCHIVE,
+    DOWNLOAD_MODE_CACHE,
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
@@ -100,7 +106,7 @@ def _write_m3u8_playlists(
 
     Each source tag (e.g. "liked", "playlist:abc") is resolved to a playlist
     name via *source_to_name*.  The "liked" source always maps to
-    "Liked Songs"; "latest" sources are intentionally excluded from playlists.
+    "Liked Songs"; "my_songs" sources are intentionally excluded from playlists.
 
     *playlist_order* maps source tags to ordered clip ID lists as returned
     by the Suno API, ensuring playlists respect the user's chosen order.
@@ -238,19 +244,24 @@ async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
 
 _SOURCE_MODE_KEYS: dict[str, str] = {
     "liked": CONF_DOWNLOAD_MODE_LIKED,
-    "latest": CONF_DOWNLOAD_MODE_LATEST,
+    "my_songs": CONF_DOWNLOAD_MODE_MY_SONGS,
 }
 
 
-def _source_uses_mirror_mode(source: str, options: dict[str, Any]) -> bool:
-    """Check if a source tag's mode is 'mirror' (managed, delete removed)."""
+def _get_source_mode(source: str, options: dict[str, Any]) -> str:
+    """Return the configured download mode for a source tag."""
     if source.startswith("playlist:"):
         key: str | None = CONF_DOWNLOAD_MODE_PLAYLISTS
     else:
         key = _SOURCE_MODE_KEYS.get(source)
     if key is None:
-        return True  # Unknown sources default to mirror (delete-safe)
-    return bool(options.get(key, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
+        return DOWNLOAD_MODE_MIRROR
+    return str(options.get(key, DEFAULT_DOWNLOAD_MODE))
+
+
+def _source_preserves_files(source: str, options: dict[str, Any]) -> bool:
+    """Return True if the source mode keeps files permanently (archive only)."""
+    return _get_source_mode(source, options) == DOWNLOAD_MODE_ARCHIVE
 
 
 def _clip_entry(item: DownloadItem, rel_path: str, file_size: int) -> dict[str, Any]:
@@ -513,9 +524,9 @@ class SunoDownloadManager:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            # Only delete if ALL sources use "mirror" mode
+            # Only delete if NO source preserves files (archive mode)
             # Empty sources → all() returns True → delete (orphan cleanup)
-            if all(_source_uses_mirror_mode(src, options) for src in sources):
+            if all(not _source_preserves_files(src, options) for src in sources):
                 to_delete.append(cid)
         self._pending = len(to_download)
         self._notify_coordinator()
@@ -670,18 +681,25 @@ class SunoDownloadManager:
         playlist_order: dict[str, list[str]] = {}
         prev_clips = self._state.get("clips", {})
         if options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
-            liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
-            try:
-                liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
-                playlist_order["liked"] = [c.id for c in liked]
-                for clip in liked:
-                    _add_clip(clip_map, clip, "liked", liked_quality)
-            except Exception:
-                _LOGGER.warning("Failed to fetch liked songs for sync")
-                _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
+            if _get_source_mode("liked", options) == DOWNLOAD_MODE_CACHE:
+                pass  # cache only — skip download
+            else:
+                liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
+                try:
+                    liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
+                    playlist_order["liked"] = [c.id for c in liked]
+                    for clip in liked:
+                        _add_clip(clip_map, clip, "liked", liked_quality)
+                except Exception:
+                    _LOGGER.warning("Failed to fetch liked songs for sync")
+                    _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
         sync_all = options.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS)
         selected_ids = options.get(CONF_PLAYLISTS, []) or []
-        if sync_all or selected_ids:
+        if not options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS):
+            pass  # playlists disabled
+        elif _get_source_mode("playlist:", options) == DOWNLOAD_MODE_CACHE:
+            pass  # cache only — skip download
+        elif sync_all or selected_ids:
             playlist_quality = options.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH)
             try:
                 playlists = coordinator_data.playlists if coordinator_data else await client.get_playlists()
@@ -705,49 +723,56 @@ class SunoDownloadManager:
             except Exception:
                 _LOGGER.warning("Failed to fetch playlists for sync")
                 _preserve_by(preserved, prev_clips, lambda s: any(x.startswith("playlist:") for x in s))
-        latest_count = options.get(CONF_LATEST_COUNT, DEFAULT_LATEST_COUNT)
-        latest_days = options.get(CONF_LATEST_DAYS, DEFAULT_LATEST_DAYS)
-        minimum = int(options.get(CONF_LATEST_MINIMUM, DEFAULT_LATEST_MINIMUM))
-        if latest_count or latest_days or minimum:
-            latest_quality = options.get(CONF_QUALITY_LATEST, QUALITY_STANDARD)
-            try:
-                all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
+        if not options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS):
+            pass  # my songs disabled
+        elif _get_source_mode("my_songs", options) == DOWNLOAD_MODE_CACHE:
+            pass  # cache only — skip download
+        else:
+            my_songs_count = options.get(CONF_MY_SONGS_COUNT, DEFAULT_MY_SONGS_COUNT)
+            my_songs_days = options.get(CONF_MY_SONGS_DAYS, DEFAULT_MY_SONGS_DAYS)
+            minimum = int(options.get(CONF_MY_SONGS_MINIMUM, DEFAULT_MY_SONGS_MINIMUM))
+            if my_songs_count or my_songs_days or minimum:
+                my_songs_quality = options.get(CONF_QUALITY_MY_SONGS, QUALITY_STANDARD)
+                try:
+                    all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
 
-                # Start with all clips, then narrow
-                by_count: set[str] | None = set(c.id for c in all_clips[: int(latest_count)]) if latest_count else None
-                by_days: set[str] | None = None
-                if latest_days:
-                    cutoff = datetime.now(tz=UTC).timestamp() - int(latest_days) * 86400
-                    by_days = set()
+                    # Start with all clips, then narrow
+                    by_count: set[str] | None = None
+                    if my_songs_count:
+                        by_count = set(c.id for c in all_clips[: int(my_songs_count)])
+                    by_days: set[str] | None = None
+                    if my_songs_days:
+                        cutoff = datetime.now(tz=UTC).timestamp() - int(my_songs_days) * 86400
+                        by_days = set()
+                        for clip in all_clips:
+                            if clip.created_at:
+                                try:
+                                    created = datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))
+                                    if created.timestamp() >= cutoff:
+                                        by_days.add(clip.id)
+                                except ValueError:
+                                    pass
+
+                    # AND logic: intersect the filters that are active
+                    if by_count is not None and by_days is not None:
+                        my_songs_set = by_count & by_days  # intersection
+                    elif by_count is not None:
+                        my_songs_set = by_count
+                    elif by_days is not None:
+                        my_songs_set = by_days
+                    else:
+                        my_songs_set = set()
+
+                    # Minimum floor: pad with most recent songs if below threshold
+                    if minimum and len(my_songs_set) < minimum:
+                        my_songs_set |= {c.id for c in all_clips[:minimum]}
+
                     for clip in all_clips:
-                        if clip.created_at:
-                            try:
-                                created = datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))
-                                if created.timestamp() >= cutoff:
-                                    by_days.add(clip.id)
-                            except ValueError:
-                                pass
-
-                # AND logic: intersect the filters that are active
-                if by_count is not None and by_days is not None:
-                    latest_set = by_count & by_days  # intersection
-                elif by_count is not None:
-                    latest_set = by_count
-                elif by_days is not None:
-                    latest_set = by_days
-                else:
-                    latest_set = set()
-
-                # Minimum floor: pad with most recent songs if below threshold
-                if minimum and len(latest_set) < minimum:
-                    latest_set |= {c.id for c in all_clips[:minimum]}
-
-                for clip in all_clips:
-                    if clip.id in latest_set:
-                        _add_clip(clip_map, clip, "latest", latest_quality)
-            except Exception:
-                _LOGGER.warning("Failed to fetch latest songs for sync")
-                _preserve_by(preserved, prev_clips, lambda s: "latest" in s)
+                        if clip.id in my_songs_set:
+                            _add_clip(clip_map, clip, "my_songs", my_songs_quality)
+                except Exception:
+                    _LOGGER.warning("Failed to fetch my songs for sync")
+                    _preserve_by(preserved, prev_clips, lambda s: "my_songs" in s)
         preserved -= clip_map.keys()
         return list(clip_map.values()), preserved, source_to_name, playlist_order
 

@@ -11,16 +11,19 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.suno.const import (
     CONF_ALL_PLAYLISTS,
-    CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
-    CONF_LATEST_COUNT,
-    CONF_LATEST_DAYS,
-    CONF_LATEST_MINIMUM,
+    CONF_MY_SONGS_COUNT,
+    CONF_MY_SONGS_DAYS,
+    CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
     CONF_SHOW_LIKED,
-    DOWNLOAD_MODE_COLLECT,
+    CONF_SHOW_MY_SONGS,
+    CONF_SHOW_PLAYLISTS,
+    DOWNLOAD_MODE_ARCHIVE,
+    DOWNLOAD_MODE_CACHE,
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
@@ -31,8 +34,9 @@ from custom_components.suno.download import (
     _add_clip,
     _build_download_summary,
     _clip_path,
+    _get_source_mode,
     _sanitise_filename,
-    _source_uses_mirror_mode,
+    _source_preserves_files,
     _write_file,
     _write_m3u8_playlists,
 )
@@ -347,7 +351,7 @@ async def test_source_breakdown_counts_sources(hass: HomeAssistant) -> None:
         "clips": {
             "c1": {"sources": ["liked"]},
             "c2": {"sources": ["liked", "playlist:abc"]},
-            "c3": {"sources": ["latest"]},
+            "c3": {"sources": ["my_songs"]},
             "c4": {"sources": ["playlist:abc"]},
         },
         "last_download": None,
@@ -355,7 +359,7 @@ async def test_source_breakdown_counts_sources(hass: HomeAssistant) -> None:
     breakdown = sync.source_breakdown
     assert breakdown["liked"] == 2
     assert breakdown["playlist:abc"] == 2
-    assert breakdown["latest"] == 1
+    assert breakdown["my_songs"] == 1
 
 
 # ── _build_desired with API failure ────────────────────────────────
@@ -367,7 +371,7 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
     sync._state = {
         "clips": {
             "clip-liked": {"path": "liked.flac", "sources": ["liked"]},
-            "clip-latest": {"path": "latest.flac", "sources": ["latest"]},
+            "clip-my-songs": {"path": "my_songs.flac", "sources": ["my_songs"]},
         },
         "last_download": None,
     }
@@ -377,14 +381,12 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
     client.get_playlists = AsyncMock(return_value=[])
     client.get_all_songs = AsyncMock(return_value=[])
 
-    from custom_components.suno.const import CONF_LATEST_COUNT, CONF_LATEST_DAYS
-
     options = {
         CONF_SHOW_LIKED: True,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: None,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
     }
 
     desired, preserved, _, _ = await sync._build_desired(options, client)
@@ -393,7 +395,7 @@ async def test_build_desired_preserves_on_api_failure(hass: HomeAssistant) -> No
     assert "clip-liked" in preserved
 
 
-# ── Latest AND logic ───────────────────────────────────────────────
+# ── My songs AND logic ───────────────────────────────────────────────
 
 
 def _make_dated_clip(clip_id: str, title: str = "Song", created: str = "2026-03-15T10:00:00Z"):
@@ -415,10 +417,8 @@ def _make_dated_clip(clip_id: str, title: str = "Song", created: str = "2026-03-
     )
 
 
-async def test_latest_count_only(hass: HomeAssistant) -> None:
+async def test_my_songs_count_only(hass: HomeAssistant) -> None:
     """count=5, days=0 returns top 5 clips."""
-    from custom_components.suno.const import CONF_LATEST_COUNT, CONF_LATEST_DAYS
-
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
         await sync.async_init()
@@ -433,8 +433,8 @@ async def test_latest_count_only(hass: HomeAssistant) -> None:
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: 5,
-        CONF_LATEST_DAYS: None,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 5
@@ -442,11 +442,9 @@ async def test_latest_count_only(hass: HomeAssistant) -> None:
     assert ids == {f"clip-{i}" for i in range(5)}
 
 
-async def test_latest_days_only(hass: HomeAssistant) -> None:
+async def test_my_songs_days_only(hass: HomeAssistant) -> None:
     """count=0, days=7 returns all within 7 days."""
     from datetime import timedelta
-
-    from custom_components.suno.const import CONF_LATEST_COUNT, CONF_LATEST_DAYS
 
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -469,8 +467,8 @@ async def test_latest_days_only(hass: HomeAssistant) -> None:
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: 7,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: 7,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
@@ -479,11 +477,9 @@ async def test_latest_days_only(hass: HomeAssistant) -> None:
     assert "clip-old" not in ids
 
 
-async def test_latest_both_and(hass: HomeAssistant) -> None:
+async def test_my_songs_both_and(hass: HomeAssistant) -> None:
     """count=3, days=7 returns at most 3 within 7 days (intersection)."""
     from datetime import timedelta
-
-    from custom_components.suno.const import CONF_LATEST_COUNT, CONF_LATEST_DAYS
 
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -511,8 +507,8 @@ async def test_latest_both_and(hass: HomeAssistant) -> None:
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: 3,
-        CONF_LATEST_DAYS: 7,
+        CONF_MY_SONGS_COUNT: 3,
+        CONF_MY_SONGS_DAYS: 7,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     ids = {d.clip.id for d in desired}
@@ -522,10 +518,8 @@ async def test_latest_both_and(hass: HomeAssistant) -> None:
     assert "clip-old-0" not in ids
 
 
-async def test_latest_both_zero_disabled(hass: HomeAssistant) -> None:
-    """count=0, days=0 means latest is disabled."""
-    from custom_components.suno.const import CONF_LATEST_COUNT, CONF_LATEST_DAYS
-
+async def test_my_songs_both_zero_disabled(hass: HomeAssistant) -> None:
+    """count=0, days=0 means my_songs is disabled."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
         await sync.async_init()
@@ -539,8 +533,8 @@ async def test_latest_both_zero_disabled(hass: HomeAssistant) -> None:
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: None,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     assert len(desired) == 0
@@ -666,11 +660,11 @@ class TestWriteM3u8Playlists:
             content = (tmp_path / f).read_text(encoding="utf-8")
             assert content.count("song.flac") == 1
 
-    def test_latest_source_excluded_from_m3u8(self, tmp_path: Path) -> None:
-        """Clips with only a 'latest' source produce no M3U8 file."""
+    def test_my_songs_source_excluded_from_m3u8(self, tmp_path: Path) -> None:
+        """Clips with only a 'my_songs' source produce no M3U8 file."""
         clip = self._make_clip()
         clips_state = {"clip1": {"path": "song.flac", "title": "Song"}}
-        desired = [DownloadItem(clip=clip, sources=["latest"], quality=QUALITY_STANDARD)]
+        desired = [DownloadItem(clip=clip, sources=["my_songs"], quality=QUALITY_STANDARD)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
@@ -1068,10 +1062,10 @@ async def test_reconcile_cleans_empty_dirs(hass: HomeAssistant, tmp_path: Path) 
 
 
 class TestSyncRetentionModes:
-    """Tests for per-source sync/copy retention modes."""
+    """Tests for per-source sync/archive/cache retention modes."""
 
     def test_sync_mode_deletes_removed_clips(self) -> None:
-        """Clip with source ['liked'], mode=sync → deleted when removed from desired."""
+        """Clip with source ['liked'], mode=mirror → deleted when removed from desired."""
         clips_state = {
             "clip-1": {"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked"]},
         }
@@ -1085,19 +1079,19 @@ class TestSyncRetentionModes:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            if all(_source_uses_mirror_mode(src, options) for src in sources):
+            if all(not _source_preserves_files(src, options) for src in sources):
                 to_delete.append(cid)
 
         assert to_delete == ["clip-1"]
 
-    def test_copy_mode_keeps_removed_clips(self) -> None:
-        """Clip with source ['liked'], mode=copy → NOT deleted when removed from desired."""
+    def test_archive_mode_keeps_removed_clips(self) -> None:
+        """Clip with source ['liked'], mode=archive → NOT deleted when removed from desired."""
         clips_state = {
             "clip-1": {"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked"]},
         }
         seen_ids: set[str] = set()
         preserved_ids: set[str] = set()
-        options = {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_COLLECT}
+        options = {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}
 
         to_delete = []
         for cid in clips_state:
@@ -1105,21 +1099,21 @@ class TestSyncRetentionModes:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            if all(_source_uses_mirror_mode(src, options) for src in sources):
+            if all(not _source_preserves_files(src, options) for src in sources):
                 to_delete.append(cid)
 
         assert to_delete == []
 
-    def test_mixed_sources_copy_wins(self) -> None:
-        """Clip with sources ['liked', 'latest']. Liked=copy, latest=sync → NOT deleted."""
+    def test_mixed_sources_archive_wins(self) -> None:
+        """Clip with sources ['liked', 'my_songs']. Liked=archive, my_songs=mirror → NOT deleted."""
         clips_state = {
-            "clip-1": {"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked", "latest"]},
+            "clip-1": {"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked", "my_songs"]},
         }
         seen_ids: set[str] = set()
         preserved_ids: set[str] = set()
         options = {
-            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_COLLECT,
-            CONF_DOWNLOAD_MODE_LATEST: DOWNLOAD_MODE_MIRROR,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_MIRROR,
         }
 
         to_delete = []
@@ -1128,7 +1122,7 @@ class TestSyncRetentionModes:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            if all(_source_uses_mirror_mode(src, options) for src in sources):
+            if all(not _source_preserves_files(src, options) for src in sources):
                 to_delete.append(cid)
 
         assert to_delete == []
@@ -1148,7 +1142,27 @@ class TestSyncRetentionModes:
                 continue
             entry = clips_state[cid]
             sources = entry.get("sources", [])
-            if all(_source_uses_mirror_mode(src, options) for src in sources):
+            if all(not _source_preserves_files(src, options) for src in sources):
+                to_delete.append(cid)
+
+        assert to_delete == ["clip-1"]
+
+    def test_cache_mode_deletes_like_mirror(self) -> None:
+        """Cache mode sources are not preserved (treated like mirror for deletion)."""
+        clips_state = {
+            "clip-1": {"path": "2026-01-15/Song [clip-1].flac", "sources": ["my_songs"]},
+        }
+        seen_ids: set[str] = set()
+        preserved_ids: set[str] = set()
+        options = {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}
+
+        to_delete = []
+        for cid in clips_state:
+            if cid in seen_ids or cid in preserved_ids:
+                continue
+            entry = clips_state[cid]
+            sources = entry.get("sources", [])
+            if all(not _source_preserves_files(src, options) for src in sources):
                 to_delete.append(cid)
 
         assert to_delete == ["clip-1"]
@@ -1174,16 +1188,16 @@ class TestAddClipQualityMerge:
         clip = _make_clip("clip-merge-2", "Stays High")
         clip_map: dict[str, DownloadItem] = {}
         _add_clip(clip_map, clip, "liked", QUALITY_HIGH)
-        _add_clip(clip_map, clip, "latest", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "my_songs", QUALITY_STANDARD)
         assert clip_map["clip-merge-2"].quality == QUALITY_HIGH
-        assert set(clip_map["clip-merge-2"].sources) == {"liked", "latest"}
+        assert set(clip_map["clip-merge-2"].sources) == {"liked", "my_songs"}
 
     def test_same_quality_no_change(self) -> None:
         """Same quality from both sources stays unchanged."""
         clip = _make_clip("clip-merge-3", "Same")
         clip_map: dict[str, DownloadItem] = {}
         _add_clip(clip_map, clip, "liked", QUALITY_STANDARD)
-        _add_clip(clip_map, clip, "latest", QUALITY_STANDARD)
+        _add_clip(clip_map, clip, "my_songs", QUALITY_STANDARD)
         assert clip_map["clip-merge-3"].quality == QUALITY_STANDARD
 
     def test_first_add_creates_entry(self) -> None:
@@ -1197,36 +1211,64 @@ class TestAddClipQualityMerge:
         assert item.quality == QUALITY_HIGH
 
 
-# ── _source_uses_mirror_mode unit tests ─────────────────────────────
+# ── _get_source_mode / _source_preserves_files unit tests ───────────
 
 
 class TestSourceUsesSyncMode:
-    """Direct unit tests for _source_uses_mirror_mode."""
+    """Direct unit tests for _get_source_mode and _source_preserves_files."""
 
-    def test_liked_sync_mode(self) -> None:
-        assert _source_uses_mirror_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}) is True
+    def test_liked_mirror_mode(self) -> None:
+        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}) == DOWNLOAD_MODE_MIRROR
 
-    def test_liked_copy_mode(self) -> None:
-        assert _source_uses_mirror_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_COLLECT}) is False
+    def test_liked_archive_mode(self) -> None:
+        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}) == DOWNLOAD_MODE_ARCHIVE
 
-    def test_playlist_sync_mode(self) -> None:
-        assert _source_uses_mirror_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR}) is True
+    def test_liked_cache_mode(self) -> None:
+        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
 
-    def test_playlist_copy_mode(self) -> None:
-        assert _source_uses_mirror_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_COLLECT}) is False
+    def test_playlist_mirror_mode(self) -> None:
+        assert (
+            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR})
+            == DOWNLOAD_MODE_MIRROR
+        )
 
-    def test_latest_sync_mode(self) -> None:
-        assert _source_uses_mirror_mode("latest", {CONF_DOWNLOAD_MODE_LATEST: DOWNLOAD_MODE_MIRROR}) is True
+    def test_playlist_archive_mode(self) -> None:
+        assert (
+            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_ARCHIVE})
+            == DOWNLOAD_MODE_ARCHIVE
+        )
 
-    def test_latest_copy_mode(self) -> None:
-        assert _source_uses_mirror_mode("latest", {CONF_DOWNLOAD_MODE_LATEST: DOWNLOAD_MODE_COLLECT}) is False
+    def test_playlist_cache_mode(self) -> None:
+        assert (
+            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
+        )
 
-    def test_unknown_source_defaults_to_sync(self) -> None:
-        assert _source_uses_mirror_mode("unknown_source", {}) is True
+    def test_my_songs_mirror_mode(self) -> None:
+        assert _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_MIRROR}) == DOWNLOAD_MODE_MIRROR
+
+    def test_my_songs_archive_mode(self) -> None:
+        assert (
+            _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_ARCHIVE}) == DOWNLOAD_MODE_ARCHIVE
+        )
+
+    def test_my_songs_cache_mode(self) -> None:
+        assert _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
+
+    def test_unknown_source_defaults_to_mirror(self) -> None:
+        assert _get_source_mode("unknown_source", {}) == DOWNLOAD_MODE_MIRROR
 
     def test_default_mode_when_key_missing(self) -> None:
-        """Missing config key uses DEFAULT_SYNC_MODE ('sync')."""
-        assert _source_uses_mirror_mode("liked", {}) is True
+        """Missing config key uses DEFAULT_DOWNLOAD_MODE ('mirror')."""
+        assert _get_source_mode("liked", {}) == DOWNLOAD_MODE_MIRROR
+
+    def test_preserves_files_true_for_archive(self) -> None:
+        assert _source_preserves_files("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}) is True
+
+    def test_preserves_files_false_for_mirror(self) -> None:
+        assert _source_preserves_files("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}) is False
+
+    def test_preserves_files_false_for_cache(self) -> None:
+        assert _source_preserves_files("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}) is False
 
 
 # ── get_downloaded_path edge cases ────────────────────────────────────
@@ -1339,8 +1381,8 @@ async def test_download_manager_skips_disabled_source(hass: HomeAssistant) -> No
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: None,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
     }
     desired, _, _, _ = await mgr._build_desired(options, client)
     assert len(desired) == 0
@@ -1364,10 +1406,10 @@ async def test_download_manager_empty_path_no_download(hass: HomeAssistant) -> N
     assert mgr.total_files == 0
 
 
-# ── Latest minimum songs ───────────────────────────────────────────
+# ── My songs minimum songs ───────────────────────────────────────────
 
 
-async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None:
+async def test_my_songs_minimum_pads_when_below_floor(hass: HomeAssistant) -> None:
     """Minimum pads with most recent clips when intersection is below threshold."""
     from datetime import timedelta
 
@@ -1391,9 +1433,9 @@ async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: 5,
-        CONF_LATEST_DAYS: 7,
-        CONF_LATEST_MINIMUM: 7,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 7,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     # Intersection of top-5 and within-7-days = 3 recent clips
@@ -1401,7 +1443,7 @@ async def test_latest_minimum_pads_when_below_floor(hass: HomeAssistant) -> None
     assert len(desired) == 7
 
 
-async def test_latest_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
+async def test_my_songs_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
     """Minimum=0 has no effect."""
     from datetime import timedelta
 
@@ -1421,16 +1463,16 @@ async def test_latest_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: 3,
-        CONF_LATEST_DAYS: 7,
-        CONF_LATEST_MINIMUM: 0,
+        CONF_MY_SONGS_COUNT: 3,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 0,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     # count=3, days=7, all clips are old → intersection is empty, minimum=0 → no padding
     assert len(desired) == 0
 
 
-async def test_latest_minimum_alone_triggers_latest(hass: HomeAssistant) -> None:
+async def test_my_songs_minimum_alone_triggers_my_songs(hass: HomeAssistant) -> None:
     """Minimum works when count=0 and days=0 (both filters disabled)."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -1446,16 +1488,16 @@ async def test_latest_minimum_alone_triggers_latest(hass: HomeAssistant) -> None
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: None,
-        CONF_LATEST_MINIMUM: 5,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+        CONF_MY_SONGS_MINIMUM: 5,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     # count=0, days=0 → empty set, but minimum=5 → pad to 5
     assert len(desired) == 5
 
 
-async def test_latest_minimum_capped_by_library_size(hass: HomeAssistant) -> None:
+async def test_my_songs_minimum_capped_by_library_size(hass: HomeAssistant) -> None:
     """Minimum can't exceed available clips."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -1471,16 +1513,16 @@ async def test_latest_minimum_capped_by_library_size(hass: HomeAssistant) -> Non
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: None,
-        CONF_LATEST_MINIMUM: 100,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+        CONF_MY_SONGS_MINIMUM: 100,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     # Only 3 clips exist, minimum=100 but capped
     assert len(desired) == 3
 
 
-async def test_latest_minimum_overrides_expired_days(hass: HomeAssistant) -> None:
+async def test_my_songs_minimum_overrides_expired_days(hass: HomeAssistant) -> None:
     """Minimum pads even when all clips are outside lookback period."""
     from datetime import timedelta
 
@@ -1500,9 +1542,9 @@ async def test_latest_minimum_overrides_expired_days(hass: HomeAssistant) -> Non
         CONF_SHOW_LIKED: False,
         CONF_ALL_PLAYLISTS: False,
         CONF_PLAYLISTS: [],
-        CONF_LATEST_COUNT: None,
-        CONF_LATEST_DAYS: 7,
-        CONF_LATEST_MINIMUM: 5,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 5,
     }
     desired, _, _, _ = await sync._build_desired(options, client)
     # days=7 → no clips match, but minimum=5 → pad with 5 most recent
@@ -2584,3 +2626,200 @@ async def test_manifest_write_failure_logged(hass: HomeAssistant, tmp_path: Path
 
     # Should complete without errors
     assert sync.errors == 0
+
+
+# ── Cache mode tests ──────────────────────────────────────────────
+
+
+async def test_cache_mode_excludes_from_download_set(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Cache-only sources produce no DownloadItems in _build_desired."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[_make_clip("clip-liked-1")])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[_make_clip("clip-ms-1")])
+
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_MY_SONGS: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
+        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    desired, _, _, _ = await sync._build_desired(options, client)
+    ids = {d.clip.id for d in desired}
+    # Liked clips included (mirror mode), my_songs excluded (cache mode)
+    assert "clip-liked-1" in ids
+    assert "clip-ms-1" not in ids
+
+
+async def test_cache_mode_cleans_up_existing_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Previously downloaded files are deleted when source switches to cache."""
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    orphan = sync_dir / "old-my-songs.flac"
+    orphan.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            "old-clip": {
+                "path": "old-my-songs.flac",
+                "title": "Old Song",
+                "created": "2026-01-01",
+                "sources": ["my_songs"],
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    assert sync.total_files == 1
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with patch.object(sync._store, "async_save"):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: False,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+            CONF_MY_SONGS_COUNT: 5,
+            CONF_MY_SONGS_DAYS: None,
+        }
+        await sync.async_download(opts, client)
+
+    # Cache mode produces no desired items, so the old clip is deleted
+    assert sync.total_files == 0
+    assert not orphan.exists()
+
+
+async def test_all_three_modes_coexist(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Mirror + Archive + Cache on different sections simultaneously."""
+    from custom_components.suno.models import SunoPlaylist
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    # Pre-populate state with a clip from each source that will be "removed"
+    initial_state = {
+        "clips": {
+            "old-pl": {
+                "path": "old-playlist.flac",
+                "title": "Old Playlist Song",
+                "created": "2026-01-01",
+                "sources": ["playlist:pl-1"],
+            },
+            "old-liked": {
+                "path": "old-liked.flac",
+                "title": "Old Liked Song",
+                "created": "2026-01-01",
+                "sources": ["liked"],
+            },
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    # API returns empty for all sources (simulating removal)
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[SunoPlaylist(id="pl-1", name="Test", image_url=None, num_clips=0)])
+    client.get_playlist_clips = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    (sync_dir / "old-playlist.flac").write_bytes(b"fLaC")
+    (sync_dir / "old-liked.flac").write_bytes(b"fLaC")
+
+    with patch.object(sync._store, "async_save"):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+            CONF_MY_SONGS_COUNT: 5,
+            CONF_MY_SONGS_DAYS: None,
+        }
+        await sync.async_download(opts, client)
+
+    clips = sync._state.get("clips", {})
+    # Playlist clip (mirror): deleted when removed from API
+    assert "old-pl" not in clips
+    # Liked clip (archive): kept even though removed from API
+    assert "old-liked" in clips
+
+
+async def test_build_desired_skips_cache_only_sources(hass: HomeAssistant) -> None:
+    """_build_desired makes no API calls for cache sections."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[_make_clip("c1")])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[_make_clip("c2")])
+
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_MY_SONGS: True,
+        CONF_SHOW_PLAYLISTS: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+        CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
+        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    desired, _, _, _ = await sync._build_desired(options, client)
+    assert len(desired) == 0
+    # Liked songs should not be fetched because cache mode skips before API call
+    client.get_liked_songs.assert_not_called()
+    client.get_all_songs.assert_not_called()
+
+
+async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
+    """show_playlists=False excludes playlists from desired set."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[_make_clip("c1")])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_PLAYLISTS: False,
+        CONF_SHOW_MY_SONGS: False,
+        CONF_ALL_PLAYLISTS: True,
+        CONF_PLAYLISTS: [],
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    desired, _, _, _ = await sync._build_desired(options, client)
+    ids = {d.clip.id for d in desired}
+    assert "c1" in ids
+    # Playlists and my_songs toggled off
+    client.get_playlists.assert_not_called()
+    client.get_all_songs.assert_not_called()

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -17,12 +19,22 @@ from .auth import ClerkAuth
 from .const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
-    CONF_DOWNLOAD_ENABLED,
+    CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
+    CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
+    CONF_SHOW_LIKED,
+    CONF_SHOW_MY_SONGS,
+    CONF_SHOW_PLAYLISTS,
     DATA_VIEW_REGISTERED,
     DEFAULT_CACHE_MAX_SIZE,
-    DEFAULT_DOWNLOAD_ENABLED,
+    DEFAULT_DOWNLOAD_MODE,
+    DEFAULT_DOWNLOAD_MODE_MY_SONGS,
+    DEFAULT_SHOW_LIKED,
+    DEFAULT_SHOW_MY_SONGS,
+    DEFAULT_SHOW_PLAYLISTS,
     DOMAIN,
+    DOWNLOAD_MODE_CACHE,
 )
 from .coordinator import SunoCoordinator
 from .exceptions import SunoAuthError, SunoConnectionError
@@ -34,6 +46,21 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.SENSOR]
 
 type SunoConfigEntry = ConfigEntry[SunoCoordinator]
+
+
+def _any_section_downloads(options: Mapping[str, Any]) -> bool:
+    """Return True if any enabled section uses Mirror or Archive mode."""
+    sections = [
+        (CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED, CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
+        (CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS, CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE),
+        (CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS, CONF_DOWNLOAD_MODE_MY_SONGS, DEFAULT_DOWNLOAD_MODE_MY_SONGS),
+    ]
+    for show_key, show_default, mode_key, mode_default in sections:
+        if options.get(show_key, show_default):
+            mode = options.get(mode_key, mode_default)
+            if mode != DOWNLOAD_MODE_CACHE:
+                return True
+    return False
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool:
@@ -97,7 +124,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
         hass.data[DATA_VIEW_REGISTERED] = True
 
     # Create download manager when downloads are enabled and path is configured
-    if entry.options.get(CONF_DOWNLOAD_ENABLED, DEFAULT_DOWNLOAD_ENABLED) and entry.options.get(CONF_DOWNLOAD_PATH):
+    if _any_section_downloads(entry.options) and entry.options.get(CONF_DOWNLOAD_PATH):
         from .download import SunoDownloadManager  # noqa: PLC0415
 
         coordinator.download_manager = await SunoDownloadManager.async_setup(hass, entry, coordinator, client)

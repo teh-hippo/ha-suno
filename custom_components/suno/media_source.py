@@ -12,11 +12,11 @@ from . import SunoConfigEntry
 from .const import (
     CONF_QUALITY_LIKED,
     CONF_QUALITY_PLAYLISTS,
-    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
+    CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
-    DEFAULT_SHOW_LATEST,
     DEFAULT_SHOW_LIKED,
+    DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
     DOMAIN,
     QUALITY_HIGH,
@@ -137,8 +137,8 @@ class SunoMediaSource(MediaSource):
             return await self._browse_root(entry, coordinator)
         if identifier == "liked":
             return self._browse_liked(coordinator, ct)
-        if identifier == "latest":
-            return await self._browse_latest(coordinator, ct)
+        if identifier == "my_songs":
+            return await self._browse_my_songs(coordinator, ct)
         if identifier == "playlists":
             return self._browse_playlists(coordinator)
         if identifier.startswith("playlist/"):
@@ -155,8 +155,8 @@ class SunoMediaSource(MediaSource):
         data: SunoData = coordinator.data
         if entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             children.append(_folder("liked", f"Liked Songs ({len(data.liked_clips)})"))
-        if entry.options.get(CONF_SHOW_LATEST, DEFAULT_SHOW_LATEST):
-            children.append(_folder("latest", "Your Latest"))
+        if entry.options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS):
+            children.append(_folder("my_songs", "My Songs"))
         if entry.options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS) and data.playlists:
             children.append(_folder("playlists", f"Playlists ({len(data.playlists)})"))
         children.append(_folder("all", f"All Songs ({len(data.clips)})"))
@@ -167,11 +167,11 @@ class SunoMediaSource(MediaSource):
         liked = coordinator.data.liked_clips
         return _folder("liked", f"Liked Songs ({len(liked)})", [_clip_to_media(c, ct) for c in liked])
 
-    async def _browse_latest(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
-        """Show latest songs from the cached library, sorted by newest first."""
+    async def _browse_my_songs(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+        """Show user's songs from the cached library, sorted by newest first."""
         clips = sorted(coordinator.data.clips, key=lambda c: c.created_at or "", reverse=True)[:20]
         children = [_clip_to_media(c, ct) for c in clips]
-        return _folder("latest", f"Your Latest ({len(children)})", children)
+        return _folder("my_songs", f"My Songs ({len(children)})", children)
 
     def _browse_playlists(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
         """Show playlist folders."""

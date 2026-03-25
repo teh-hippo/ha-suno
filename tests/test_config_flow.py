@@ -14,27 +14,26 @@ from custom_components.suno.const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
     CONF_CREATE_PLAYLISTS,
-    CONF_DOWNLOAD_ENABLED,
-    CONF_DOWNLOAD_MODE_LATEST,
     CONF_DOWNLOAD_MODE_LIKED,
+    CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
-    CONF_LATEST_COUNT,
-    CONF_LATEST_DAYS,
-    CONF_LATEST_MINIMUM,
+    CONF_MY_SONGS_COUNT,
+    CONF_MY_SONGS_DAYS,
+    CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
-    CONF_QUALITY_LATEST,
     CONF_QUALITY_LIKED,
+    CONF_QUALITY_MY_SONGS,
     CONF_QUALITY_PLAYLISTS,
-    CONF_SHOW_LATEST,
     CONF_SHOW_LIKED,
+    CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
-    DEFAULT_DOWNLOAD_ENABLED,
     DEFAULT_DOWNLOAD_MODE,
-    DEFAULT_LATEST_COUNT,
-    DEFAULT_LATEST_DAYS,
-    DEFAULT_LATEST_MINIMUM,
+    DEFAULT_DOWNLOAD_MODE_MY_SONGS,
+    DEFAULT_MY_SONGS_COUNT,
+    DEFAULT_MY_SONGS_DAYS,
+    DEFAULT_MY_SONGS_MINIMUM,
     DOMAIN,
     QUALITY_HIGH,
     QUALITY_STANDARD,
@@ -88,21 +87,20 @@ async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry: AsyncMoc
     assert result["title"] == "Suno"
     assert result["data"][CONF_COOKIE] == MOCK_COOKIE
     assert result["options"][CONF_SHOW_LIKED] is True
-    assert result["options"][CONF_SHOW_LATEST] is True
+    assert result["options"][CONF_SHOW_MY_SONGS] is True
     assert result["options"][CONF_SHOW_PLAYLISTS] is True
-    assert result["options"][CONF_DOWNLOAD_ENABLED] is DEFAULT_DOWNLOAD_ENABLED
     assert result["options"][CONF_DOWNLOAD_PATH] == ""
     assert result["options"][CONF_CREATE_PLAYLISTS] is True
     assert result["options"][CONF_CACHE_MAX_SIZE] == DEFAULT_CACHE_MAX_SIZE
     assert result["options"][CONF_QUALITY_LIKED] == QUALITY_HIGH
     assert result["options"][CONF_QUALITY_PLAYLISTS] == QUALITY_HIGH
-    assert result["options"][CONF_QUALITY_LATEST] == QUALITY_STANDARD
+    assert result["options"][CONF_QUALITY_MY_SONGS] == QUALITY_STANDARD
     assert result["options"][CONF_DOWNLOAD_MODE_LIKED] == DEFAULT_DOWNLOAD_MODE
     assert result["options"][CONF_DOWNLOAD_MODE_PLAYLISTS] == DEFAULT_DOWNLOAD_MODE
-    assert result["options"][CONF_DOWNLOAD_MODE_LATEST] == DEFAULT_DOWNLOAD_MODE
-    assert result["options"][CONF_LATEST_COUNT] == DEFAULT_LATEST_COUNT
-    assert result["options"][CONF_LATEST_DAYS] == DEFAULT_LATEST_DAYS
-    assert result["options"][CONF_LATEST_MINIMUM] == DEFAULT_LATEST_MINIMUM
+    assert result["options"][CONF_DOWNLOAD_MODE_MY_SONGS] == DEFAULT_DOWNLOAD_MODE_MY_SONGS
+    assert result["options"][CONF_MY_SONGS_COUNT] == DEFAULT_MY_SONGS_COUNT
+    assert result["options"][CONF_MY_SONGS_DAYS] == DEFAULT_MY_SONGS_DAYS
+    assert result["options"][CONF_MY_SONGS_MINIMUM] == DEFAULT_MY_SONGS_MINIMUM
     assert result["options"][CONF_ALL_PLAYLISTS] is True
     assert result["options"][CONF_PLAYLISTS] == []
 
@@ -305,9 +303,8 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
             result["flow_id"],
             {
                 CONF_SHOW_LIKED: False,
-                CONF_SHOW_LATEST: False,
+                CONF_SHOW_MY_SONGS: False,
                 CONF_SHOW_PLAYLISTS: False,
-                CONF_DOWNLOAD_ENABLED: False,
                 CONF_CACHE_MAX_SIZE: 1000,
             },
         )
@@ -316,7 +313,7 @@ async def test_reconfigure_flow_updates_options(hass: HomeAssistant, mock_suno_c
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.options[CONF_SHOW_LIKED] is False
-    assert entry.options[CONF_SHOW_LATEST] is False
+    assert entry.options[CONF_SHOW_MY_SONGS] is False
     assert entry.options[CONF_CACHE_MAX_SIZE] == 1000
 
 
@@ -346,8 +343,7 @@ async def test_options_flow_library_step(hass: HomeAssistant, mock_suno_client: 
     schema_keys = {str(k) for k in result["data_schema"].schema}
     assert CONF_SHOW_PLAYLISTS in schema_keys
     assert CONF_SHOW_LIKED in schema_keys
-    assert CONF_SHOW_LATEST in schema_keys
-    assert CONF_DOWNLOAD_ENABLED in schema_keys
+    assert CONF_SHOW_MY_SONGS in schema_keys
     assert CONF_DOWNLOAD_PATH in schema_keys
     assert CONF_CACHE_MAX_SIZE in schema_keys
     # create_playlists only shown when download_path is non-empty (default is "")
@@ -373,17 +369,16 @@ async def test_options_flow_conditional_routing(hass: HomeAssistant, mock_suno_c
             {
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
-                CONF_SHOW_LATEST: False,
-                CONF_DOWNLOAD_ENABLED: False,
+                CONF_SHOW_MY_SONGS: False,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
             },
         )
 
-    # Should skip straight to CREATE_ENTRY (no playlists/liked/latest pages)
+    # Should skip straight to CREATE_ENTRY (no playlists/liked/my_songs pages)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_SHOW_PLAYLISTS] is False
     assert result["data"][CONF_SHOW_LIKED] is False
-    assert result["data"][CONF_SHOW_LATEST] is False
+    assert result["data"][CONF_SHOW_MY_SONGS] is False
 
 
 async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -404,9 +399,8 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
             result["flow_id"],
             {
                 CONF_SHOW_LIKED: True,
-                CONF_SHOW_LATEST: True,
+                CONF_SHOW_MY_SONGS: True,
                 CONF_SHOW_PLAYLISTS: True,
-                CONF_DOWNLOAD_ENABLED: True,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: 2000,
@@ -422,7 +416,7 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
         result["flow_id"],
         {
             CONF_QUALITY_PLAYLISTS: "standard",
-            CONF_DOWNLOAD_MODE_PLAYLISTS: "collect",
+            CONF_DOWNLOAD_MODE_PLAYLISTS: "archive",
             CONF_ALL_PLAYLISTS: True,
         },
     )
@@ -438,30 +432,30 @@ async def test_options_flow_saves(hass: HomeAssistant, mock_suno_client: AsyncMo
             CONF_DOWNLOAD_MODE_LIKED: "mirror",
         },
     )
-    # Should advance to latest step
+    # Should advance to my_songs step
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "latest"
+    assert result["step_id"] == "my_songs"
 
-    # Step 4: Latest config
+    # Step 4: My Songs config
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
-            CONF_QUALITY_LATEST: "standard",
-            CONF_DOWNLOAD_MODE_LATEST: "mirror",
-            CONF_LATEST_COUNT: 50,
-            CONF_LATEST_DAYS: 14,
-            CONF_LATEST_MINIMUM: 10,
+            CONF_QUALITY_MY_SONGS: "standard",
+            CONF_DOWNLOAD_MODE_MY_SONGS: "mirror",
+            CONF_MY_SONGS_COUNT: 50,
+            CONF_MY_SONGS_DAYS: 14,
+            CONF_MY_SONGS_MINIMUM: 10,
         },
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_CACHE_MAX_SIZE] == 2000
     assert result["data"][CONF_QUALITY_PLAYLISTS] == "standard"
-    assert result["data"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "collect"
+    assert result["data"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "archive"
     assert result["data"][CONF_QUALITY_LIKED] == "high"
     assert result["data"][CONF_DOWNLOAD_MODE_LIKED] == "mirror"
-    assert result["data"][CONF_LATEST_COUNT] == 50
-    assert result["data"][CONF_LATEST_MINIMUM] == 10
+    assert result["data"][CONF_MY_SONGS_COUNT] == 50
+    assert result["data"][CONF_MY_SONGS_MINIMUM] == 10
 
 
 # ── Download path conflict ───────────────────────────────────────────
@@ -494,8 +488,7 @@ async def test_download_path_conflict_detected(hass: HomeAssistant, mock_suno_cl
             {
                 CONF_SHOW_PLAYLISTS: True,
                 CONF_SHOW_LIKED: True,
-                CONF_SHOW_LATEST: True,
-                CONF_DOWNLOAD_ENABLED: True,
+                CONF_SHOW_MY_SONGS: True,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
@@ -528,8 +521,7 @@ async def test_download_path_no_conflict_different_paths(hass: HomeAssistant, mo
             {
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
-                CONF_SHOW_LATEST: False,
-                CONF_DOWNLOAD_ENABLED: True,
+                CONF_SHOW_MY_SONGS: False,
                 CONF_DOWNLOAD_PATH: "/media/suno-a",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
@@ -559,8 +551,7 @@ async def test_download_path_self_reference_no_conflict(hass: HomeAssistant, moc
             {
                 CONF_SHOW_PLAYLISTS: False,
                 CONF_SHOW_LIKED: False,
-                CONF_SHOW_LATEST: False,
-                CONF_DOWNLOAD_ENABLED: True,
+                CONF_SHOW_MY_SONGS: False,
                 CONF_DOWNLOAD_PATH: "/media/suno",
                 CONF_CREATE_PLAYLISTS: True,
                 CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
@@ -620,3 +611,88 @@ async def test_validate_download_path_oserror(hass: HomeAssistant, tmp_path) -> 
         result = await flow._validate_download_path(bad_path)
 
     assert result is False
+
+
+# ── Default mode tests ───────────────────────────────────────────────
+
+
+async def test_my_songs_default_mode_is_cache(hass: HomeAssistant, mock_setup_entry) -> None:
+    """Verify My Songs section defaults to Cache Only mode."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=MOCK_USER_ID))
+    mock_client.get_feed = AsyncMock(return_value=[])
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: MOCK_COOKIE},
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_DOWNLOAD_MODE_MY_SONGS] == DEFAULT_DOWNLOAD_MODE_MY_SONGS
+    assert result["options"][CONF_DOWNLOAD_MODE_MY_SONGS] == "cache"
+
+
+async def test_playlists_liked_default_mode_is_mirror(hass: HomeAssistant, mock_setup_entry) -> None:
+    """Verify Playlists and Liked Songs default to Mirror mode."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=MOCK_USER_ID))
+    mock_client.get_feed = AsyncMock(return_value=[])
+
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: MOCK_COOKIE},
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"][CONF_DOWNLOAD_MODE_PLAYLISTS] == DEFAULT_DOWNLOAD_MODE
+    assert result["options"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "mirror"
+    assert result["options"][CONF_DOWNLOAD_MODE_LIKED] == DEFAULT_DOWNLOAD_MODE
+    assert result["options"][CONF_DOWNLOAD_MODE_LIKED] == "mirror"
+
+
+async def test_options_flow_archive_mode_valid(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Verify Archive is a selectable mode in the options flow."""
+    entry = make_entry(options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno"})
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    # Step 1: Library page — enable playlists only
+    with patch.object(
+        type(hass.config_entries.options._progress[result["flow_id"]]),
+        "_validate_download_path",
+        return_value=True,
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: True,
+                CONF_SHOW_LIKED: False,
+                CONF_SHOW_MY_SONGS: False,
+                CONF_DOWNLOAD_PATH: "/media/suno",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "playlists"
+
+    # Step 2: Submit archive mode for playlists
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_QUALITY_PLAYLISTS: QUALITY_HIGH,
+            CONF_DOWNLOAD_MODE_PLAYLISTS: "archive",
+            CONF_ALL_PLAYLISTS: True,
+        },
+    )
+
+    # Should finish (liked and my_songs disabled)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "archive"

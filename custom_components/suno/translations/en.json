@@ -21,8 +21,7 @@
         "data": {
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
-          "show_latest": "Your latest",
-          "download_enabled": "Sync library",
+          "show_my_songs": "My Songs",
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
@@ -30,9 +29,8 @@
         "data_description": {
           "show_playlists": "Include your Suno playlists in the media browser and sync.",
           "show_liked": "Include your liked songs.",
-          "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_enabled": "Keep a local copy of your Suno library in sync.",
-          "download_path": "Directory for your synced library files.",
+          "show_my_songs": "Include your most recent songs, filtered by count and age.",
+          "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
@@ -56,8 +54,7 @@
         "data": {
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
-          "show_latest": "Your latest",
-          "download_enabled": "Sync library",
+          "show_my_songs": "My Songs",
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
@@ -65,9 +62,8 @@
         "data_description": {
           "show_playlists": "Include your Suno playlists in the media browser and sync.",
           "show_liked": "Include your liked songs.",
-          "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_enabled": "Keep a local copy of your Suno library in sync.",
-          "download_path": "Directory for your synced library files.",
+          "show_my_songs": "Include your most recent songs, filtered by count and age.",
+          "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
@@ -81,7 +77,7 @@
           "all_playlists": "All playlists"
         },
         "data_description": {
-          "download_mode_playlists": "Mirror removes local files when songs leave a playlist. Keep retains all files permanently.",
+          "download_mode_playlists": "Mirror removes local files when songs leave a playlist. Archive keeps all files permanently. Cache Only streams on demand without saving to disk.",
           "all_playlists": "Turn off to choose specific playlists on the next page."
         }
       },
@@ -93,24 +89,24 @@
           "download_mode_liked": "Mode"
         },
         "data_description": {
-          "download_mode_liked": "Mirror removes local files when you unlike a song. Keep retains all files permanently."
+          "download_mode_liked": "Mirror removes local files when you unlike a song. Archive keeps all files permanently. Cache Only streams on demand without saving to disk."
         }
       },
-      "latest": {
-        "title": "Your Latest",
-        "description": "How many of your latest songs to include and at what quality.",
+      "my_songs": {
+        "title": "My Songs",
+        "description": "Your most recent songs, filtered by count and age.",
         "data": {
-          "quality_latest": "Quality",
-          "download_mode_latest": "Mode",
-          "latest_count": "Maximum songs",
-          "latest_days": "Lookback period (days)",
-          "latest_minimum": "Always keep at least"
+          "quality_my_songs": "Quality",
+          "download_mode_my_songs": "Mode",
+          "my_songs_count": "Maximum songs",
+          "my_songs_days": "Lookback period (days)",
+          "my_songs_minimum": "Always keep at least"
         },
         "data_description": {
-          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Keep retains all files permanently.",
-          "latest_count": "Include up to this many of your latest songs. Set to 0 for no limit.",
-          "latest_days": "Only include songs created within this many days. Set to 0 for no limit.",
-          "latest_minimum": "Always include at least this many recent songs, even if they fall outside the lookback period. Set to 0 to disable."
+          "download_mode_my_songs": "Mirror removes songs that no longer match your filters. Archive keeps all files permanently. Cache Only streams on demand without saving to disk.",
+          "my_songs_count": "Include up to this many of your latest songs. Set to 0 for no limit.",
+          "my_songs_days": "Only include songs created within this many days. Set to 0 for no limit.",
+          "my_songs_minimum": "Always include at least this many recent songs, even if they fall outside the lookback period. Set to 0 to disable."
         }
       },
       "select_playlists": {
