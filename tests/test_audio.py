@@ -830,3 +830,71 @@ def test_clip_meta_hash_changes_when_video_url_changes() -> None:
     clip1 = SunoClip(**base, video_url="https://cdn1.suno.ai/v1.mp4")
     clip2 = SunoClip(**base, video_url="https://cdn1.suno.ai/v2.mp4")
     assert clip_meta_hash(clip1) != clip_meta_hash(clip2)
+
+
+# ── T7: download_as_mp3 network exception ──────────────────────────
+
+
+async def test_download_as_mp3_network_exception() -> None:
+    """Network exception during MP3 download returns None."""
+    import aiohttp
+
+    session = AsyncMock()
+    session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(side_effect=aiohttp.ClientError("Connection reset")),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "My Song")
+
+    assert result is None
+
+
+# ── T8: wav_to_flac generic exception ──────────────────────────────
+
+
+async def test_wav_to_flac_generic_exception() -> None:
+    """Generic RuntimeError during subprocess creation returns None."""
+    with patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("Unexpected")):
+        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+
+    assert result is None
+
+
+# ── T13: from_api_response CDN rewrite ──────────────────────────────
+
+
+def test_from_api_response_cdn_rewrite() -> None:
+    """from_api_response rewrites cdn2 URLs and handles None URLs."""
+    raw = {
+        "id": "clip-cdn-test",
+        "title": "CDN Test",
+        "audio_url": "https://cdn1.suno.ai/clip-cdn-test.mp3",
+        "image_url": "https://cdn2.suno.ai/image_clip-cdn-test.jpeg",
+        "image_large_url": "https://cdn2.suno.ai/image_large_clip-cdn-test.jpeg",
+        "video_url": "https://cdn2.suno.ai/clip-cdn-test.mp4",
+        "video_cover_url": None,
+        "is_liked": True,
+        "status": "complete",
+        "created_at": "2026-03-19T10:00:00Z",
+        "metadata": {
+            "tags": "pop",
+            "duration": 120.0,
+            "type": "gen",
+            "has_vocal": True,
+        },
+    }
+
+    clip = SunoClip.from_api_response(raw)
+
+    # cdn2 URLs should be rewritten to cdn1
+    assert "cdn2" not in clip.image_url
+    assert clip.image_url == "https://cdn1.suno.ai/image_clip-cdn-test.jpeg"
+    assert "cdn2" not in clip.image_large_url
+    assert clip.image_large_url == "https://cdn1.suno.ai/image_large_clip-cdn-test.jpeg"
+    assert "cdn2" not in clip.video_url
+    assert clip.video_url == "https://cdn1.suno.ai/clip-cdn-test.mp4"
+    # None video_cover_url should become empty string
+    assert clip.video_cover_url == ""

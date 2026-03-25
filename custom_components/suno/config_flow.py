@@ -202,7 +202,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"suno_url": "https://suno.com"},
         )
 
-    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+    async def async_step_reauth(self, _entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Handle reauth when cookie expires."""
         return await self.async_step_reauth_confirm()
 
@@ -259,7 +259,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: ConfigEntry,
+        _config_entry: ConfigEntry,
     ) -> OptionsFlowWithReload:
         return SunoOptionsFlow()
 

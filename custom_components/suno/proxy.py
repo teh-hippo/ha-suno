@@ -96,7 +96,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
         if is_hq:
             client = coordinator.client if coordinator else None
-            return await self._handle_hq(request, clip_id, clip, title, artist, content_type, cache, meta_hash, client)
+            return await self._handle_hq(clip_id, clip, title, artist, content_type, cache, meta_hash, client)
 
         audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
@@ -170,7 +170,6 @@ class SunoMediaProxyView(HomeAssistantView):
 
     async def _handle_hq(
         self,
-        request: web.Request,
         clip_id: str,
         clip: SunoClip | None,
         title: str,

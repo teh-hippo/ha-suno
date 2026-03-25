@@ -1156,3 +1156,71 @@ async def test_client_cookie_only_sent_to_clerk() -> None:
 
     for url in cookie_urls:
         assert "clerk.suno.com" in url, f"Cookie was sent to non-Clerk URL: {url}"
+
+
+# ── T9: get_wav_url ─────────────────────────────────────────────────
+
+
+async def test_get_wav_url_success() -> None:
+    """get_wav_url returns the URL when API returns expected dict."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(200, {"wav_file_url": "https://cdn1.suno.ai/clip.wav"}))
+
+    result = await client.get_wav_url("clip-123")
+
+    assert result == "https://cdn1.suno.ai/clip.wav"
+
+
+async def test_get_wav_url_non_dict_response() -> None:
+    """get_wav_url returns None when API returns a non-dict."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(200, ["not", "a", "dict"]))
+
+    result = await client.get_wav_url("clip-123")
+
+    assert result is None
+
+
+async def test_get_wav_url_missing_key() -> None:
+    """get_wav_url returns None when wav_file_url key is missing."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    session.get = MagicMock(return_value=_mock_response(200, {"other": "data"}))
+
+    result = await client.get_wav_url("clip-123")
+
+    assert result is None
+
+
+# ── T10: _paginate_feed stops at MAX_PAGES ──────────────────────────
+
+
+async def test_paginate_feed_stops_at_max_pages() -> None:
+    """Pagination loop stops at MAX_PAGES even when has_more is always True."""
+    from custom_components.suno.const import MAX_PAGES
+
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    call_count = 0
+
+    def mock_get(url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        clip = {
+            "id": f"c-{call_count}",
+            "status": "complete",
+            "audio_url": f"https://cdn1.suno.ai/c-{call_count}.mp3",
+            "metadata": {"type": "gen"},
+        }
+        return _mock_response(200, {"clips": [clip], "has_more": True})
+
+    session.get = mock_get
+
+    clips = await client.get_all_songs()
+
+    # Should stop at MAX_PAGES exactly
+    assert call_count == MAX_PAGES
+    assert len(clips) == MAX_PAGES

@@ -2427,3 +2427,160 @@ class TestServiceLifecycle:
 
         _maybe_remove_service()
         hass.services.async_remove.assert_called_once_with(DOMAIN, _SERVICE_DOWNLOAD)
+
+
+# ── T5: Zero-size file triggers re-download ────────────────────────
+
+
+async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A new clip with an empty file on disk should be re-downloaded (not reconciled)."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    clip = _make_clip("clip-zero", "Zero Song")
+
+    # Clip is NOT in state (new), so it will be added to to_download
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    # Create the zero-size file at the expected path on disk
+    sync_dir = tmp_path / "mirror"
+    from custom_components.suno.download import _clip_path
+
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"")
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+    client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-zero.wav")
+    client.request_wav = AsyncMock()
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    assert sync.errors == 0
+    assert sync.total_files == 1
+    # File should now have content (was re-downloaded, not reconciled)
+    assert target.stat().st_size > 0
+
+
+# ── T6: Metadata hash change updates state ─────────────────────────
+
+
+async def test_metadata_hash_change_updates_state(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changed meta hash should update state without re-downloading."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    clip = _make_clip("clip-meta", "Meta Song")
+
+    # Pre-populate state with old meta hash
+    old_hash = "old_hash_1234"
+    sync_dir = tmp_path / "mirror"
+    rel_path = "Suno/Meta Song/Suno-Meta Song [clip-met].flac"
+
+    initial_state = {
+        "clips": {
+            "clip-meta": {
+                "path": rel_path,
+                "title": "Meta Song OLD",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 100,
+                "meta_hash": old_hash,
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    # Create the file on disk so it won't be treated as new
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Verify meta hash was updated in state
+    new_hash = clip_meta_hash(clip)
+    assert new_hash != old_hash
+    clip_state = sync._state["clips"]["clip-meta"]
+    assert clip_state["meta_hash"] == new_hash
+    assert clip_state["title"] == "Meta Song"
+    # No download errors - means no re-download was attempted
+    assert sync.errors == 0
+
+
+# ── T15: Manifest write failure logged ──────────────────────────────
+
+
+async def test_manifest_write_failure_logged(hass: HomeAssistant, tmp_path: Path) -> None:
+    """OSError writing manifest file is logged as warning, not raised."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    sync_dir = tmp_path / "mirror"
+
+    with (
+        patch.object(sync._store, "async_save"),
+        patch(
+            "custom_components.suno.download.Path.write_text",
+            side_effect=OSError("disk full"),
+        ),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        with patch("custom_components.suno.download._LOGGER"):
+            await sync.async_download(opts, client)
+
+    # Should complete without errors
+    assert sync.errors == 0

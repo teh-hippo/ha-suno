@@ -231,7 +231,7 @@ class SunoDownloadStatusSensor(_SunoSensor):
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    _hass: HomeAssistant,
     entry: SunoConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:

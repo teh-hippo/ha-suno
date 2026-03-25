@@ -14,7 +14,16 @@ REDACT_KEYS = {"cookie", "download_path"}
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoConfigEntry) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator = entry.runtime_data
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is None:
+        return {
+            "config_entry": {
+                "unique_id": entry.unique_id,
+                "options": dict(entry.options),
+                "data": async_redact_data(dict(entry.data), REDACT_KEYS),
+            },
+            "error": "Integration not fully loaded",
+        }
 
     data = coordinator.data
     rate_limiter = hass.data.get("suno", {}).get("rate_limiter")

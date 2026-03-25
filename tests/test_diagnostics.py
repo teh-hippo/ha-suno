@@ -45,3 +45,22 @@ async def test_diagnostics_no_credits(hass: HomeAssistant, mock_suno_client: Asy
     assert result["credits"]["credits_left"] is None
     assert result["credits"]["monthly_limit"] is None
     assert result["credits"]["monthly_usage"] is None
+
+
+# ── T14: Missing runtime_data ─────────────────────────────────────
+
+
+async def test_diagnostics_missing_runtime_data(hass: HomeAssistant) -> None:
+    """Diagnostics returns error dict when runtime_data is missing."""
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    # Don't set up entry - no runtime_data
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+
+    assert "error" in result
+    assert result["error"] == "Integration not fully loaded"
+    assert "config_entry" in result
+    assert result["config_entry"]["unique_id"] == entry.unique_id
+    # Cookie should be redacted
+    assert result["config_entry"]["data"]["cookie"] == "**REDACTED**"

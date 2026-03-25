@@ -134,11 +134,11 @@ class SunoMediaSource(MediaSource):
         identifier = item.identifier or ""
         ct = "audio/mpeg"
         if not identifier:
-            return await self._browse_root(entry, coordinator, ct)
+            return await self._browse_root(entry, coordinator)
         if identifier == "liked":
             return self._browse_liked(coordinator, ct)
         if identifier == "latest":
-            return await self._browse_latest(entry, coordinator, ct)
+            return await self._browse_latest(coordinator, ct)
         if identifier == "playlists":
             return self._browse_playlists(coordinator)
         if identifier.startswith("playlist/"):
@@ -149,7 +149,7 @@ class SunoMediaSource(MediaSource):
             return self._browse_all_page(coordinator, int(identifier.removeprefix("all/page/")), ct)
         return _folder("", "Suno", [])
 
-    async def _browse_root(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    async def _browse_root(self, entry: SunoConfigEntry, coordinator: SunoCoordinator) -> BrowseMediaSource:
         """Build the root media browser view."""
         children: list[BrowseMediaSource] = []
         data: SunoData = coordinator.data
@@ -167,13 +167,9 @@ class SunoMediaSource(MediaSource):
         liked = coordinator.data.liked_clips
         return _folder("liked", f"Liked Songs ({len(liked)})", [_clip_to_media(c, ct) for c in liked])
 
-    async def _browse_latest(self, entry: SunoConfigEntry, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
-        """Show latest songs from the feed."""
-        try:
-            clips, _ = await coordinator.client.get_feed(0)
-        except Exception:
-            _LOGGER.warning("Could not fetch latest songs live, falling back to cache")
-            clips = coordinator.data.clips[:20]
+    async def _browse_latest(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+        """Show latest songs from the cached library, sorted by newest first."""
+        clips = sorted(coordinator.data.clips, key=lambda c: c.created_at or "", reverse=True)[:20]
         children = [_clip_to_media(c, ct) for c in clips]
         return _folder("latest", f"Your Latest ({len(children)})", children)
 

@@ -179,7 +179,7 @@ async def test_browse_liked(hass: HomeAssistant, mock_suno_client: AsyncMock) ->
 
 
 async def test_browse_latest(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Browsing 'latest' fetches live from get_feed."""
+    """Browsing 'latest' uses cached coordinator clips sorted by newest."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -190,23 +190,22 @@ async def test_browse_latest(hass: HomeAssistant, mock_suno_client: AsyncMock) -
 
     assert "Latest" in result.title
     assert len(result.children) == 2
-    mock_suno_client.get_feed.assert_awaited()
+    mock_suno_client.get_feed.assert_not_awaited()
 
 
 async def test_browse_latest_fallback_on_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Latest falls back to cached data when live fetch fails."""
+    """Latest still works even when get_feed would fail (uses cache)."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    # Make live fetch fail after initial setup
+    # Even if get_feed were called, it would fail — but we no longer call it
     mock_suno_client.get_feed.side_effect = Exception("Network error")
 
     source = SunoMediaSource(hass)
     item = MediaSourceItem(hass, "suno", "latest", None)
     result = await source.async_browse_media(item)
 
-    # Falls back to cached clips
     assert "Latest" in result.title
     assert len(result.children) == 2
 
@@ -516,3 +515,76 @@ async def test_browse_playlist_unknown_id(hass: HomeAssistant, mock_suno_client:
     result = await source.async_browse_media(item)
 
     assert result.title == "Playlist (0)"
+
+
+# ── Clip quality selection ───────────────────────────────────────────
+
+
+async def test_get_clip_quality_liked_standard(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Liked clip returns STANDARD when quality_liked is standard."""
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            "quality_liked": "standard",
+            "quality_playlists": "standard",
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    # clip-aaa-111 is liked; with standard quality it should resolve to mp3
+    from homeassistant.components.media_source import MediaSourceItem
+
+    item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
+    result = await source.async_resolve_media(item)
+
+    assert result.url.endswith(".mp3")
+    assert result.mime_type == "audio/mpeg"
+
+
+async def test_get_clip_quality_playlists_standard(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Playlist clip returns STANDARD when quality_playlists is standard."""
+    # clip-aaa-111 is in playlist clips (sample_clips()[:1]); also liked
+    # Set both to standard to verify playlist quality path
+    entry = make_entry(
+        options={
+            **make_entry().options,
+            "quality_liked": "standard",
+            "quality_playlists": "standard",
+        }
+    )
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    from homeassistant.components.media_source import MediaSourceItem
+
+    # clip-aaa-111 is in playlist clips, but quality_playlists is standard
+    item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
+    result = await source.async_resolve_media(item)
+
+    assert result.url.endswith(".mp3")
+    assert result.mime_type == "audio/mpeg"
+
+
+async def test_get_clip_quality_neither_liked_nor_playlist(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Clip not in liked or playlists defaults to STANDARD quality."""
+    # Make a clip that isn't liked and isn't in any playlist
+    entry = make_entry()
+    # Remove liked songs so clip-bbb-222 won't match liked
+    mock_suno_client.get_liked_songs.return_value = []
+    mock_suno_client.get_playlist_clips.return_value = []
+
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    source = SunoMediaSource(hass)
+    from homeassistant.components.media_source import MediaSourceItem
+
+    item = MediaSourceItem(hass, "suno", "clip/clip-bbb-222", None)
+    result = await source.async_resolve_media(item)
+
+    # Not in liked or playlists -> STANDARD -> mp3
+    assert result.url.endswith(".mp3")
+    assert result.mime_type == "audio/mpeg"

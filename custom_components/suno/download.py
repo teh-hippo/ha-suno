@@ -605,6 +605,11 @@ class SunoDownloadManager:
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
         """Remove orphaned audio files not tracked in download state."""
         known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
+        # Also track known video paths (audio path with .mp4 extension)
+        for entry in clips_state.values():
+            if entry.get("path"):
+                video_rel = str(Path(entry["path"]).with_suffix(".mp4"))
+                known_paths.add(video_rel)
 
         def _scan_and_remove(base_path: Path, known: set[str]) -> int:
             count = 0
@@ -614,13 +619,25 @@ class SunoDownloadManager:
                 if not f.is_file():
                     continue
                 # Skip non-audio files (manifest, playlists, tmp, hidden)
-                if f.suffix.lower() not in (".flac", ".mp3"):
+                if f.suffix.lower() not in (".flac", ".mp3", ".mp4"):
                     continue
                 rel = str(f.relative_to(base_path))
                 if rel not in known:
                     f.unlink(missing_ok=True)
                     _LOGGER.info("Reconciliation: removed orphan %s", rel)
                     count += 1
+            # Clean orphaned sidecars in dirs with no audio files
+            for d in base_path.rglob("*"):
+                if not d.is_dir():
+                    continue
+                has_audio = any(f.suffix.lower() in (".flac", ".mp3") for f in d.iterdir() if f.is_file())
+                if not has_audio:
+                    for sidecar in ("cover.jpg", ".cover_hash"):
+                        sc = d / sidecar
+                        if sc.exists():
+                            sc.unlink(missing_ok=True)
+                            _LOGGER.info("Reconciliation: removed orphan sidecar %s", sc.relative_to(base_path))
+                            count += 1
             # Clean up empty directories
             for d in sorted(base_path.rglob("*"), reverse=True):
                 if d.is_dir() and not any(d.iterdir()):
@@ -662,7 +679,11 @@ class SunoDownloadManager:
                     tag = f"playlist:{pl.id}"
                     source_to_name[tag] = pl.name
                     try:
-                        pl_clips = await client.get_playlist_clips(pl.id)
+                        pl_clips = (
+                            coordinator_data.playlist_clips.get(pl.id, [])
+                            if coordinator_data
+                            else await client.get_playlist_clips(pl.id)
+                        )
                         playlist_order[tag] = [c.id for c in pl_clips]
                         for clip in pl_clips:
                             _add_clip(clip_map, clip, tag, playlist_quality)
@@ -856,6 +877,6 @@ class SunoDownloadManager:
             try:
                 (b / _MANIFEST_FILENAME).write_text(json.dumps(state, indent=2))
             except OSError:
-                pass
+                _LOGGER.warning("Failed to write manifest file", exc_info=True)
         await self.hass.async_add_executor_job(_write_manifest, base, self._state)
     # fmt: on

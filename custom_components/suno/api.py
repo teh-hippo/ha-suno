@@ -135,12 +135,22 @@ class SunoClient:
                             raise SunoApiError("Rate limited after maximum retries")
                         if expect_json:
                             if resp.status != 200:
+                                if 500 <= resp.status < 600 and attempt < 3:
+                                    delay = 1.0 * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+                                    _LOGGER.debug("Server error %d, retrying in %.1fs", resp.status, delay)
+                                    await asyncio.sleep(delay)
+                                    continue
                                 raise SunoApiError(f"Suno API returned {resp.status}: {(await resp.text())[:200]}")
                             return await resp.json()
                         return resp.status
                 except SunoApiError, SunoAuthError:
                     raise
                 except Exception as err:
+                    if attempt < 3:
+                        delay = 1.0 * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+                        _LOGGER.debug("Connection error, retrying in %.1fs: %s", delay, err)
+                        await asyncio.sleep(delay)
+                        continue
                     raise SunoApiError(f"Suno API request failed: {err}") from err
             finally:
                 if self._rate_limiter:

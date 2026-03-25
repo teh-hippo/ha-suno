@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.suno import async_remove_entry
 from custom_components.suno.coordinator import SunoCoordinator
-from custom_components.suno.exceptions import SunoApiError, SunoAuthError
+from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
 
@@ -175,6 +175,36 @@ async def test_remove_entry_preserves_cache_for_other_entries(hass: HomeAssistan
 
     # Cache dir must still exist because entry_b remains
     assert cache_dir.exists()
+
+
+async def test_setup_entry_connection_error_with_stored_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Connection error on auth with stored data still loads the entry."""
+    mock_suno_client._auth.authenticate.side_effect = SunoConnectionError("Unreachable")
+    entry = make_entry()
+
+    with patch_suno_setup(mock_suno_client):
+        with patch(
+            "custom_components.suno.coordinator.SunoCoordinator.async_load_stored_data",
+            return_value=True,
+        ):
+            await setup_entry(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def test_setup_entry_generic_error_with_stored_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Generic exception on auth with stored data still loads the entry."""
+    mock_suno_client._auth.authenticate.side_effect = RuntimeError("Something broke")
+    entry = make_entry()
+
+    with patch_suno_setup(mock_suno_client):
+        with patch(
+            "custom_components.suno.coordinator.SunoCoordinator.async_load_stored_data",
+            return_value=True,
+        ):
+            await setup_entry(hass, entry)
+
+    assert entry.state is ConfigEntryState.LOADED
 
 
 async def test_rate_limiter_shared_across_entries(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

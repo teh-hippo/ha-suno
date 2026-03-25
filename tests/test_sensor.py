@@ -379,3 +379,16 @@ async def test_cache_size_sensor_async_update() -> None:
 
     mock_cache.async_size_mb.assert_awaited_once()
     assert sensor.native_value == 12.3
+
+
+# ── T12: Malformed timestamp ──────────────────────────────────────
+
+
+def test_parse_last_download_malformed_timestamp() -> None:
+    """Malformed ISO string returns None instead of crashing."""
+    coordinator = MagicMock(spec=SunoCoordinator)
+    dm = MagicMock()
+    dm.last_download = "not-a-timestamp"
+    coordinator.download_manager = dm
+    result = _parse_last_download(coordinator)
+    assert result is None

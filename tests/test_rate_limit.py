@@ -103,3 +103,25 @@ async def test_report_rate_limit_default_retry_after() -> None:
     limiter = SunoRateLimiter()
     delay = await limiter.report_rate_limit(retry_after=None)
     assert delay == 2.0
+
+
+async def test_acquire_cancelled_releases_semaphore() -> None:
+    """Cancelled acquire during throttle sleep releases the semaphore."""
+    limiter = SunoRateLimiter(max_concurrent=1)
+    await limiter.report_rate_limit(retry_after=10.0)
+
+    async def _acquire_and_cancel():
+        await limiter.acquire()
+
+    task = asyncio.create_task(_acquire_and_cancel())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Semaphore must be released — a new acquire should succeed promptly
+    limiter._throttle_until = 0  # Clear throttle for clean test
+    await asyncio.wait_for(limiter.acquire(), timeout=0.1)
+    limiter.release()

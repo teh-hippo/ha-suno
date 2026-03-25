@@ -588,3 +588,35 @@ async def test_dynamic_title_from_auth(hass: HomeAssistant, mock_setup_entry: As
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "CoolArtist"
+
+
+# ── Download path validation ─────────────────────────────────────────
+
+
+async def test_validate_download_path_permission_error(hass: HomeAssistant, tmp_path) -> None:
+    """PermissionError during path validation returns False."""
+    from custom_components.suno.config_flow import SunoOptionsFlow
+
+    flow = SunoOptionsFlow.__new__(SunoOptionsFlow)
+    flow.hass = hass
+
+    # Use a path that will trigger PermissionError on mkdir
+    bad_path = str(tmp_path / "forbidden_dir")
+    with patch("pathlib.Path.mkdir", side_effect=PermissionError("denied")):
+        result = await flow._validate_download_path(bad_path)
+
+    assert result is False
+
+
+async def test_validate_download_path_oserror(hass: HomeAssistant, tmp_path) -> None:
+    """OSError during path validation returns False."""
+    from custom_components.suno.config_flow import SunoOptionsFlow
+
+    flow = SunoOptionsFlow.__new__(SunoOptionsFlow)
+    flow.hass = hass
+
+    bad_path = str(tmp_path / "broken_dir")
+    with patch("pathlib.Path.mkdir", side_effect=OSError("disk error")):
+        result = await flow._validate_download_path(bad_path)
+
+    assert result is False
