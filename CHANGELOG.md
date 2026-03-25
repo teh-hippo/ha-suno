@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.6.1 (2026-03-25)
+
+### Bug Fixes
+
+- Enable video downloads by default
+  ([`b2dde31`](https://github.com/teh-hippo/ha-suno/commit/b2dde31c8fd21a19aa21ac8c4c365e85acfd8f4f))
+
+
 ## v3.6.0 (2026-03-25)
 
 ### Features
