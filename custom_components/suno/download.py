@@ -629,6 +629,7 @@ class SunoDownloadManager:
         try:
             session = async_get_clientsession(self.hass)
             image_url = clip.image_large_url or clip.image_url or None
+            image_data = await fetch_album_art(session, image_url) if image_url else None
 
             if item.quality == QUALITY_HIGH:
                 data = await download_and_transcode_to_flac(
@@ -644,7 +645,6 @@ class SunoDownloadManager:
                 fmt = "flac"
             else:
                 audio_url = clip.audio_url or f"{CDN_BASE_URL}/{clip.id}.mp3"
-                image_data = await fetch_album_art(session, image_url) if image_url else None
                 data = await download_as_mp3(
                     session,
                     audio_url,
@@ -654,17 +654,17 @@ class SunoDownloadManager:
                 )
                 fmt = "mp3"
 
-                # Write cover.jpg for MP3 directories (FLAC art comes from embedded PICTURE)
-                if image_data:
-                    cover_path = target.parent / "cover.jpg"
-                    if not await self.hass.async_add_executor_job(cover_path.exists):
-                        await _write_file(self.hass, cover_path, image_data)
-
             if data is None:
                 return None
 
             await _write_file(self.hass, target, data)
             _LOGGER.info("Downloaded: %s (%d bytes)", rel_path, len(data))
+
+            # Write cover.jpg for Jellyfin album art discovery
+            if image_data:
+                cover_path = target.parent / "cover.jpg"
+                if not await self.hass.async_add_executor_job(cover_path.exists):
+                    await _write_file(self.hass, cover_path, image_data)
 
             # Write-through to cache
             if self._cache is not None:
