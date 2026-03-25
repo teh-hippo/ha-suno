@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.6.0 (2026-03-25)
+
+### Features
+
+- Add video, model, artist, and lineage metadata from Suno API
+  ([`b9d2688`](https://github.com/teh-hippo/ha-suno/commit/b9d2688c6cf4972743ce44508d7c10aa422a4611))
+
+
 ## v3.5.1 (2026-03-25)
 
 ### Bug Fixes
