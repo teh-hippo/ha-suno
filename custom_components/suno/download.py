@@ -48,7 +48,7 @@ from .const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from .models import SunoClip, clip_meta_hash
+from .models import SunoClip, TrackMetadata, clip_meta_hash
 
 if TYPE_CHECKING:
     from .api import SunoClient
@@ -236,15 +236,53 @@ async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
 
 
 
+_SOURCE_MODE_KEYS: dict[str, str] = {
+    "liked": CONF_DOWNLOAD_MODE_LIKED,
+    "latest": CONF_DOWNLOAD_MODE_LATEST,
+}
+
+
 def _source_uses_mirror_mode(source: str, options: dict[str, Any]) -> bool:
     """Check if a source tag's mode is 'mirror' (managed, delete removed)."""
-    if source == "liked":
-        return bool(options.get(CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
     if source.startswith("playlist:"):
-        return bool(options.get(CONF_DOWNLOAD_MODE_PLAYLISTS, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
-    if source == "latest":
-        return bool(options.get(CONF_DOWNLOAD_MODE_LATEST, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
-    return True  # Unknown sources default to mirror (delete-safe)
+        key: str | None = CONF_DOWNLOAD_MODE_PLAYLISTS
+    else:
+        key = _SOURCE_MODE_KEYS.get(source)
+    if key is None:
+        return True  # Unknown sources default to mirror (delete-safe)
+    return bool(options.get(key, DEFAULT_DOWNLOAD_MODE) == DOWNLOAD_MODE_MIRROR)
+
+
+def _clip_entry(item: DownloadItem, rel_path: str, file_size: int) -> dict[str, Any]:
+    """Build a clips_state dict entry for a download item."""
+    return {
+        "path": rel_path,
+        "title": item.clip.title,
+        "created": item.clip.created_at[:10] if item.clip.created_at else None,
+        "sources": item.sources,
+        "size": file_size,
+        "meta_hash": clip_meta_hash(item.clip),
+        "quality": item.quality,
+    }
+
+
+async def _update_cover_art(
+    hass: HomeAssistant, session: Any, image_url: str, cover_path: Path, hash_path: Path
+) -> bool:
+    """Check image URL hash and write cover.jpg if changed. Returns True if updated."""
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    existing_hash = ""
+    if await hass.async_add_executor_job(hash_path.exists):
+        existing_hash = (await hass.async_add_executor_job(hash_path.read_text)).strip()
+    if url_hash == existing_hash:
+        return False
+    image_data = await fetch_album_art(session, image_url)
+    if image_data:
+        await hass.async_add_executor_job(cover_path.parent.mkdir, 0o755, True, True)
+        await _write_file(hass, cover_path, image_data)
+        await hass.async_add_executor_job(hash_path.write_text, url_hash)
+        return True
+    return False
 
 
 class SunoDownloadManager:
@@ -508,27 +546,11 @@ class SunoDownloadManager:
                 if stat.st_size == 0:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
-                    clips_state[item.clip.id] = {
-                        "path": rel_path,
-                        "title": item.clip.title,
-                        "created": item.clip.created_at[:10] if item.clip.created_at else None,
-                        "sources": item.sources,
-                        "size": stat.st_size,
-                        "meta_hash": clip_meta_hash(item.clip),
-                        "quality": item.quality,
-                    }
+                    clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size)
                     reconciled += 1
                     continue
             if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
-                clips_state[item.clip.id] = {
-                    "path": rel_path,
-                    "title": item.clip.title,
-                    "created": item.clip.created_at[:10] if item.clip.created_at else None,
-                    "sources": item.sources,
-                    "size": file_size,
-                    "meta_hash": clip_meta_hash(item.clip),
-                    "quality": item.quality,
-                }
+                clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size)
                 downloaded += 1
                 # Track directory for cover.jpg writing
                 cover_dirs.add(str(target.parent))
@@ -547,24 +569,14 @@ class SunoDownloadManager:
             entry = clips_state.get(item.clip.id)
             if not entry or not entry.get("path"):
                 continue
-            clip = item.clip
-            image_url = clip.image_large_url or clip.image_url or None
+            image_url = item.clip.image_large_url or item.clip.image_url or None
             if not image_url:
                 continue
             target = base / entry["path"]
-            cover_path = target.parent / "cover.jpg"
-            hash_path = target.parent / ".cover_hash"
-            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-            existing_hash = ""
-            if await self.hass.async_add_executor_job(hash_path.exists):
-                existing_hash = (await self.hass.async_add_executor_job(hash_path.read_text)).strip()
-            if url_hash != existing_hash:
-                image_data = await fetch_album_art(session, image_url)
-                if image_data:
-                    await self.hass.async_add_executor_job(cover_path.parent.mkdir, 0o755, True, True)
-                    await _write_file(self.hass, cover_path, image_data)
-                    await self.hass.async_add_executor_job(hash_path.write_text, url_hash)
-                    covers_fixed += 1
+            if await _update_cover_art(
+                self.hass, session, image_url, target.parent / "cover.jpg", target.parent / ".cover_hash"
+            ):
+                covers_fixed += 1
         if covers_fixed:
             _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
         for clip_id in to_delete:
@@ -743,50 +755,29 @@ class SunoDownloadManager:
         target = base / rel_path
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         clip = item.clip
-        date = clip.created_at[:10] if clip.created_at else ""
-        artist = clip.display_name or "Suno"
-        common_meta = {
-            "album": clip.title or "Suno",
-            "album_artist": "Suno",
-            "date": date,
-            "lyrics": clip.prompt,
-            "comment": clip.gpt_description_prompt,
-            "suno_style": clip.tags,
-            "suno_style_summary": clip.gpt_description_prompt,
-            "suno_model": clip.suno_model,
-            "suno_handle": clip.handle,
-            "suno_parent": clip.edited_clip_id,
-            "suno_lineage": clip.suno_lineage,
-        }
+        meta = clip.to_track_metadata()
         try:
             session = async_get_clientsession(self.hass)
             image_url = clip.image_large_url or clip.image_url or None
             image_data = await fetch_album_art(session, image_url) if image_url else None
+            meta = TrackMetadata(
+                title=meta.title, artist=meta.artist, album=meta.album,
+                album_artist=meta.album_artist, date=meta.date, lyrics=meta.lyrics,
+                comment=meta.comment, image_data=image_data,
+                suno_style=meta.suno_style, suno_style_summary=meta.suno_style_summary,
+                suno_model=meta.suno_model, suno_handle=meta.suno_handle,
+                suno_parent=meta.suno_parent, suno_lineage=meta.suno_lineage,
+            )
 
             if item.quality == QUALITY_HIGH:
                 data = await download_and_transcode_to_flac(
-                    client,
-                    session,
-                    get_ffmpeg_manager(self.hass).binary,
-                    clip.id,
-                    clip.title or "Suno",
-                    artist=artist,
-                    image_url=image_url,
-                    image_data=image_data,
-                    duration=clip.duration,
-                    **common_meta,
+                    client, session, get_ffmpeg_manager(self.hass).binary,
+                    clip.id, meta, duration=clip.duration, image_url=image_url,
                 )
                 fmt = "flac"
             else:
                 audio_url = clip.audio_url or f"{CDN_BASE_URL}/{clip.id}.mp3"
-                data = await download_as_mp3(
-                    session,
-                    audio_url,
-                    title=clip.title or "Suno",
-                    artist=artist,
-                    image_data=image_data,
-                    **common_meta,
-                )
+                data = await download_as_mp3(session, audio_url, meta)
                 fmt = "mp3"
 
             if data is None:
@@ -797,15 +788,9 @@ class SunoDownloadManager:
 
             # Write cover.jpg for Jellyfin album art discovery
             if image_data and image_url:
-                cover_path = target.parent / "cover.jpg"
-                hash_path = target.parent / ".cover_hash"
-                url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-                existing_hash = ""
-                if await self.hass.async_add_executor_job(hash_path.exists):
-                    existing_hash = (await self.hass.async_add_executor_job(hash_path.read_text)).strip()
-                if url_hash != existing_hash:
-                    await _write_file(self.hass, cover_path, image_data)
-                    await self.hass.async_add_executor_job(hash_path.write_text, url_hash)
+                await _update_cover_art(
+                    self.hass, session, image_url, target.parent / "cover.jpg", target.parent / ".cover_hash"
+                )
 
             # Download video if enabled and available
             if self._download_videos and clip.video_url:

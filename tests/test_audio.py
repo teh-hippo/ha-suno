@@ -14,7 +14,7 @@ from custom_components.suno.audio import (
     fetch_album_art,
     wav_to_flac,
 )
-from custom_components.suno.models import SunoClip, clip_meta_hash
+from custom_components.suno.models import SunoClip, TrackMetadata, clip_meta_hash
 
 # ── wav_to_flac ─────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ async def test_wav_to_flac_happy_path() -> None:
     proc.returncode = 0
 
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+        result = await wav_to_flac("ffmpeg", b"wav-data", TrackMetadata(title="Title", artist="Artist"))
 
     assert result == fake_flac
 
@@ -36,7 +36,7 @@ async def test_wav_to_flac_happy_path() -> None:
 async def test_wav_to_flac_ffmpeg_not_found() -> None:
     """FileNotFoundError when ffmpeg binary is missing."""
     with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+        result = await wav_to_flac("ffmpeg", b"wav-data", TrackMetadata(title="Title", artist="Artist"))
 
     assert result is None
 
@@ -48,7 +48,7 @@ async def test_wav_to_flac_non_zero_exit() -> None:
     proc.returncode = 1
 
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+        result = await wav_to_flac("ffmpeg", b"wav-data", TrackMetadata(title="Title", artist="Artist"))
 
     assert result is None
 
@@ -62,7 +62,7 @@ async def test_wav_to_flac_timeout() -> None:
     proc.wait = AsyncMock()
 
     with patch("asyncio.create_subprocess_exec", return_value=proc):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+        result = await wav_to_flac("ffmpeg", b"wav-data", TrackMetadata(title="Title", artist="Artist"))
 
     assert result is None
     proc.kill.assert_called_once()
@@ -94,7 +94,8 @@ async def test_wav_to_flac_with_album_art(tmp_path: object) -> None:
         patch("asyncio.create_subprocess_exec", return_value=proc),
         patch("tempfile.mkstemp", side_effect=tracking_mkstemp),
     ):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist", image_data=image_data)
+        meta = TrackMetadata(title="Title", artist="Artist", image_data=image_data)
+        result = await wav_to_flac("ffmpeg", b"wav-data", meta)
 
     assert result == fake_flac
     assert len(created_tmp_files) == 1
@@ -140,7 +141,8 @@ async def test_wav_to_flac_with_album_art_fixes_picture_type() -> None:
         patch("os.close"),
         patch("os.unlink"),
     ):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist", image_data=b"\xff\xd8")
+        meta = TrackMetadata(title="Title", artist="Artist", image_data=b"\xff\xd8")
+        result = await wav_to_flac("ffmpeg", b"wav-data", meta)
 
     assert result is not None
     # The PICTURE block type should now be 3 (Front Cover)
@@ -275,7 +277,7 @@ async def test_fetch_album_art_network_error() -> None:
 
 def test_build_id3_header_valid() -> None:
     """Produces bytes starting with ID3 magic."""
-    header = _build_id3_header("My Song", "My Artist")
+    header = _build_id3_header(TrackMetadata(title="My Song", artist="My Artist"))
 
     assert header[:3] == b"ID3"
     assert header[3] == 0x04  # Version 2.4
@@ -354,7 +356,9 @@ async def test_download_as_mp3_happy_path() -> None:
         )
     )
 
-    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "My Song", "Artist")
+    result = await download_as_mp3(
+        session, "https://cdn.suno.ai/clip.mp3", TrackMetadata(title="My Song", artist="Artist")
+    )
 
     assert result is not None
     assert result[:3] == b"ID3"
@@ -376,7 +380,7 @@ async def test_download_as_mp3_cdn_failure() -> None:
         )
     )
 
-    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "Title")
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", TrackMetadata(title="Title"))
 
     assert result is None
 
@@ -410,7 +414,7 @@ async def test_download_as_mp3_strips_existing_id3() -> None:
         )
     )
 
-    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "New Title")
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", TrackMetadata(title="New Title"))
 
     assert result is not None
     assert result[:3] == b"ID3"
@@ -500,7 +504,7 @@ def test_fix_flac_total_samples_not_flac() -> None:
 def test_build_id3_header_with_apic() -> None:
     """APIC frame is included when image_data is provided."""
     image = b"\xff\xd8\xff\xe0" + b"\x00" * 100  # Fake JPEG
-    header = _build_id3_header("Song", "Artist", image_data=image)
+    header = _build_id3_header(TrackMetadata(title="Song", artist="Artist", image_data=image))
 
     assert b"APIC" in header
     assert b"image/jpeg" in header
@@ -510,10 +514,12 @@ def test_build_id3_header_with_apic() -> None:
 def test_build_id3_header_txxx_frames() -> None:
     """TXXX frames are included for Suno custom metadata."""
     header = _build_id3_header(
-        "Song",
-        "Artist",
-        suno_style="Dark hardstyle",
-        suno_style_summary="Hardstyle",
+        TrackMetadata(
+            title="Song",
+            artist="Artist",
+            suno_style="Dark hardstyle",
+            suno_style_summary="Hardstyle",
+        )
     )
 
     assert b"TXXX" in header
@@ -525,19 +531,21 @@ def test_build_id3_header_txxx_frames() -> None:
 
 def test_build_id3_header_no_genre() -> None:
     """Genre (TCON) frame is never written."""
-    header = _build_id3_header("Song", "Artist")
+    header = _build_id3_header(TrackMetadata(title="Song", artist="Artist"))
     assert b"TCON" not in header
 
 
 def test_build_id3_header_all_custom_fields() -> None:
     """All Suno custom metadata fields produce TXXX frames."""
     header = _build_id3_header(
-        "Song",
-        "Artist",
-        suno_model="chirp-crow (v5)",
-        suno_handle="myhandle",
-        suno_parent="abcd1234",
-        suno_lineage="Remix of abcd1234",
+        TrackMetadata(
+            title="Song",
+            artist="Artist",
+            suno_model="chirp-crow (v5)",
+            suno_handle="myhandle",
+            suno_parent="abcd1234",
+            suno_lineage="Remix of abcd1234",
+        )
     )
     assert b"SUNO_MODEL" in header
     assert b"chirp-crow (v5)" in header
@@ -847,7 +855,7 @@ async def test_download_as_mp3_network_exception() -> None:
         )
     )
 
-    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", "My Song")
+    result = await download_as_mp3(session, "https://cdn.suno.ai/clip.mp3", TrackMetadata(title="My Song"))
 
     assert result is None
 
@@ -858,7 +866,7 @@ async def test_download_as_mp3_network_exception() -> None:
 async def test_wav_to_flac_generic_exception() -> None:
     """Generic RuntimeError during subprocess creation returns None."""
     with patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("Unexpected")):
-        result = await wav_to_flac("ffmpeg", b"wav-data", "Title", "Artist")
+        result = await wav_to_flac("ffmpeg", b"wav-data", TrackMetadata(title="Title", artist="Artist"))
 
     assert result is None
 

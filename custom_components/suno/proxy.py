@@ -15,7 +15,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .audio import _build_id3_header, _skip_existing_id3, download_and_transcode_to_flac
 from .const import CDN_BASE_URL, DOMAIN
 from .coordinator import SunoCoordinator
-from .models import SunoClip, clip_meta_hash
+from .models import SunoClip, TrackMetadata, clip_meta_hash
 
 if TYPE_CHECKING:
     from .cache import SunoCache
@@ -40,9 +40,12 @@ class SunoMediaProxyView(HomeAssistantView):
         """Look up a clip and its owning coordinator across all active coordinators."""
         generation = 0
         entries = self.hass.config_entries.async_entries(DOMAIN)
+        first_coordinator: SunoCoordinator | None = None
         for entry in entries:
             if (coordinator := getattr(entry, "runtime_data", None)) is not None:
                 generation += id(coordinator.data)
+                if first_coordinator is None and isinstance(coordinator, SunoCoordinator):
+                    first_coordinator = coordinator
         if generation != self._clips_generation:
             lookup: dict[str, tuple[SunoClip, SunoCoordinator]] = {}
             for entry in entries:
@@ -57,20 +60,11 @@ class SunoMediaProxyView(HomeAssistantView):
         result = self._clips_by_id.get(clip_id)
         if result is not None:
             return result
-        return None, None
-
-    def _first_coordinator(self) -> SunoCoordinator | None:
-        """Return the first loaded coordinator (fallback for unknown clips)."""
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if isinstance(coord := getattr(entry, "runtime_data", None), SunoCoordinator):
-                return coord
-        return None
+        return None, first_coordinator
 
     async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
         clip, coordinator = self._find_clip(clip_id)
-        if coordinator is None:
-            coordinator = self._first_coordinator()
         title = clip.title if clip else "Suno"
         artist = clip.display_name if clip and clip.display_name else "Suno"
         meta_hash = clip_meta_hash(clip) if clip else ""
@@ -125,22 +119,8 @@ class SunoMediaProxyView(HomeAssistantView):
         meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
-        date = clip.created_at[:10] if clip and clip.created_at else ""
-        id3_header = _build_id3_header(
-            title=title,
-            artist=artist,
-            album=title,
-            album_artist="Suno",
-            date=date,
-            lyrics=clip.prompt if clip else "",
-            comment=clip.gpt_description_prompt if clip else "",
-            suno_style=clip.tags if clip else "",
-            suno_style_summary=clip.gpt_description_prompt if clip else "",
-            suno_model=clip.suno_model if clip else "",
-            suno_handle=clip.handle if clip else "",
-            suno_parent=clip.edited_clip_id if clip else "",
-            suno_lineage=clip.suno_lineage if clip else "",
-        )
+        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
+        id3_header = _build_id3_header(meta)
         cache_buf = bytearray(id3_header) if cache is not None else None
         response = web.StreamResponse(
             status=200,
@@ -214,27 +194,15 @@ class SunoMediaProxyView(HomeAssistantView):
         """Execute the full WAV-to-FLAC pipeline."""
         if client is None:
             return None
-        date = clip.created_at[:10] if clip and clip.created_at else ""
+        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
         return await download_and_transcode_to_flac(
             client,
             async_get_clientsession(self.hass),
             get_ffmpeg_manager(self.hass).binary,
             clip_id,
-            title,
-            artist=artist,
-            image_url=clip.image_large_url or clip.image_url if clip else None,
-            album=title,
-            album_artist="Suno",
-            date=date,
-            lyrics=clip.prompt if clip else "",
-            comment=clip.gpt_description_prompt if clip else "",
+            meta,
             duration=clip.duration if clip else 0.0,
-            suno_style=clip.tags if clip else "",
-            suno_style_summary=clip.gpt_description_prompt if clip else "",
-            suno_model=clip.suno_model if clip else "",
-            suno_handle=clip.handle if clip else "",
-            suno_parent=clip.edited_clip_id if clip else "",
-            suno_lineage=clip.suno_lineage if clip else "",
+            image_url=clip.image_large_url or clip.image_url if clip else None,
         )
 
     @staticmethod

@@ -90,6 +90,24 @@ class SunoClip:
             history=metadata.get("history"),
         )
 
+    def to_track_metadata(self, title: str | None = None, artist: str | None = None) -> TrackMetadata:
+        """Build a TrackMetadata from this clip's fields."""
+        t = title or self.title
+        return TrackMetadata(
+            title=t,
+            artist=artist or self.display_name or "Suno",
+            album=t,
+            date=self.created_at[:10] if self.created_at else "",
+            lyrics=self.prompt,
+            comment=self.gpt_description_prompt,
+            suno_style=self.tags,
+            suno_style_summary=self.gpt_description_prompt,
+            suno_model=self.suno_model,
+            suno_handle=self.handle,
+            suno_parent=self.edited_clip_id,
+            suno_lineage=self.suno_lineage,
+        )
+
     @property
     def suno_model(self) -> str:
         """Combined model identifier for metadata tags."""
@@ -143,6 +161,26 @@ class SunoCredits:
             monthly_usage=raw.get("monthly_usage", 0),
             period=raw.get("period"),
         )
+
+
+@dataclass(slots=True)
+class TrackMetadata:
+    """Common metadata fields for audio file tagging."""
+
+    title: str = ""
+    artist: str = "Suno"
+    album: str = ""
+    album_artist: str = "Suno"
+    date: str = ""
+    lyrics: str = ""
+    comment: str = ""
+    image_data: bytes | None = None
+    suno_style: str = ""
+    suno_style_summary: str = ""
+    suno_model: str = ""
+    suno_handle: str = ""
+    suno_parent: str = ""
+    suno_lineage: str = ""
 
 
 def clip_meta_hash(clip: SunoClip) -> str:

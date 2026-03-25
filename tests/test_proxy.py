@@ -12,6 +12,7 @@ from custom_components.suno.audio import (
     _build_id3_header,
     _skip_existing_id3,
 )
+from custom_components.suno.models import TrackMetadata
 from custom_components.suno.proxy import (
     SunoMediaProxyView,
 )
@@ -25,26 +26,26 @@ class TestBuildId3Header:
     """Tests for the minimal ID3v2.4 header builder."""
 
     def test_header_starts_with_id3_magic(self) -> None:
-        result = _build_id3_header("Title", "Artist")
+        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         assert result[:3] == b"ID3"
 
     def test_header_version_is_2_4(self) -> None:
-        result = _build_id3_header("Title", "Artist")
+        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         assert result[3:5] == b"\x04\x00"
 
     def test_contains_tit2_frame(self) -> None:
-        result = _build_id3_header("My Song", "Artist")
+        result = _build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
         assert b"TIT2" in result
         assert b"My Song" in result
 
     def test_contains_tpe1_frame(self) -> None:
-        result = _build_id3_header("Title", "Suno")
+        result = _build_id3_header(TrackMetadata(title="Title", artist="Suno"))
         assert b"TPE1" in result
         assert b"Suno" in result
 
     def test_utf8_encoding_byte(self) -> None:
         """Each text frame should use UTF-8 encoding (0x03)."""
-        result = _build_id3_header("Title", "Artist")
+        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         # After TIT2 frame header (4 id + 4 size + 2 flags = 10 bytes)
         tit2_pos = result.index(b"TIT2")
         encoding_byte = result[tit2_pos + 10]
@@ -52,26 +53,26 @@ class TestBuildId3Header:
 
     def test_syncsafe_size(self) -> None:
         """The header size field should be a valid syncsafe integer."""
-        result = _build_id3_header("Title", "Artist")
+        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         raw = result[6:10]
         # Each byte must have bit 7 clear (syncsafe)
         for byte in raw:
             assert byte & 0x80 == 0
 
     def test_unicode_title(self) -> None:
-        result = _build_id3_header("日本語タイトル", "アーティスト")
+        result = _build_id3_header(TrackMetadata(title="日本語タイトル", artist="アーティスト"))
         assert "日本語タイトル".encode() in result
         assert "アーティスト".encode() in result
 
     def test_empty_strings(self) -> None:
-        result = _build_id3_header("", "")
+        result = _build_id3_header(TrackMetadata(title="", artist=""))
         assert result[:3] == b"ID3"
         assert b"TIT2" in result
         assert b"TPE1" in result
 
     def test_round_trip_size(self) -> None:
         """The size in the header should match the actual frame data size."""
-        result = _build_id3_header("Test Title", "Test Artist")
+        result = _build_id3_header(TrackMetadata(title="Test Title", artist="Test Artist"))
         raw = result[6:10]
         decoded_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
         # Total bytes = 10 (header) + frames
@@ -137,7 +138,7 @@ async def test_view_registered_on_setup(hass: HomeAssistant, mock_suno_client: A
 
 
 async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Requesting a nonexistent clip returns 404."""
+    """Requesting a nonexistent clip falls back to first coordinator."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -145,7 +146,8 @@ async def test_view_clip_not_found(hass: HomeAssistant, mock_suno_client: AsyncM
     view = SunoMediaProxyView(hass)
     clip, coordinator = view._find_clip("nonexistent-id")
     assert clip is None
-    assert coordinator is None
+    # Coordinator is the fallback first coordinator (entry exists)
+    assert coordinator is not None
 
 
 async def test_view_finds_clip_in_main_clips(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
