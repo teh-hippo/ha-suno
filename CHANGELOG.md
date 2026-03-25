@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.7.0 (2026-03-25)
+
+### Features
+
+- Restructure paths, fix cover art, correct playlist ordering
+  ([`9bc1859`](https://github.com/teh-hippo/ha-suno/commit/9bc1859bc4462efde790f8c77ea59431f764fc5b))
+
+
 ## v3.6.1 (2026-03-25)
 
 ### Bug Fixes
