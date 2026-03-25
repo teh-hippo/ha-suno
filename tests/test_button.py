@@ -54,7 +54,7 @@ async def test_clear_cache_press_no_cache() -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_library_press_calls_async_download() -> None:
+async def test_sync_library_press_calls_async_download() -> None:
     """SunoDownloadLibraryButton.async_press calls download_manager.async_download(force=True)."""
     dm = MagicMock()
     dm.async_download = AsyncMock()
@@ -68,7 +68,7 @@ async def test_download_library_press_calls_async_download() -> None:
 
 
 @pytest.mark.asyncio
-async def test_download_library_press_no_dm() -> None:
+async def test_sync_library_press_no_dm() -> None:
     """async_press does nothing when coordinator.download_manager is None."""
     button = _make_button(SunoDownloadLibraryButton, download_manager=None)
     await button.async_press()  # should not raise
@@ -99,7 +99,7 @@ async def test_button_setup_no_download_button_without_path(hass: HomeAssistant,
     registry = er_mod.async_get(hass)
     entities = er_mod.async_entries_for_config_entry(registry, entry.entry_id)
     unique_ids = {e.unique_id for e in entities if e.domain == "button"}
-    assert "test-user-id-123_download_library" not in unique_ids
+    assert "test-user-id-123_sync_library" not in unique_ids
 
 
 async def test_button_setup_creates_download_button_with_path(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -115,4 +115,4 @@ async def test_button_setup_creates_download_button_with_path(hass: HomeAssistan
     entities = er_mod.async_entries_for_config_entry(registry, entry.entry_id)
     unique_ids = {e.unique_id for e in entities if e.domain == "button"}
     assert "test-user-id-123_clear_cache" in unique_ids
-    assert "test-user-id-123_download_library" in unique_ids
+    assert "test-user-id-123_sync_library" in unique_ids

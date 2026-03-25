@@ -22,17 +22,17 @@
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
           "show_latest": "Your latest",
-          "download_enabled": "Download songs",
-          "download_path": "Download directory",
+          "download_enabled": "Sync library",
+          "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
-          "show_playlists": "Include your Suno playlists in the media browser and downloads.",
+          "show_playlists": "Include your Suno playlists in the media browser and sync.",
           "show_liked": "Include your liked songs.",
           "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_enabled": "Save songs to a local directory.",
-          "download_path": "Local folder for saving songs.",
+          "download_enabled": "Keep a local copy of your Suno library in sync.",
+          "download_path": "Directory for your synced library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
@@ -57,43 +57,43 @@
           "show_playlists": "Playlists",
           "show_liked": "Liked songs",
           "show_latest": "Your latest",
-          "download_enabled": "Download songs",
-          "download_path": "Download directory",
+          "download_enabled": "Sync library",
+          "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
-          "show_playlists": "Include your Suno playlists in the media browser and downloads.",
+          "show_playlists": "Include your Suno playlists in the media browser and sync.",
           "show_liked": "Include your liked songs.",
           "show_latest": "Include your most recent songs, filtered by count and age.",
-          "download_enabled": "Save songs to a local directory.",
-          "download_path": "Local folder for saving songs.",
+          "download_enabled": "Keep a local copy of your Suno library in sync.",
+          "download_path": "Directory for your synced library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
       },
       "playlists": {
         "title": "Playlists",
-        "description": "Download settings for your playlists.",
+        "description": "Sync settings for your playlists.",
         "data": {
           "quality_playlists": "Quality",
           "download_mode_playlists": "Mode",
-          "all_playlists": "Download all playlists"
+          "all_playlists": "All playlists"
         },
         "data_description": {
-          "download_mode_playlists": "Mirror removes local files when songs are removed from a playlist. Keep retains all downloads permanently, even when removed from your library.",
+          "download_mode_playlists": "Mirror removes local files when songs leave a playlist. Keep retains all files permanently.",
           "all_playlists": "Turn off to choose specific playlists on the next page."
         }
       },
       "liked": {
         "title": "Liked Songs",
-        "description": "Download settings for your liked songs.",
+        "description": "Sync settings for your liked songs.",
         "data": {
           "quality_liked": "Quality",
           "download_mode_liked": "Mode"
         },
         "data_description": {
-          "download_mode_liked": "Mirror removes local files when you unlike a song. Keep retains all downloads permanently."
+          "download_mode_liked": "Mirror removes local files when you unlike a song. Keep retains all files permanently."
         }
       },
       "latest": {
@@ -107,7 +107,7 @@
           "latest_minimum": "Always keep at least"
         },
         "data_description": {
-          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Keep retains all downloads permanently.",
+          "download_mode_latest": "Mirror removes songs that no longer match the limits below. Keep retains all files permanently.",
           "latest_count": "Include up to this many of your latest songs. Set to 0 for no limit.",
           "latest_days": "Only include songs created within this many days. Set to 0 for no limit.",
           "latest_minimum": "Always include at least this many recent songs, even if they fall outside the lookback period. Set to 0 to disable."
@@ -116,13 +116,13 @@
       "select_playlists": {
         "title": "Select Playlists",
         "data": {
-          "playlists": "Playlists to download"
+          "playlists": "Playlists to sync"
         }
       }
     },
     "error": {
       "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission.",
-      "download_path_conflict": "This download directory is already in use by another Suno account."
+      "download_path_conflict": "This sync directory is already in use by another Suno account."
     }
   },
   "entity": {
@@ -136,31 +136,31 @@
       "cache_size": {
         "name": "Cache size"
       },
-      "download_status": {
-        "name": "Download status"
+      "sync_status": {
+        "name": "Sync status"
       },
-      "downloaded_files": {
-        "name": "Downloaded files"
+      "library_files": {
+        "name": "Library files"
       },
-      "download_remaining": {
-        "name": "Download items remaining"
+      "sync_remaining": {
+        "name": "Sync remaining"
       },
-      "download_size": {
-        "name": "Download library size"
+      "library_size": {
+        "name": "Library size"
       },
-      "last_download_run": {
-        "name": "Last download"
+      "last_sync": {
+        "name": "Last sync"
       },
-      "last_download_result": {
-        "name": "Last download result"
+      "last_sync_result": {
+        "name": "Last sync result"
       }
     },
     "button": {
       "clear_cache": {
         "name": "Clear cache"
       },
-      "download_library": {
-        "name": "Download library"
+      "sync_library": {
+        "name": "Sync library"
       }
     }
   },

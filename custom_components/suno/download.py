@@ -587,7 +587,7 @@ class SunoDownloadManager:
         self._state["last_download"] = datetime.now(tz=UTC).isoformat()
         self._pending = max(0, len(to_download) - downloaded - reconciled)
         if self._pending > 0:
-            self._last_result = f"Downloading ({self._pending} remaining)"
+            self._last_result = f"Syncing ({self._pending} remaining)"
         else:
             self._last_result = _build_download_summary(downloaded, len(to_delete), meta_updates)
         self._state["last_result"] = self._last_result

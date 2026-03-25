@@ -46,11 +46,11 @@ class SunoClearCacheButton(_SunoButton):
 
 
 class SunoDownloadLibraryButton(_SunoButton):
-    _attr_translation_key = "download_library"
+    _attr_translation_key = "sync_library"
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, key="download_library")
+        super().__init__(coordinator, entry, key="sync_library")
 
     async def async_press(self) -> None:
         if self.coordinator.download_manager:
