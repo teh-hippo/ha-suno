@@ -237,7 +237,7 @@ class SunoDownloadManager:
         self._client: SunoClient | None = None
         self._entry: ConfigEntry | None = None
         self._download_path = ""
-        self._download_videos = False
+        self._download_videos = True
         self._running = False
         self._errors = self._pending = 0
         self._last_result = ""
@@ -260,7 +260,7 @@ class SunoDownloadManager:
         mgr._client = client
         mgr._entry = entry
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
-        mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, False)
+        mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
         await mgr.async_init()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await mgr.cleanup_tmp_files(download_path)
