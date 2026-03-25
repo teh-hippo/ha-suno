@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v3.5.1 (2026-03-25)
+
+### Bug Fixes
+
+- Write cover.jpg for all directories, not just MP3
+  ([`c49cf8a`](https://github.com/teh-hippo/ha-suno/commit/c49cf8a8012d6f13387575b3ba95d91e2d14382d))
+
+
 ## v3.5.0 (2026-03-24)
 
 ### Features
