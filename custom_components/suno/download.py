@@ -480,12 +480,10 @@ class SunoDownloadManager:
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[DownloadItem] = []
         to_retag: list[DownloadItem] = []
-        seen_ids: set[str] = set()
 
         # Phase 1: Rename pass — move files whose path has changed (e.g. display_name or title change)
         migrated = 0
         for item in desired:
-            seen_ids.add(item.clip.id)
             if item.clip.id not in clips_state:
                 continue
             existing = clips_state[item.clip.id]
@@ -498,7 +496,10 @@ class SunoDownloadManager:
                     if await self.hass.async_add_executor_job(old_file.exists):
                         await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
                         await self.hass.async_add_executor_job(old_file.rename, new_file)
-                        # Also move video sidecar if it exists
+                        existing["path"] = new_path
+                        migrated += 1
+                        _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
+                        # Move video sidecar if it exists
                         old_video = old_file.with_suffix(".mp4")
                         if await self.hass.async_add_executor_job(old_video.exists):
                             await self.hass.async_add_executor_job(old_video.rename, new_file.with_suffix(".mp4"))
@@ -509,17 +510,17 @@ class SunoDownloadManager:
                                 if await self.hass.async_add_executor_job(old_sc.exists):
                                     new_sc = new_file.parent / sidecar_name
                                     await self.hass.async_add_executor_job(old_sc.rename, new_sc)
-                        existing["path"] = new_path
-                        migrated += 1
-                        _LOGGER.info("Renamed: %s -> %s", old_path, new_path)
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
         if migrated:
             _LOGGER.info("Renamed %d files", migrated)
+            # Persist state after renames to prevent orphans on crash
+            self._state["clips"] = clips_state
+            await self._save_state(base)
 
         # Phase 2: Change detection — new clips, quality changes, and metadata changes
-        seen_ids.clear()
+        seen_ids: set[str] = set()
         for item in desired:
             seen_ids.add(item.clip.id)
             if item.clip.id not in clips_state or force:
@@ -581,7 +582,7 @@ class SunoDownloadManager:
             if await self._retag_clip(item, target):
                 existing["meta_hash"] = clip_meta_hash(item.clip)
                 retagged += 1
-                _LOGGER.info("Re-tagged: %s", existing["path"])
+                _LOGGER.debug("Re-tagged: %s", existing["path"])
             else:
                 self._errors += 1
         if retagged:

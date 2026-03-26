@@ -521,6 +521,7 @@ async def retag_flac(
         result = tmp_out.read_bytes()
         if meta.image_data:
             result = _fix_flac_cover_type(result)
+            tmp_out.write_bytes(result)
         os.replace(str(tmp_out), str(file_path))
         return True
     except TimeoutError:

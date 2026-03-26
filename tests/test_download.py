@@ -2879,8 +2879,83 @@ async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: P
     assert call_count >= 2
     mock_dl.assert_not_called()
 
+    # Verify the failed clip's state still has the old path
+    clip0_id = "clip0000-0000-0000-0000-000000000000"
+    clip1_id = "clip0001-0000-0000-0000-000000000000"
+    clip0_state = sync._state["clips"][clip0_id]
+    clip1_state = sync._state["clips"][clip1_id]
+    # One succeeded and one failed — check at least one has the new path
+    new_paths = [_clip_path(c, QUALITY_HIGH) for c in new_clips]
+    paths = [clip0_state["path"], clip1_state["path"]]
+    # At least one clip should have been renamed to new path
+    assert any(p in new_paths for p in paths)
 
-async def test_manifest_write_failure_logged(hass: HomeAssistant, tmp_path: Path) -> None:
+
+async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Old-format hash (included display_name) triggers retag on first sync with new code."""
+    import hashlib
+
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _make_clip_with_display("clip-mig-0000-0000-0000-000000000000", "Migration Song", display_name="alice")
+    # Old hash formula included display_name
+    old_hash = hashlib.md5(  # noqa: S324
+        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.display_name}|{clip.video_url}|{clip.root_ancestor_id}".encode()
+    ).hexdigest()[:12]
+    new_hash = clip_meta_hash(clip)
+    assert old_hash != new_hash, "Hash formulas must differ for migration to trigger"
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    initial_state = {
+        "clips": {
+            clip.id: {
+                "path": rel_path,
+                "title": "Migration Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": old_hash,
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
+    ):
+        mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    mock_dl.assert_not_called()
+    mock_retag.assert_called_once()
+    assert target.exists()
+    assert sync._state["clips"][clip.id]["meta_hash"] == new_hash
+    assert sync.errors == 0
     """OSError writing manifest file is logged as warning, not raised."""
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
