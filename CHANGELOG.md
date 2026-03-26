@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.1 (2026-03-26)
+
+### Bug Fixes
+
+- Address post-deploy review findings
+  ([`d5a64bf`](https://github.com/teh-hippo/ha-suno/commit/d5a64bff025191c6bc4bdf628717edec2a3282c6))
+
+
 ## v4.2.0 (2026-03-26)
 
 ### Features
