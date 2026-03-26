@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.0 (2026-03-26)
+
+### Features
+
+- Handle username changes with rename + re-tag instead of re-download
+  ([`5ef796c`](https://github.com/teh-hippo/ha-suno/commit/5ef796cf3463aa7161cdfa8e57d86915b9b27895))
+
+
 ## v4.1.0 (2026-03-26)
 
 ### Features
