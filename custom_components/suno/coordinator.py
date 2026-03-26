@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import SunoClient
 from .const import DEFAULT_CACHE_TTL, DOMAIN
 from .exceptions import SunoAuthError, SunoConnectionError
-from .models import SunoClip, SunoCredits, SunoPlaylist, SunoUser
+from .models import SunoClip, SunoCredits, SunoPlaylist, SunoUser, _safe_clips, _safe_playlists
 
 if TYPE_CHECKING:
     from .cache import SunoCache
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 _STORE_VERSION = 1
+_MAX_PARENT_LOOKUPS_PER_CYCLE = 10
+_PARENT_LOOKUP_DELAY = 2.0
 
 
 @dataclass
@@ -64,12 +66,10 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             return None
         try:
             data = SunoData(
-                clips=[SunoClip(**c) for c in saved.get("clips", [])],
-                liked_clips=[SunoClip(**c) for c in saved.get("liked_clips", [])],
-                playlists=[SunoPlaylist(**p) for p in saved.get("playlists", [])],
-                playlist_clips={
-                    pid: [SunoClip(**c) for c in clips] for pid, clips in saved.get("playlist_clips", {}).items()
-                },
+                clips=_safe_clips(saved.get("clips", [])),
+                liked_clips=_safe_clips(saved.get("liked_clips", [])),
+                playlists=_safe_playlists(saved.get("playlists", [])),
+                playlist_clips={pid: _safe_clips(pclips) for pid, pclips in saved.get("playlist_clips", {}).items()},
             )
         except Exception:
             _LOGGER.warning("Stored library corrupt, ignoring")
@@ -88,6 +88,119 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             entry_type=DeviceEntryType.SERVICE,
             configuration_url="https://suno.com",
         )
+
+    async def _resolve_root_ancestors(self, data: SunoData) -> None:
+        """Resolve root ancestor IDs for clips via lineage chains."""
+        # Build unified clip index
+        all_clips: dict[str, SunoClip] = {}
+        for clip in data.clips:
+            all_clips[clip.id] = clip
+        for clip in data.liked_clips:
+            all_clips[clip.id] = clip
+        for clips in data.playlist_clips.values():
+            for clip in clips:
+                all_clips[clip.id] = clip
+
+        # Phase 1: In-memory chain resolution
+        resolved: dict[str, str] = {}  # clip_id -> root_ancestor_id
+        for clip in all_clips.values():
+            if clip.root_ancestor_id:
+                resolved[clip.id] = clip.root_ancestor_id
+                continue
+            # Trace chain
+            visited: set[str] = set()
+            chain: list[str] = []
+            current = clip.id
+            while current in all_clips and current not in visited:
+                visited.add(current)
+                chain.append(current)
+                parent_id = all_clips[current].edited_clip_id
+                if not parent_id:
+                    # Found root
+                    for cid in chain:
+                        resolved[cid] = current
+                    break
+                if parent_id in resolved:
+                    # Connect to already-resolved chain
+                    root = resolved[parent_id]
+                    for cid in chain:
+                        resolved[cid] = root
+                    break
+                current = parent_id
+            # If chain broke (current not in index), leave unresolved
+
+        # Apply Phase 1 results
+        for clip in all_clips.values():
+            if clip.id in resolved:
+                clip.root_ancestor_id = resolved[clip.id]
+
+        # Phase 2: API resolution for orphan remixes
+        unresolved = [c for c in all_clips.values() if not c.root_ancestor_id and c.is_remix]
+        if not unresolved:
+            return
+
+        api_calls = 0
+        parent_cache: dict[str, str] = {}
+        for clip in unresolved[:_MAX_PARENT_LOOKUPS_PER_CYCLE]:
+            if api_calls > 0:
+                await asyncio.sleep(_PARENT_LOOKUP_DELAY)
+
+            # Trace via API
+            current_id = clip.id
+            chain = [current_id]
+            visited = {current_id}
+
+            while api_calls < _MAX_PARENT_LOOKUPS_PER_CYCLE:
+                if current_id in resolved:
+                    root = resolved[current_id]
+                    for cid in chain:
+                        resolved[cid] = root
+                    break
+                if current_id in parent_cache:
+                    parent_id = parent_cache[current_id]
+                else:
+                    parent_data = await self.client.get_clip_parent(current_id)
+                    api_calls += 1
+                    parent_id = parent_data.get("id", "") if parent_data else ""
+                    parent_cache[current_id] = parent_id
+
+                if not parent_id or parent_id in visited:
+                    # Root found or circular
+                    for cid in chain:
+                        resolved[cid] = current_id
+                    break
+
+                visited.add(parent_id)
+                chain.append(parent_id)
+
+                # Check if parent is in our index
+                if parent_id in all_clips:
+                    parent_clip = all_clips[parent_id]
+                    if parent_clip.root_ancestor_id:
+                        root = parent_clip.root_ancestor_id
+                        for cid in chain:
+                            resolved[cid] = root
+                        break
+                    if not parent_clip.edited_clip_id:
+                        for cid in chain:
+                            resolved[cid] = parent_id
+                        break
+                    current_id = parent_clip.edited_clip_id
+                else:
+                    current_id = parent_id
+
+            # Apply results for this clip
+            if clip.id in resolved:
+                clip.root_ancestor_id = resolved[clip.id]
+
+        remaining = sum(1 for c in all_clips.values() if not c.root_ancestor_id and c.is_remix)
+        if api_calls or remaining:
+            _LOGGER.info(
+                "Root ancestor resolution: %d resolved, %d API calls, %d remaining",
+                sum(1 for c in all_clips.values() if c.root_ancestor_id),
+                api_calls,
+                remaining,
+            )
 
     async def _async_update_data(self) -> SunoData:
         try:
@@ -149,6 +262,8 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         data = SunoData(
             clips=clips, liked_clips=liked_clips, playlists=playlists, playlist_clips=playlist_clips, credits=credits
         )
+        await self._resolve_root_ancestors(data)
+
         # Update user identity from Suno API data
         api_display_name = self.client.suno_display_name
         if api_display_name and api_display_name != self.user.display_name:

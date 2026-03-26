@@ -1224,3 +1224,29 @@ async def test_paginate_feed_stops_at_max_pages() -> None:
     # Should stop at MAX_PAGES exactly
     assert call_count == MAX_PAGES
     assert len(clips) == MAX_PAGES
+
+
+# ── get_clip_parent ──────────────────────────────────────────────────
+
+
+async def test_get_clip_parent() -> None:
+    """get_clip_parent returns parent clip dict."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    parent_data = {"id": "parent-1", "title": "Parent Song"}
+    session.get = lambda *a, **kw: _mock_response(200, parent_data)
+
+    result = await client.get_clip_parent("child-1")
+    assert result is not None
+    assert result["id"] == "parent-1"
+
+
+async def test_get_clip_parent_root_returns_none() -> None:
+    """get_clip_parent returns None for root clips (no parent)."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+    # API returns empty dict (no id) for root clips
+    session.get = lambda *a, **kw: _mock_response(200, {})
+
+    result = await client.get_clip_parent("root-1")
+    assert result is None

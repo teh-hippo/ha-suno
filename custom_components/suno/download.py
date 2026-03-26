@@ -311,6 +311,7 @@ class SunoDownloadManager:
         self._errors = self._pending = 0
         self._last_result = ""
         self._updating_sensors = False
+        self._clip_index: dict[str, SunoClip] = {}
 
     async def async_init(self) -> None:
         """Load persisted download state."""
@@ -469,6 +470,7 @@ class SunoDownloadManager:
         desired, preserved_ids, source_to_name, playlist_order = await self._build_desired(
             options, client, coordinator_data
         )
+        self._clip_index = {item.clip.id: item.clip for item in desired}
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[DownloadItem] = []
         meta_updates = 0
@@ -491,9 +493,10 @@ class SunoDownloadManager:
                     old_hash = existing.get("meta_hash", "")
                     new_hash = clip_meta_hash(item.clip)
                     if old_hash and new_hash != old_hash:
-                        existing["meta_hash"] = new_hash
-                        existing["title"] = item.clip.title
-                        meta_updates += 1
+                        old_path = existing.get("path")
+                        if old_path:
+                            await _delete_file(self.hass, base, old_path)
+                        to_download.append(item)
         # Migrate files to new paths if the path format changed
         migrated = 0
         for item in desired:
@@ -780,7 +783,14 @@ class SunoDownloadManager:
         target = base / rel_path
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         clip = item.clip
-        meta = clip.to_track_metadata()
+        # Resolve album from root ancestor
+        album_title = None
+        if clip.root_ancestor_id and clip.root_ancestor_id != clip.id:
+            root_clip = self._clip_index.get(clip.root_ancestor_id)
+            if root_clip:
+                album_title = root_clip.title
+
+        meta = clip.to_track_metadata(album=album_title)
         try:
             session = async_get_clientsession(self.hass)
             image_url = clip.image_large_url or clip.image_url or None

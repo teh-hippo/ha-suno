@@ -774,7 +774,7 @@ async def test_quality_match_skips_download(hass: HomeAssistant, tmp_path: Path)
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc",
+                "meta_hash": "90ad164621b6",
                 "quality": "high",
             }
         },
@@ -1704,7 +1704,7 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc123",
+                "meta_hash": "0df907c50ba2",
                 "quality": "high",
             }
         },
@@ -1759,7 +1759,7 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc123",
+                "meta_hash": "0df907c50ba2",
                 "quality": "high",
             }
         },
@@ -1810,7 +1810,7 @@ async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: P
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc123",
+                "meta_hash": "ed24cdccc6f0",
                 "quality": "high",
             }
         },
@@ -1974,7 +1974,7 @@ async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path:
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc123",
+                "meta_hash": "556707bb4f51",
                 "quality": "high",
             }
         },
@@ -2043,7 +2043,7 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc123",
+                "meta_hash": "72b52b3dc558",
                 "quality": "high",
             }
         },
@@ -2381,7 +2381,7 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "abc",
+                "meta_hash": "90ad164621b6",
                 "quality": "high",
             }
         },
@@ -2529,8 +2529,8 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 # ── T6: Metadata hash change updates state ─────────────────────────
 
 
-async def test_metadata_hash_change_updates_state(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Changed meta hash should update state without re-downloading."""
+async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changed meta hash should delete old file and trigger re-download."""
     from custom_components.suno.models import clip_meta_hash
 
     sync = SunoDownloadManager(hass, "test_sync_state")
@@ -2558,10 +2558,12 @@ async def test_metadata_hash_change_updates_state(hass: HomeAssistant, tmp_path:
     with patch.object(sync._store, "async_load", return_value=initial_state):
         await sync.async_init()
 
-    # Create the file on disk so it won't be treated as new
+    # Create the file on disk so we can verify it gets deleted
     target = sync_dir / rel_path
     target.parent.mkdir(parents=True)
     target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    fake_flac = b"fLaC" + b"\x00" * 80
 
     client = AsyncMock()
     client.get_liked_songs = AsyncMock(return_value=[clip])
@@ -2569,6 +2571,11 @@ async def test_metadata_hash_change_updates_state(hass: HomeAssistant, tmp_path:
     client.get_all_songs = AsyncMock(return_value=[])
 
     with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ) as mock_dl,
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch("custom_components.suno.download.fetch_album_art", return_value=None),
@@ -2582,13 +2589,14 @@ async def test_metadata_hash_change_updates_state(hass: HomeAssistant, tmp_path:
         }
         await sync.async_download(opts, client)
 
+    # Re-download should have been triggered
+    mock_dl.assert_called_once()
     # Verify meta hash was updated in state
     new_hash = clip_meta_hash(clip)
     assert new_hash != old_hash
     clip_state = sync._state["clips"]["clip-meta"]
     assert clip_state["meta_hash"] == new_hash
     assert clip_state["title"] == "Meta Song"
-    # No download errors - means no re-download was attempted
     assert sync.errors == 0
 
 
@@ -2823,3 +2831,144 @@ async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
     # Playlists and my_songs toggled off
     client.get_playlists.assert_not_called()
     client.get_all_songs.assert_not_called()
+
+
+# ── Album from root ancestor tests ─────────────────────────────────
+
+
+async def test_album_set_from_root_ancestor(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Download sets album to root ancestor's title when root_ancestor_id is set."""
+    from custom_components.suno.models import SunoClip
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    root_clip = SunoClip(
+        id="root-song",
+        title="Original Song",
+        audio_url="https://cdn1.suno.ai/root-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    child_clip = SunoClip(
+        id="child-song",
+        title="Remix Version",
+        audio_url="https://cdn1.suno.ai/child-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-16T10:00:00Z",
+        tags="pop",
+        duration=130.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="root-song",
+        root_ancestor_id="root-song",
+    )
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[child_clip, root_clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    captured_meta = {}
+
+    async def mock_transcode(*args, **kwargs):
+        # args[4] is meta (TrackMetadata)
+        captured_meta["album"] = args[4].album
+        return fake_flac
+
+    sync_dir = tmp_path / "mirror"
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            side_effect=mock_transcode,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # The child clip's album should be the root's title
+    assert captured_meta.get("album") == "Original Song"
+
+
+async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Download falls back to clip's own title as album when no root resolved."""
+    from custom_components.suno.models import SunoClip
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = SunoClip(
+        id="solo-song",
+        title="Standalone Track",
+        audio_url="https://cdn1.suno.ai/solo-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        root_ancestor_id="",
+    )
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    captured_meta = {}
+
+    async def mock_transcode(*args, **kwargs):
+        captured_meta["album"] = args[4].album
+        return fake_flac
+
+    sync_dir = tmp_path / "mirror"
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            side_effect=mock_transcode,
+        ),
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Fallback: album == clip's own title
+    assert captured_meta.get("album") == "Standalone Track"

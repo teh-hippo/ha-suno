@@ -10,9 +10,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.suno.coordinator import SunoCoordinator, SunoData
+from custom_components.suno.coordinator import _MAX_PARENT_LOOKUPS_PER_CYCLE, SunoCoordinator, SunoData
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
-from custom_components.suno.models import SunoPlaylist
+from custom_components.suno.models import SunoClip, SunoPlaylist
 
 from .conftest import (
     make_entry,
@@ -196,7 +196,7 @@ async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_cli
 
 
 async def test_load_stored_data_corrupt(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Corrupt stored data should log warning and return None."""
+    """Corrupt stored data should log warning and return SunoData with skipped entries."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -205,7 +205,8 @@ async def test_load_stored_data_corrupt(hass: HomeAssistant, mock_suno_client: A
     # Simulate corrupt data by patching the store to return bad data
     with patch.object(coordinator._store, "async_load", return_value={"clips": [{"bad": "data"}]}):
         result = await coordinator.async_load_stored_data()
-        assert result is None
+        assert result is not None
+        assert len(result.clips) == 0
 
 
 async def test_load_stored_data_non_dict(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -298,17 +299,18 @@ async def test_playlist_clip_fetch_partial_failure(hass: HomeAssistant, mock_sun
 
 
 async def test_corrupt_non_dict_stored_data_returns_none(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """async_load_stored_data with corrupt non-dict data logs warning and returns None."""
+    """async_load_stored_data with corrupt clip entries skips them gracefully."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     coordinator: SunoCoordinator = entry.runtime_data
-    # Dict with entries that cannot construct a SunoClip → except → warning → None
+    # Dict with entries that cannot construct a SunoClip → skipped by _safe_clips
     corrupt = {"clips": [{"title": "only title, missing required fields"}]}
     with patch.object(coordinator._store, "async_load", return_value=corrupt):
         result = await coordinator.async_load_stored_data()
-    assert result is None
+    assert result is not None
+    assert len(result.clips) == 0
 
 
 async def test_valid_stored_data_restores_coordinator(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -413,3 +415,179 @@ async def test_playlist_clips_keys_match_ids(hass: HomeAssistant, mock_suno_clie
 
     coordinator: SunoCoordinator = entry.runtime_data
     assert set(coordinator.data.playlist_clips.keys()) == {"pl-alpha", "pl-beta", "pl-gamma"}
+
+
+# ── Root ancestor resolution tests ──────────────────────────────────
+
+
+def _make_lineage_clip(
+    clip_id: str,
+    title: str = "Song",
+    edited_clip_id: str = "",
+    is_remix: bool = False,
+    root_ancestor_id: str = "",
+) -> SunoClip:
+    """Create a minimal SunoClip for lineage tests."""
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id=edited_clip_id,
+        is_remix=is_remix,
+        root_ancestor_id=root_ancestor_id,
+    )
+
+
+async def test_root_ancestor_in_memory_chain(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """In-memory chain A->B->C resolves all to root C."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    clip_c = _make_lineage_clip("clip-c", title="Root Song")
+    clip_b = _make_lineage_clip("clip-b", edited_clip_id="clip-c")
+    clip_a = _make_lineage_clip("clip-a", edited_clip_id="clip-b")
+
+    data = SunoData(clips=[clip_a, clip_b, clip_c])
+    await coordinator._resolve_root_ancestors(data)
+
+    assert clip_a.root_ancestor_id == "clip-c"
+    assert clip_b.root_ancestor_id == "clip-c"
+    assert clip_c.root_ancestor_id == "clip-c"
+
+
+async def test_root_ancestor_via_parent_api(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Orphan remix resolves root via API parent lookups."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Clip D is a remix with edited_clip_id pointing outside the library,
+    # so Phase 1 chain breaks and Phase 2 API resolution kicks in.
+    clip_d = _make_lineage_clip("clip-d", edited_clip_id="external-parent", is_remix=True)
+
+    # API: clip-d -> parent-ext -> None (root)
+    async def mock_parent(clip_id):
+        if clip_id == "clip-d":
+            return {"id": "parent-ext"}
+        return None
+
+    coordinator.client.get_clip_parent = AsyncMock(side_effect=mock_parent)
+
+    data = SunoData(clips=[clip_d])
+    with patch("custom_components.suno.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        await coordinator._resolve_root_ancestors(data)
+
+    assert clip_d.root_ancestor_id == "parent-ext"
+
+
+async def test_root_ancestor_deep_chain(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """5-deep chain A->B->C->D->E resolves all to root E."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    clip_e = _make_lineage_clip("clip-e", title="Root")
+    clip_d = _make_lineage_clip("clip-d", edited_clip_id="clip-e")
+    clip_c = _make_lineage_clip("clip-c", edited_clip_id="clip-d")
+    clip_b = _make_lineage_clip("clip-b", edited_clip_id="clip-c")
+    clip_a = _make_lineage_clip("clip-a", edited_clip_id="clip-b")
+
+    data = SunoData(clips=[clip_a, clip_b, clip_c, clip_d, clip_e])
+    await coordinator._resolve_root_ancestors(data)
+
+    for clip in [clip_a, clip_b, clip_c, clip_d]:
+        assert clip.root_ancestor_id == "clip-e"
+    assert clip_e.root_ancestor_id == "clip-e"
+
+
+async def test_root_ancestor_broken_chain(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Clip with edited_clip_id pointing to missing clip stays unresolved."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # edited_clip_id points to a clip not in the library, and is_remix=False
+    # so Phase 2 API lookup won't run either
+    clip_a = _make_lineage_clip("clip-a", edited_clip_id="missing-clip")
+
+    data = SunoData(clips=[clip_a])
+    await coordinator._resolve_root_ancestors(data)
+
+    assert clip_a.root_ancestor_id == ""
+
+
+async def test_root_ancestor_circular_chain(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Circular chain A->B->A does not loop forever and stays unresolved."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    clip_a = _make_lineage_clip("clip-a", edited_clip_id="clip-b")
+    clip_b = _make_lineage_clip("clip-b", edited_clip_id="clip-a")
+
+    data = SunoData(clips=[clip_a, clip_b])
+    await coordinator._resolve_root_ancestors(data)
+
+    # Should terminate without hanging; circular chain is left unresolved
+    # (neither clip is_remix, so Phase 2 API lookup won't run either)
+    assert clip_a.root_ancestor_id == ""
+    assert clip_b.root_ancestor_id == ""
+
+
+# ── Integration: caching and phased resolution ──────────────────────
+
+
+async def test_root_ancestor_cached_across_updates(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Already-resolved clips skip API calls on subsequent updates."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Pre-resolved clip
+    clip = _make_lineage_clip("clip-x", is_remix=True, root_ancestor_id="root-z")
+
+    coordinator.client.get_clip_parent = AsyncMock()
+
+    data = SunoData(clips=[clip])
+    await coordinator._resolve_root_ancestors(data)
+
+    # API should never be called since clip already has root_ancestor_id
+    coordinator.client.get_clip_parent.assert_not_called()
+    assert clip.root_ancestor_id == "root-z"
+
+
+async def test_phased_resolution_caps_api_calls(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Only MAX_PARENT_LOOKUPS_PER_CYCLE API calls are made for orphan remixes."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Create 20 orphan remixes with edited_clip_id pointing outside library
+    # so Phase 1 chain breaks and Phase 2 kicks in
+    clips = [_make_lineage_clip(f"orphan-{i}", edited_clip_id=f"ext-{i}", is_remix=True) for i in range(20)]
+
+    # Each API call returns None (root found immediately)
+    coordinator.client.get_clip_parent = AsyncMock(return_value=None)
+
+    data = SunoData(clips=clips)
+    with patch("custom_components.suno.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        await coordinator._resolve_root_ancestors(data)
+
+    assert coordinator.client.get_clip_parent.call_count <= _MAX_PARENT_LOOKUPS_PER_CYCLE

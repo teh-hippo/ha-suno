@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, fields
 from typing import Any
 
 from .const import CDN_BASE_URL
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _fix_cdn_url(url: str | None) -> str:
@@ -51,6 +54,7 @@ class SunoClip:
     edited_clip_id: str = ""
     is_remix: bool = False
     history: list[dict[str, Any]] | None = None
+    root_ancestor_id: str = ""
 
     @classmethod
     def from_api_response(cls, raw: dict[str, Any]) -> SunoClip:
@@ -90,13 +94,18 @@ class SunoClip:
             history=metadata.get("history"),
         )
 
-    def to_track_metadata(self, title: str | None = None, artist: str | None = None) -> TrackMetadata:
+    def to_track_metadata(
+        self,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+    ) -> TrackMetadata:
         """Build a TrackMetadata from this clip's fields."""
         t = title or self.title
         return TrackMetadata(
             title=t,
             artist=artist or self.display_name or "Suno",
-            album=t,
+            album=album or t,
             date=self.created_at[:10] if self.created_at else "",
             lyrics=self.prompt,
             comment=self.gpt_description_prompt,
@@ -146,6 +155,25 @@ class SunoClip:
         return "\n".join(parts)
 
 
+_CLIP_FIELDS = {f.name for f in fields(SunoClip)}
+
+
+def _safe_clip(raw: dict[str, Any]) -> SunoClip:
+    """Construct a SunoClip, filtering unknown fields for schema compatibility."""
+    return SunoClip(**{k: v for k, v in raw.items() if k in _CLIP_FIELDS})
+
+
+def _safe_clips(raw_list: list[dict[str, Any]]) -> list[SunoClip]:
+    """Construct a list of SunoClips, skipping corrupt entries."""
+    result: list[SunoClip] = []
+    for c in raw_list:
+        try:
+            result.append(_safe_clip(c))
+        except Exception:
+            _LOGGER.warning("Skipping corrupt clip entry: %s", c.get("id", "unknown"))
+    return result
+
+
 @dataclass(slots=True)
 class SunoCredits:
     credits_left: int
@@ -186,7 +214,7 @@ class TrackMetadata:
 def clip_meta_hash(clip: SunoClip) -> str:
     """Short hash of clip metadata for change detection."""
     return hashlib.md5(  # noqa: S324
-        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.display_name}|{clip.video_url}".encode()
+        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.display_name}|{clip.video_url}|{clip.root_ancestor_id}".encode()
     ).hexdigest()[:12]
 
 
@@ -205,3 +233,22 @@ class SunoPlaylist:
             image_url=_fix_cdn_url(raw.get("image_url")),
             num_clips=raw.get("num_total_results", 0),
         )
+
+
+_PLAYLIST_FIELDS = {f.name for f in fields(SunoPlaylist)}
+
+
+def _safe_playlist(raw: dict[str, Any]) -> SunoPlaylist:
+    """Construct a SunoPlaylist, filtering unknown fields."""
+    return SunoPlaylist(**{k: v for k, v in raw.items() if k in _PLAYLIST_FIELDS})
+
+
+def _safe_playlists(raw_list: list[dict[str, Any]]) -> list[SunoPlaylist]:
+    """Construct a list of SunoPlaylists, skipping corrupt entries."""
+    result: list[SunoPlaylist] = []
+    for p in raw_list:
+        try:
+            result.append(_safe_playlist(p))
+        except Exception:
+            _LOGGER.warning("Skipping corrupt playlist entry: %s", p.get("id", "unknown"))
+    return result

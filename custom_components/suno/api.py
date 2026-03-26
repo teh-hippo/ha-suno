@@ -174,3 +174,18 @@ class SunoClient:
             if isinstance(data := await self._api_get(f"/api/gen/{clip_id}/wav_file/"), dict)
             else None
         )
+
+    async def get_clip_parent(self, clip_id: str) -> dict[str, Any] | None:
+        """Get the parent clip for a given clip via the parent endpoint.
+
+        Returns the parent clip dict if found, or None if the clip is a root
+        (no parent) or on any error.
+        """
+        url = f"{SUNO_API_BASE_URL}/api/clips/parent?clip_id={clip_id}"
+        try:
+            data = await self._api_get(url)
+        except Exception:
+            return None
+        if isinstance(data, dict) and data.get("id"):
+            return data
+        return None
