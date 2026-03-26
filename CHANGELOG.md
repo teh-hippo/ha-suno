@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.1.0 (2026-03-26)
+
+### Features
+
+- Root ancestor resolution and safe clip handling
+  ([`2962f79`](https://github.com/teh-hippo/ha-suno/commit/2962f7992ec0e3ce9599b07c61755c4a8c831b3b))
+
+
 ## v4.0.0 (2026-03-25)
 
 ### Features
