@@ -1250,3 +1250,82 @@ async def test_get_clip_parent_root_returns_none() -> None:
 
     result = await client.get_clip_parent("root-1")
     assert result is None
+
+
+async def test_display_name_updates_on_subsequent_feed_calls() -> None:
+    """suno_display_name updates when the API returns a new display_name."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    def _feed_response(display_name: str):
+        return _mock_response(
+            200,
+            {
+                "clips": [
+                    {
+                        "id": "clip-1",
+                        "status": "complete",
+                        "display_name": display_name,
+                        "metadata": {"type": "gen", "tags": "pop", "duration": 60.0, "has_vocal": True},
+                    }
+                ],
+                "has_more": False,
+            },
+        )
+
+    # First feed call sets the display_name
+    session.get = lambda *a, **kw: _feed_response("OldName")
+    await client.get_feed()
+    assert client.suno_display_name == "OldName"
+
+    # Second feed call with a changed display_name should update it
+    session.get = lambda *a, **kw: _feed_response("NewName")
+    await client.get_feed()
+    assert client.suno_display_name == "NewName"
+
+
+async def test_display_name_updates_during_pagination() -> None:
+    """suno_display_name updates during paginated feed fetches."""
+    session = AsyncMock()
+    client = _make_authed_client(session)
+
+    call_count = 0
+
+    def _paginated_feed(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _mock_response(
+                200,
+                {
+                    "clips": [
+                        {
+                            "id": "clip-1",
+                            "status": "complete",
+                            "display_name": "OldName",
+                            "metadata": {"type": "gen", "tags": "pop", "duration": 60.0, "has_vocal": True},
+                        }
+                    ],
+                    "has_more": True,
+                },
+            )
+        return _mock_response(
+            200,
+            {
+                "clips": [
+                    {
+                        "id": "clip-2",
+                        "status": "complete",
+                        "display_name": "NewName",
+                        "metadata": {"type": "gen", "tags": "pop", "duration": 60.0, "has_vocal": True},
+                    }
+                ],
+                "has_more": False,
+            },
+        )
+
+    session.get = _paginated_feed
+    clips = await client.get_all_songs()
+    assert len(clips) == 2
+    # The last page's display_name should be captured
+    assert client.suno_display_name == "NewName"

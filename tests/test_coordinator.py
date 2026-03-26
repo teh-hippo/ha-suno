@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from unittest.mock import AsyncMock, patch
 
@@ -169,6 +170,25 @@ async def test_title_update_on_display_name_change(hass: HomeAssistant, mock_sun
         await setup_entry(hass, entry)
 
     assert entry.title == "NewName"
+
+
+async def test_display_name_change_logged(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Display name change is logged at INFO level."""
+    mock_suno_client.suno_display_name = "OldName"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.user.display_name == "OldName"
+
+    mock_suno_client.suno_display_name = "NewName"
+    with caplog.at_level(logging.INFO, logger="custom_components.suno.coordinator"):
+        await coordinator._async_update_data()
+
+    assert "Display name changed: 'OldName' -> 'NewName'" in caplog.text
 
 
 async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

@@ -52,7 +52,7 @@ class SunoClient:
             return [], False
         raw_clips = data.get("clips") or []
         # Capture display_name from first clip (user's own Suno handle)
-        if raw_clips and not self._last_seen_display_name:
+        if raw_clips:
             self._last_seen_display_name = (raw_clips[0].get("display_name") or "").strip() or None
         return self._filter_and_sanitise(raw_clips), bool(data.get("has_more", False))
 
@@ -100,7 +100,7 @@ class SunoClient:
             if not isinstance(data, dict):
                 break
             raw_clips = data.get("clips") or []
-            if raw_clips and not self._last_seen_display_name:
+            if raw_clips:
                 self._last_seen_display_name = (raw_clips[0].get("display_name") or "").strip() or None
             all_clips.extend(self._filter_and_sanitise(raw_clips))
             if not data.get("has_more", False):

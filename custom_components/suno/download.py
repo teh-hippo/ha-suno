@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art
+from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from .const import (
     CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
@@ -83,11 +83,17 @@ def _sanitise_filename(name: str, max_len: int = 200) -> str:
     return safe[:max_len] if safe else "untitled"
 
 
-def _build_download_summary(downloaded: int, removed: int, meta_updates: int) -> str:
+def _build_download_summary(
+    downloaded: int, removed: int, meta_updates: int, renamed: int = 0, retagged: int = 0
+) -> str:
     """Build a human-readable summary of download results."""
     parts: list[str] = []
     if downloaded:
         parts.append(f"{downloaded} new song{'s' if downloaded != 1 else ''}")
+    if renamed:
+        parts.append(f"{renamed} renamed")
+    if retagged:
+        parts.append(f"{retagged} re-tagged")
     if meta_updates:
         parts.append(f"{meta_updates} metadata update{'s' if meta_updates != 1 else ''}")
     if removed:
@@ -473,33 +479,13 @@ class SunoDownloadManager:
         self._clip_index = {item.clip.id: item.clip for item in desired}
         clips_state = dict(self._state.get("clips", {}))
         to_download: list[DownloadItem] = []
-        meta_updates = 0
+        to_retag: list[DownloadItem] = []
         seen_ids: set[str] = set()
-        for item in desired:
-            seen_ids.add(item.clip.id)
-            if item.clip.id not in clips_state or force:
-                to_download.append(item)
-            else:
-                existing = clips_state[item.clip.id]
-                # Quality change detection
-                existing_quality = existing.get("quality", QUALITY_HIGH)
-                if existing_quality != item.quality:
-                    old_path = existing.get("path")
-                    if old_path:
-                        await _delete_file(self.hass, base, old_path)
-                    to_download.append(item)
-                else:
-                    existing["sources"] = item.sources
-                    old_hash = existing.get("meta_hash", "")
-                    new_hash = clip_meta_hash(item.clip)
-                    if old_hash and new_hash != old_hash:
-                        old_path = existing.get("path")
-                        if old_path:
-                            await _delete_file(self.hass, base, old_path)
-                        to_download.append(item)
-        # Migrate files to new paths if the path format changed
+
+        # Phase 1: Rename pass — move files whose path has changed (e.g. display_name or title change)
         migrated = 0
         for item in desired:
+            seen_ids.add(item.clip.id)
             if item.clip.id not in clips_state:
                 continue
             existing = clips_state[item.clip.id]
@@ -508,18 +494,52 @@ class SunoDownloadManager:
             if old_path and old_path != new_path:
                 old_file = base / old_path
                 new_file = base / new_path
-                if await self.hass.async_add_executor_job(old_file.exists):
-                    await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
-                    await self.hass.async_add_executor_job(old_file.rename, new_file)
-                    # Also move video if it exists
-                    old_video = old_file.with_suffix(".mp4")
-                    if await self.hass.async_add_executor_job(old_video.exists):
-                        await self.hass.async_add_executor_job(old_video.rename, new_file.with_suffix(".mp4"))
-                    existing["path"] = new_path
-                    migrated += 1
-                    _cleanup_empty_dirs(base, old_file)
+                try:
+                    if await self.hass.async_add_executor_job(old_file.exists):
+                        await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
+                        await self.hass.async_add_executor_job(old_file.rename, new_file)
+                        # Also move video sidecar if it exists
+                        old_video = old_file.with_suffix(".mp4")
+                        if await self.hass.async_add_executor_job(old_video.exists):
+                            await self.hass.async_add_executor_job(old_video.rename, new_file.with_suffix(".mp4"))
+                        # Move cover art sidecars if the parent directory changed
+                        if old_file.parent != new_file.parent:
+                            for sidecar_name in ("cover.jpg", ".cover_hash"):
+                                old_sc = old_file.parent / sidecar_name
+                                if await self.hass.async_add_executor_job(old_sc.exists):
+                                    new_sc = new_file.parent / sidecar_name
+                                    await self.hass.async_add_executor_job(old_sc.rename, new_sc)
+                        existing["path"] = new_path
+                        migrated += 1
+                        _LOGGER.info("Renamed: %s -> %s", old_path, new_path)
+                        _cleanup_empty_dirs(base, old_file)
+                except OSError:
+                    _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
         if migrated:
-            _LOGGER.info("Migrated %d files to new path structure", migrated)
+            _LOGGER.info("Renamed %d files", migrated)
+
+        # Phase 2: Change detection — new clips, quality changes, and metadata changes
+        seen_ids.clear()
+        for item in desired:
+            seen_ids.add(item.clip.id)
+            if item.clip.id not in clips_state or force:
+                to_download.append(item)
+            else:
+                existing = clips_state[item.clip.id]
+                # Quality change → delete old + re-download (format change)
+                existing_quality = existing.get("quality", QUALITY_HIGH)
+                if existing_quality != item.quality:
+                    old_path = existing.get("path")
+                    if old_path:
+                        await _delete_file(self.hass, base, old_path)
+                    to_download.append(item)
+                else:
+                    existing["sources"] = item.sources
+                    # Content change → queue for re-tag (NOT delete + re-download)
+                    old_hash = existing.get("meta_hash", "")
+                    new_hash = clip_meta_hash(item.clip)
+                    if old_hash and new_hash != old_hash:
+                        to_retag.append(item)
 
         to_delete = []
         for cid in clips_state:
@@ -534,8 +554,9 @@ class SunoDownloadManager:
         self._pending = len(to_download)
         self._notify_coordinator()
         _LOGGER.info(
-            "Download: %d to download, %d to remove, %d current",
+            "Sync: %d to download, %d to re-tag, %d to remove, %d current",
             len(to_download),
+            len(to_retag),
             len(to_delete),
             len(seen_ids),
         )
@@ -549,6 +570,24 @@ class SunoDownloadManager:
         label = "Initial sync" if initial else "Syncing"
         if initial:
             _LOGGER.info("Initial sync: %d files to download", len(to_download))
+
+        # Phase 3: Re-tag pass — update embedded metadata in existing files
+        retagged = 0
+        for item in to_retag:
+            existing = clips_state.get(item.clip.id)
+            if not existing or not existing.get("path"):
+                continue
+            target = base / existing["path"]
+            if await self._retag_clip(item, target):
+                existing["meta_hash"] = clip_meta_hash(item.clip)
+                retagged += 1
+                _LOGGER.info("Re-tagged: %s", existing["path"])
+            else:
+                self._errors += 1
+        if retagged:
+            _LOGGER.info("Re-tagged %d files", retagged)
+
+        # Phase 4: Download new clips
         downloaded = 0
         reconciled = 0
         cover_dirs: set[str] = set()
@@ -615,7 +654,7 @@ class SunoDownloadManager:
         if self._pending > 0:
             self._last_result = f"Syncing ({self._pending} remaining)"
         else:
-            self._last_result = _build_download_summary(downloaded, len(to_delete), meta_updates)
+            self._last_result = _build_download_summary(downloaded, len(to_delete), 0, migrated, retagged)
         self._state["last_result"] = self._last_result
         await self._save_state(base)
         if options.get(CONF_CREATE_PLAYLISTS):
@@ -878,6 +917,24 @@ class SunoDownloadManager:
                     raise
         except Exception:
             _LOGGER.debug("Failed to download video from %s", video_url)
+
+    async def _retag_clip(self, item: DownloadItem, target: Path) -> bool:
+        """Re-tag an existing audio file with updated metadata."""
+        clip = item.clip
+        album_title = None
+        if clip.root_ancestor_id and clip.root_ancestor_id != clip.id:
+            root_clip = self._clip_index.get(clip.root_ancestor_id)
+            if root_clip:
+                album_title = root_clip.title
+        meta = clip.to_track_metadata(album=album_title)
+        try:
+            if target.suffix == ".flac":
+                ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
+                return await retag_flac(ffmpeg_binary, target, meta)
+            return await self.hass.async_add_executor_job(retag_mp3, target, meta)
+        except Exception:
+            _LOGGER.exception("Failed to re-tag %s", target)
+            return False
 
     # fmt: off
     async def cleanup_tmp_files(self, download_path: str) -> None:

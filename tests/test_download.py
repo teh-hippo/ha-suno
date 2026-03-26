@@ -774,7 +774,7 @@ async def test_quality_match_skips_download(hass: HomeAssistant, tmp_path: Path)
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "90ad164621b6",
+                "meta_hash": "9ad1d8ab369d",
                 "quality": "high",
             }
         },
@@ -875,6 +875,21 @@ class TestBuildSyncSummary:
     def test_all_plural(self) -> None:
         result = _build_download_summary(3, 4, 5)
         assert result == "3 new songs, 5 metadata updates, 4 removals"
+
+    def test_renamed(self) -> None:
+        assert _build_download_summary(0, 0, 0, renamed=3) == "3 renamed"
+
+    def test_retagged(self) -> None:
+        assert _build_download_summary(0, 0, 0, retagged=5) == "5 re-tagged"
+
+    def test_full_username_change(self) -> None:
+        """Typical username change: renames + re-tags, no downloads."""
+        result = _build_download_summary(0, 0, 0, renamed=50, retagged=0)
+        assert result == "50 renamed"
+
+    def test_all_operations(self) -> None:
+        result = _build_download_summary(2, 1, 0, renamed=3, retagged=5)
+        assert result == "2 new songs, 3 renamed, 5 re-tagged, 1 removal"
 
 
 # ── Download clip branching ────────────────────────────────────────
@@ -1704,7 +1719,7 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "0df907c50ba2",
+                "meta_hash": "9ad1d8ab369d",
                 "quality": "high",
             }
         },
@@ -1759,7 +1774,7 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "0df907c50ba2",
+                "meta_hash": "9ad1d8ab369d",
                 "quality": "high",
             }
         },
@@ -1810,7 +1825,7 @@ async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: P
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "ed24cdccc6f0",
+                "meta_hash": "8692c463e866",
                 "quality": "high",
             }
         },
@@ -1974,7 +1989,7 @@ async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path:
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "556707bb4f51",
+                "meta_hash": "5ed3d7d7bb17",
                 "quality": "high",
             }
         },
@@ -2043,7 +2058,7 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "72b52b3dc558",
+                "meta_hash": "ea0d9c4102fe",
                 "quality": "high",
             }
         },
@@ -2381,7 +2396,7 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
                 "created": "2026-03-15",
                 "sources": ["liked"],
                 "size": 54,
-                "meta_hash": "90ad164621b6",
+                "meta_hash": "9ad1d8ab369d",
                 "quality": "high",
             }
         },
@@ -2529,8 +2544,8 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 # ── T6: Metadata hash change updates state ─────────────────────────
 
 
-async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Changed meta hash should delete old file and trigger re-download."""
+async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changed meta hash should re-tag the file in place, not re-download."""
     from custom_components.suno.models import clip_meta_hash
 
     sync = SunoDownloadManager(hass, "test_sync_state")
@@ -2539,7 +2554,7 @@ async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp
     # Pre-populate state with old meta hash
     old_hash = "old_hash_1234"
     sync_dir = tmp_path / "mirror"
-    rel_path = "Suno/Meta Song/Suno-Meta Song [clip-met].flac"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
 
     initial_state = {
         "clips": {
@@ -2558,12 +2573,10 @@ async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp
     with patch.object(sync._store, "async_load", return_value=initial_state):
         await sync.async_init()
 
-    # Create the file on disk so we can verify it gets deleted
+    # Create the file on disk
     target = sync_dir / rel_path
     target.parent.mkdir(parents=True)
     target.write_bytes(b"fLaC" + b"\x00" * 50)
-
-    fake_flac = b"fLaC" + b"\x00" * 80
 
     client = AsyncMock()
     client.get_liked_songs = AsyncMock(return_value=[clip])
@@ -2574,11 +2587,141 @@ async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp
         patch(
             "custom_components.suno.download.download_and_transcode_to_flac",
             new_callable=AsyncMock,
-            return_value=fake_flac,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
         patch("custom_components.suno.download.async_get_clientsession"),
         patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
+    ):
+        mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # Re-download should NOT have been triggered
+    mock_dl.assert_not_called()
+    # Re-tag should have been called instead
+    mock_retag.assert_called_once()
+    # File should still exist (not deleted)
+    assert target.exists()
+    # Verify meta hash was updated in state
+    new_hash = clip_meta_hash(clip)
+    assert new_hash != old_hash
+    clip_state = sync._state["clips"]["clip-meta"]
+    assert clip_state["meta_hash"] == new_hash
+    assert sync.errors == 0
+
+
+async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When re-tag fails, meta_hash is NOT updated so next sync retries."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    clip = _make_clip("clip-fail", "Fail Song")
+
+    old_hash = "old_hash_fail"
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+
+    initial_state = {
+        "clips": {
+            "clip-fail": {
+                "path": rel_path,
+                "title": "Fail Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 100,
+                "meta_hash": old_hash,
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=False),
+    ):
+        mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # meta_hash should still be the old value (not updated on failure)
+    assert sync._state["clips"]["clip-fail"]["meta_hash"] == old_hash
+    # File should still exist
+    assert target.exists()
+    assert sync.errors == 1
+
+
+async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Full username change: multiple clips renamed + re-tagged, no re-downloads."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+
+    clips_old = []
+    initial_clips: dict[str, dict] = {}
+    for i in range(3):
+        cid = f"clip{i:04d}-0000-0000-0000-000000000000"
+        title = f"Song {i}"
+        clip = _make_clip_with_display(cid, title, display_name="olduser")
+        rel_path = _clip_path(clip, QUALITY_HIGH)
+        target = sync_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+        from custom_components.suno.models import clip_meta_hash
+
+        initial_clips[cid] = {
+            "path": rel_path,
+            "title": title,
+            "created": "2026-03-15",
+            "sources": ["liked"],
+            "size": 54,
+            "meta_hash": clip_meta_hash(clip),
+            "quality": QUALITY_HIGH,
+        }
+        clips_old.append(clip)
+
+    with patch.object(sync._store, "async_load", return_value={"clips": initial_clips, "last_download": None}):
+        await sync.async_init()
+
+    # Now the user changed their display_name to "newuser"
+    clips_new = [
+        _make_clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="newuser")
+        for i in range(3)
+    ]
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=clips_new)
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -2589,18 +2732,152 @@ async def test_metadata_hash_change_triggers_redownload(hass: HomeAssistant, tmp
         }
         await sync.async_download(opts, client)
 
-    # Re-download should have been triggered
-    mock_dl.assert_called_once()
-    # Verify meta hash was updated in state
-    new_hash = clip_meta_hash(clip)
-    assert new_hash != old_hash
-    clip_state = sync._state["clips"]["clip-meta"]
-    assert clip_state["meta_hash"] == new_hash
-    assert clip_state["title"] == "Meta Song"
+    # No re-downloads should have occurred (display_name excluded from hash)
+    mock_dl.assert_not_called()
+
+    # All files should be at new paths
+    for clip in clips_new:
+        new_rel = _clip_path(clip, QUALITY_HIGH)
+        assert (sync_dir / new_rel).exists(), f"Missing: {new_rel}"
+        assert sync._state["clips"][clip.id]["path"] == new_rel
+
+    # Old paths should be gone
+    for clip in clips_old:
+        old_rel = _clip_path(clip, QUALITY_HIGH)
+        assert not (sync_dir / old_rel).exists(), f"Stale: {old_rel}"
+
     assert sync.errors == 0
 
 
-# ── T15: Manifest write failure logged ──────────────────────────────
+async def test_liked_from_other_user_not_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Liked songs from other artists are NOT renamed when user changes name."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+
+    # A liked clip from another artist
+    other_clip = _make_clip_with_display("other-clip-0000-0000-000000000000", "Other Song", display_name="otheartist")
+    other_rel = _clip_path(other_clip, QUALITY_HIGH)
+    other_target = sync_dir / other_rel
+    other_target.parent.mkdir(parents=True, exist_ok=True)
+    other_target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    from custom_components.suno.models import clip_meta_hash
+
+    initial_state = {
+        "clips": {
+            "other-clip-0000-0000-000000000000": {
+                "path": other_rel,
+                "title": "Other Song",
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": clip_meta_hash(other_clip),
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    # Sync returns the same clip (other artist's name unchanged)
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[other_clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # No downloads, no renames
+    mock_dl.assert_not_called()
+    assert other_target.exists()
+    assert sync._state["clips"]["other-clip-0000-0000-000000000000"]["path"] == other_rel
+    assert sync.errors == 0
+
+
+async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: Path) -> None:
+    """OSError on one file during rename should not abort the batch."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+
+    # Two clips from "olduser"
+    clips_data = {}
+    for i in range(2):
+        cid = f"clip{i:04d}-0000-0000-0000-000000000000"
+        clip = _make_clip_with_display(cid, f"Song {i}", display_name="olduser")
+        rel_path = _clip_path(clip, QUALITY_HIGH)
+        target = sync_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+        from custom_components.suno.models import clip_meta_hash
+
+        clips_data[cid] = {
+            "path": rel_path,
+            "title": f"Song {i}",
+            "created": "2026-03-15",
+            "sources": ["liked"],
+            "size": 54,
+            "meta_hash": clip_meta_hash(clip),
+            "quality": QUALITY_HIGH,
+        }
+
+    with patch.object(sync._store, "async_load", return_value={"clips": clips_data, "last_download": None}):
+        await sync.async_init()
+
+    # User renamed to "newuser"
+    new_clips = [
+        _make_clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="newuser")
+        for i in range(2)
+    ]
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=new_clips)
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    call_count = 0
+    original_rename = Path.rename
+
+    def _flaky_rename(self_path, target):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("Permission denied")
+        return original_rename(self_path, target)
+
+    with (
+        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch.object(Path, "rename", _flaky_rename),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # The second clip should have been renamed despite the first failing
+    # At least one rename was attempted for each clip
+    assert call_count >= 2
+    mock_dl.assert_not_called()
 
 
 async def test_manifest_write_failure_logged(hass: HomeAssistant, tmp_path: Path) -> None:

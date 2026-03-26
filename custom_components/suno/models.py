@@ -212,9 +212,15 @@ class TrackMetadata:
 
 
 def clip_meta_hash(clip: SunoClip) -> str:
-    """Short hash of clip metadata for change detection."""
+    """Short hash of clip metadata for content change detection.
+
+    Path-affecting fields (display_name) are deliberately excluded; path
+    changes are detected by comparing ``_clip_path()`` against the stored
+    path. This hash only tracks fields that affect file *content* (tags,
+    cover art, lineage).
+    """
     return hashlib.md5(  # noqa: S324
-        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.display_name}|{clip.video_url}|{clip.root_ancestor_id}".encode()
+        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.video_url}|{clip.root_ancestor_id}".encode()
     ).hexdigest()[:12]
 
 

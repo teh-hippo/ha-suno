@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .const import DOWNLOAD_FFMPEG_TIMEOUT
@@ -337,3 +338,210 @@ async def download_and_transcode_to_flac(
             suno_lineage=meta.suno_lineage,
         )
     return await wav_to_flac(ffmpeg_binary, wav_data, meta, duration=duration)
+
+
+def _extract_apic(data: bytes) -> bytes | None:
+    """Extract the first APIC (album art) frame from an ID3v2 tag."""
+    if len(data) < 10 or data[:3] != b"ID3":
+        return None
+    raw = data[6:10]
+    tag_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
+    pos = 10
+    end = min(10 + tag_size, len(data))
+    while pos + 10 <= end:
+        frame_id = data[pos : pos + 4]
+        frame_size = int.from_bytes(data[pos + 4 : pos + 8], "big")
+        if frame_size <= 0 or pos + 10 + frame_size > end:
+            break
+        if frame_id == b"APIC":
+            frame_data = data[pos + 10 : pos + 10 + frame_size]
+            # APIC: encoding(1) + mime\x00 + picture_type(1) + description\x00 + image_data
+            # Skip encoding byte
+            idx = 1
+            # Skip mime type (null terminated)
+            while idx < len(frame_data) and frame_data[idx] != 0:
+                idx += 1
+            idx += 1  # skip null
+            idx += 1  # skip picture type
+            # Skip description (null terminated)
+            while idx < len(frame_data) and frame_data[idx] != 0:
+                idx += 1
+            idx += 1  # skip null
+            return frame_data[idx:] if idx < len(frame_data) else None
+        pos += 10 + frame_size
+    return None
+
+
+def retag_mp3(path: os.PathLike[str], meta: TrackMetadata) -> bool:
+    """Update embedded ID3 metadata in an existing MP3 file.
+
+    Reads album art from the existing ID3 APIC frame if ``meta.image_data``
+    is not provided. Falls back to ``cover.jpg`` in the same directory.
+    Uses atomic write (tmp + replace) to avoid corruption.
+    """
+    file_path = Path(path) if not isinstance(path, Path) else path
+    try:
+        raw = file_path.read_bytes()
+    except OSError:
+        _LOGGER.warning("Cannot read MP3 for re-tagging: %s", file_path)
+        return False
+
+    # Preserve existing album art if not provided in meta
+    if meta.image_data is None:
+        existing_art = _extract_apic(raw)
+        if existing_art:
+            meta = TrackMetadata(
+                title=meta.title,
+                artist=meta.artist,
+                album=meta.album,
+                album_artist=meta.album_artist,
+                date=meta.date,
+                lyrics=meta.lyrics,
+                comment=meta.comment,
+                image_data=existing_art,
+                suno_style=meta.suno_style,
+                suno_style_summary=meta.suno_style_summary,
+                suno_model=meta.suno_model,
+                suno_handle=meta.suno_handle,
+                suno_parent=meta.suno_parent,
+                suno_lineage=meta.suno_lineage,
+            )
+        else:
+            # Fall back to cover.jpg sidecar
+            cover = file_path.parent / "cover.jpg"
+            if cover.is_file():
+                try:
+                    meta = TrackMetadata(
+                        title=meta.title,
+                        artist=meta.artist,
+                        album=meta.album,
+                        album_artist=meta.album_artist,
+                        date=meta.date,
+                        lyrics=meta.lyrics,
+                        comment=meta.comment,
+                        image_data=cover.read_bytes(),
+                        suno_style=meta.suno_style,
+                        suno_style_summary=meta.suno_style_summary,
+                        suno_model=meta.suno_model,
+                        suno_handle=meta.suno_handle,
+                        suno_parent=meta.suno_parent,
+                        suno_lineage=meta.suno_lineage,
+                    )
+                except OSError:
+                    pass
+
+    header = _build_id3_header(meta)
+    body = _skip_existing_id3(raw)
+    tmp = file_path.with_suffix(".tmp")
+    try:
+        tmp.write_bytes(header + body)
+        os.replace(str(tmp), str(file_path))
+        return True
+    except OSError:
+        _LOGGER.warning("Failed to re-tag MP3: %s", file_path)
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+async def retag_flac(
+    ffmpeg_binary: str,
+    path: os.PathLike[str],
+    meta: TrackMetadata,
+) -> bool:
+    """Update embedded metadata in an existing FLAC file via ffmpeg remux.
+
+    Uses ``-c copy`` (no transcoding) to rewrite metadata tags without
+    re-encoding audio. Re-applies the cover-type fix after remux.
+    Uses atomic write (tmp + replace) to avoid corruption.
+    """
+    file_path = Path(path) if not isinstance(path, Path) else path
+    if not file_path.is_file():
+        _LOGGER.warning("Cannot re-tag FLAC, file missing: %s", file_path)
+        return False
+
+    tmp_img_path: str | None = None
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        import tempfile  # noqa: PLC0415
+
+        args = [ffmpeg_binary, "-y", "-i", str(file_path)]
+
+        # If new image data is provided, add it as a second input
+        if meta.image_data:
+            fd, tmp_img_path = tempfile.mkstemp(suffix=".jpg")
+            os.write(fd, meta.image_data)
+            os.close(fd)
+            args.extend(["-i", tmp_img_path])
+            args.extend(["-map", "0:a:0", "-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic"])
+        else:
+            args.extend(["-map", "0:a:0"])
+            # Preserve existing album art if present
+            args.extend(["-map", "0:v?", "-c:v", "copy"])
+
+        args.extend(["-c:a", "copy"])
+
+        cmd = [
+            "-metadata",
+            f"title={meta.title}",
+            "-metadata",
+            f"artist={meta.artist}",
+            "-metadata",
+            f"album={meta.album}",
+        ]
+        optional = [
+            ("albumartist", meta.album_artist),
+            ("date", meta.date),
+            ("LYRICS", meta.lyrics),
+            ("comment", meta.comment),
+            ("SUNO_STYLE", meta.suno_style),
+            ("SUNO_STYLE_SUMMARY", meta.suno_style_summary),
+            ("SUNO_MODEL", meta.suno_model),
+            ("SUNO_HANDLE", meta.suno_handle),
+            ("SUNO_PARENT", meta.suno_parent),
+            ("SUNO_LINEAGE", meta.suno_lineage),
+        ]
+        for key, val in optional:
+            cmd.extend(["-metadata", f"{key}={val}"])
+
+        tmp_out = file_path.with_suffix(".retag.tmp")
+        args.extend(cmd + ["-f", "flac", str(tmp_out)])
+
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_FFMPEG_TIMEOUT)
+        if proc.returncode != 0:
+            _LOGGER.warning("ffmpeg re-tag failed: %s", stderr.decode()[:200])
+            tmp_out.unlink(missing_ok=True)
+            return False
+
+        result = tmp_out.read_bytes()
+        if meta.image_data:
+            result = _fix_flac_cover_type(result)
+        os.replace(str(tmp_out), str(file_path))
+        return True
+    except TimeoutError:
+        _LOGGER.error("ffmpeg re-tag timed out for %s", file_path)
+        if proc and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        return False
+    except FileNotFoundError:
+        _LOGGER.error("ffmpeg not found for FLAC re-tagging")
+        return False
+    except Exception:
+        _LOGGER.exception("FLAC re-tag error for %s", file_path)
+        return False
+    finally:
+        if tmp_img_path:
+            try:
+                os.unlink(tmp_img_path)
+            except OSError:
+                pass
+        # Clean up temp file on any failure path
+        tmp_out_path = file_path.with_suffix(".retag.tmp")
+        if tmp_out_path.exists():
+            tmp_out_path.unlink(missing_ok=True)

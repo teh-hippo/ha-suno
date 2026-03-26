@@ -267,6 +267,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         # Update user identity from Suno API data
         api_display_name = self.client.suno_display_name
         if api_display_name and api_display_name != self.user.display_name:
+            _LOGGER.info("Display name changed: '%s' -> '%s'", self.user.display_name, api_display_name)
             self.user = SunoUser(id=self.user.id, display_name=api_display_name)
             if api_display_name != self.config_entry.title:
                 self.hass.config_entries.async_update_entry(self.config_entry, title=api_display_name)
