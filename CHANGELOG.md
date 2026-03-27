@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.6 (2026-03-27)
+
+### Bug Fixes
+
+- Harden filename sanitisation against traversal
+  ([`e2a0383`](https://github.com/teh-hippo/ha-suno/commit/e2a0383b2b1a3c21f81d3bff2d7bd02f23b1ec01))
+
+
 ## v4.2.5 (2026-03-27)
 
 ### Bug Fixes
