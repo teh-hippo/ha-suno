@@ -66,7 +66,7 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 _SERVICE_DOWNLOAD = "download_library"
 _MANIFEST_FILENAME = ".suno_download.json"
-_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*~\x00-\x1f]')
 
 
 @dataclass
@@ -80,6 +80,7 @@ class DownloadItem:
 
 def _sanitise_filename(name: str, max_len: int = 200) -> str:
     safe = _UNSAFE_CHARS.sub("_", name).strip(". ")
+    safe = re.sub(r"\.{2,}", "_", safe)  # collapse directory traversal sequences
     return safe[:max_len] if safe else "untitled"
 
 

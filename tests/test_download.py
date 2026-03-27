@@ -61,6 +61,17 @@ class TestSanitiseFilename:
     def test_unicode_preserved(self) -> None:
         assert _sanitise_filename("日本語タイトル") == "日本語タイトル"
 
+    def test_tilde_replaced(self) -> None:
+        assert _sanitise_filename("~user") == "_user"
+
+    def test_dot_dot_collapsed(self) -> None:
+        assert _sanitise_filename("a..b") == "a_b"
+        assert _sanitise_filename("a...b") == "a_b"
+
+    def test_traversal_neutralised(self) -> None:
+        result = _sanitise_filename(".._.._etc")
+        assert ".." not in result
+
 
 # ── Clip path generation ───────────────────────────────────────────
 
