@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v4.2.7 (2026-03-27)
+
+### Bug Fixes
+
+- Trigger release for slugify path refactor
+  ([`cc7662d`](https://github.com/teh-hippo/ha-suno/commit/cc7662d6741cf900b535da59db13f59ddcd9b3dc))
+
+### Refactoring
+
+- Use HA slugify for file path components
+  ([`86bc3d9`](https://github.com/teh-hippo/ha-suno/commit/86bc3d9b35f11e7c2a8df18d1944396db44c4fde))
+
+
 ## v4.2.6 (2026-03-27)
 
 ### Bug Fixes
