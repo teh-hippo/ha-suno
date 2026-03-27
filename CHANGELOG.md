@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.3 (2026-03-27)
+
+### Bug Fixes
+
+- Use Clerk auth as authoritative identity source
+  ([`1b9495d`](https://github.com/teh-hippo/ha-suno/commit/1b9495dc6e0f5161136c44587e4733dd8925924c))
+
+
 ## v4.2.2 (2026-03-27)
 
 ### Bug Fixes
