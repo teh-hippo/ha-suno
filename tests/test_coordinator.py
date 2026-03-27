@@ -212,6 +212,171 @@ async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_cli
                 pytest.fail("async_update_entry should not be called with title when unchanged")
 
 
+async def test_clerk_auth_takes_priority_over_stale_api(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Clerk auth display_name is authoritative when it differs from stale API name."""
+    # Initial: API and auth both say "OldName"
+    mock_suno_client.suno_display_name = "OldName"
+    mock_suno_client.display_name = "OldName"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.user.display_name == "OldName"
+
+    # User renames: Clerk updates immediately, API clips stay stale
+    mock_suno_client.display_name = "NewName"
+    mock_suno_client.suno_display_name = "OldName"  # stale
+    await coordinator._async_update_data()
+
+    assert coordinator.user.display_name == "NewName"
+    assert entry.title == "NewName"
+
+
+async def test_clerk_auth_prevents_revert_to_stale_api(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """On subsequent syncs, Clerk auth name prevents reverting to stale API name."""
+    mock_suno_client.display_name = "NewName"
+    mock_suno_client.suno_display_name = "OldName"
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.user.display_name == "NewName"
+
+    # Second sync: API still stale, Clerk still correct
+    await coordinator._async_update_data()
+    assert coordinator.user.display_name == "NewName"  # not reverted
+
+
+async def test_stale_clip_display_name_overridden(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Clips with stale display_name are corrected to the current identity."""
+    # User's clips have stale display_name from the API
+    stale_clips = [
+        SunoClip(
+            id="clip-001",
+            title="Song A",
+            display_name="OldName",
+            status="complete",
+            audio_url="",
+            image_url="",
+            image_large_url="",
+            is_liked=False,
+            created_at="2026-01-01T00:00:00Z",
+            tags="",
+            duration=60.0,
+            clip_type="gen",
+            has_vocal=True,
+        ),
+        SunoClip(
+            id="clip-002",
+            title="Song B",
+            display_name="OldName",
+            status="complete",
+            audio_url="",
+            image_url="",
+            image_large_url="",
+            is_liked=False,
+            created_at="2026-01-01T00:00:00Z",
+            tags="",
+            duration=60.0,
+            clip_type="gen",
+            has_vocal=True,
+        ),
+    ]
+    mock_suno_client.get_all_songs = AsyncMock(return_value=stale_clips)
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.display_name = "NewName"
+    mock_suno_client.suno_display_name = "OldName"
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    # Clips should have the corrected display_name
+    for clip in coordinator.data.clips:
+        assert clip.display_name == "NewName"
+
+
+async def test_other_artist_clips_not_overridden(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Liked clips from other artists keep their original display_name."""
+    _clip_defaults = dict(
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=60.0,
+        clip_type="gen",
+        has_vocal=True,
+        status="complete",
+    )
+    own_clip = SunoClip(id="clip-001", title="My Song", display_name="OldName", **_clip_defaults)
+    other_clip = SunoClip(id="clip-002", title="Their Song", display_name="OtherArtist", **_clip_defaults)
+
+    mock_suno_client.get_all_songs = AsyncMock(return_value=[own_clip])
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[other_clip])
+    mock_suno_client.display_name = "NewName"
+    mock_suno_client.suno_display_name = "OldName"
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.data.clips[0].display_name == "NewName"
+    assert coordinator.data.liked_clips[0].display_name == "OtherArtist"  # untouched
+
+
+async def test_stale_clip_override_logged(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Clip display_name correction is logged."""
+    stale_clips = [
+        SunoClip(
+            id="clip-001",
+            title="Song A",
+            display_name="OldName",
+            status="complete",
+            audio_url="",
+            image_url="",
+            image_large_url="",
+            is_liked=False,
+            created_at="2026-01-01T00:00:00Z",
+            tags="",
+            duration=60.0,
+            clip_type="gen",
+            has_vocal=True,
+        ),
+    ]
+    mock_suno_client.get_all_songs = AsyncMock(return_value=stale_clips)
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.display_name = "NewName"
+    mock_suno_client.suno_display_name = "OldName"
+
+    entry = make_entry()
+    with caplog.at_level(logging.INFO, logger="custom_components.suno.coordinator"):
+        with patch_suno_setup(mock_suno_client):
+            await setup_entry(hass, entry)
+
+    assert "Corrected stale display_name on 1 clips" in caplog.text
+
+
+async def test_api_fallback_when_clerk_is_suno_default(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When Clerk auth returns 'Suno' fallback, API display_name is used instead."""
+    mock_suno_client.display_name = "Suno"  # fallback
+    mock_suno_client.suno_display_name = "RealUsername"
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.user.display_name == "RealUsername"
+
+
 # ── TC-9: Stored data recovery tests ────────────────────────────────
 
 
