@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.suno.audio import (
     _build_id3_header,
+    _extract_apic,
     _skip_existing_id3,
 )
 from custom_components.suno.models import TrackMetadata
@@ -269,7 +270,10 @@ async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -293,7 +297,10 @@ async def test_stream_mp3_without_cache(hass: HomeAssistant, mock_suno_client: A
     mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -321,7 +328,10 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
     mock_response.content.iter_chunked = lambda size: _async_iter([upstream_data])
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -475,7 +485,10 @@ async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: As
     mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_get = AsyncMock(return_value=mock_response)
         mock_session.return_value.get = mock_get
         client = await hass_client()
@@ -505,7 +518,10 @@ async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_cl
     mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -1006,7 +1022,10 @@ async def test_connection_reset_clears_collected(hass: HomeAssistant, mock_suno_
     mock_response.content.iter_chunked = _error_after_chunk
     mock_response.close = MagicMock()
 
-    with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -1064,6 +1083,7 @@ async def test_downloaded_file_vanishes_falls_through(
     with (
         patch("custom_components.suno.proxy.web.FileResponse", side_effect=FileNotFoundError("gone")),
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
         mock_session.return_value.get = AsyncMock(return_value=mock_response)
         client = await hass_client()
@@ -1073,3 +1093,63 @@ async def test_downloaded_file_vanishes_falls_through(
     assert resp.status == 200
     body = await resp.read()
     assert body[:3] == b"ID3"
+
+
+async def test_mp3_stream_includes_album_art(hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client) -> None:
+    """MP3 streaming should fetch album art and embed it as an APIC frame."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.close = MagicMock()
+
+    fake_art = b"\xff\xd8\xff\xe0" + b"\x00" * 50  # minimal JPEG-like bytes
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=fake_art) as mock_fetch,
+    ):
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
+
+    assert resp.status == 200
+    body = await resp.read()
+    assert body[:3] == b"ID3"
+    # Verify the APIC frame is present and contains the album art
+    extracted = _extract_apic(body)
+    assert extracted == fake_art
+    mock_fetch.assert_awaited_once()
+
+
+async def test_mp3_stream_graceful_when_art_unavailable(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client
+) -> None:
+    """MP3 streaming should still work when album art fetch fails."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.close = MagicMock()
+
+    with (
+        patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
+        patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
+    ):
+        mock_session.return_value.get = AsyncMock(return_value=mock_response)
+        client = await hass_client()
+        resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
+
+    assert resp.status == 200
+    body = await resp.read()
+    assert body[:3] == b"ID3"
+    # No APIC frame should be present
+    assert _extract_apic(body) is None

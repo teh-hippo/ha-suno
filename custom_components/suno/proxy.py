@@ -12,7 +12,7 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .audio import _build_id3_header, _skip_existing_id3, download_and_transcode_to_flac
+from .audio import _build_id3_header, _skip_existing_id3, download_and_transcode_to_flac, fetch_album_art
 from .const import CDN_BASE_URL, DOMAIN
 from .coordinator import SunoCoordinator
 from .models import SunoClip, TrackMetadata, clip_meta_hash
@@ -120,6 +120,28 @@ class SunoMediaProxyView(HomeAssistantView):
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
         meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
+        if meta.image_data is None and clip:
+            image_url = clip.image_large_url or clip.image_url
+            if image_url:
+                session = async_get_clientsession(self.hass)
+                image_data = await fetch_album_art(session, image_url)
+                if image_data:
+                    meta = TrackMetadata(
+                        title=meta.title,
+                        artist=meta.artist,
+                        album=meta.album,
+                        album_artist=meta.album_artist,
+                        date=meta.date,
+                        lyrics=meta.lyrics,
+                        comment=meta.comment,
+                        image_data=image_data,
+                        suno_style=meta.suno_style,
+                        suno_style_summary=meta.suno_style_summary,
+                        suno_model=meta.suno_model,
+                        suno_handle=meta.suno_handle,
+                        suno_parent=meta.suno_parent,
+                        suno_lineage=meta.suno_lineage,
+                    )
         id3_header = _build_id3_header(meta)
         cache_buf = bytearray(id3_header) if cache is not None else None
         response = web.StreamResponse(
