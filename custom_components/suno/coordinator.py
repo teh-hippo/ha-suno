@@ -264,47 +264,17 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
         await self._resolve_root_ancestors(data)
 
-        # Update user identity.
-        # Clerk auth is authoritative (updates immediately on profile rename).
-        # Feed clip display_name is stale (baked at clip creation time).
-        auth_name = self.client.display_name
-        api_name = self.client.suno_display_name
-
-        if auth_name and auth_name != "Suno":
-            authoritative_name = auth_name
-        elif api_name:
-            authoritative_name = api_name
-        else:
-            authoritative_name = None
-
-        if authoritative_name and authoritative_name != self.user.display_name:
-            _LOGGER.info("Display name changed: '%s' -> '%s'", self.user.display_name, authoritative_name)
-            self.user = SunoUser(id=self.user.id, display_name=authoritative_name)
+        # Update user identity from Suno API data.
+        # suno_display_name (from feed clips) is the authoritative source.
+        # Clerk auth username is the login handle, NOT the Suno display name.
+        api_display_name = self.client.suno_display_name
+        if api_display_name and api_display_name != self.user.display_name:
+            _LOGGER.info("Display name changed: '%s' -> '%s'", self.user.display_name, api_display_name)
+            self.user = SunoUser(id=self.user.id, display_name=api_display_name)
 
         # Keep config entry title in sync (may be stale from a previous version)
         if self.user.display_name != self.config_entry.title:
             self.hass.config_entries.async_update_entry(self.config_entry, title=self.user.display_name)
-
-        # Correct stale display_name on clips from the API.
-        # After a profile rename, the feed still returns the old name on clips.
-        # Override so the download manager sees the current name and triggers renames.
-        if api_name and api_name != self.user.display_name:
-            count = 0
-            for clip in data.clips:
-                if clip.display_name == api_name:
-                    clip.display_name = self.user.display_name
-                    count += 1
-            for clip in data.liked_clips:
-                if clip.display_name == api_name:
-                    clip.display_name = self.user.display_name
-                    count += 1
-            if count:
-                _LOGGER.info(
-                    "Corrected stale display_name on %d clips: '%s' -> '%s'",
-                    count,
-                    api_name,
-                    self.user.display_name,
-                )
 
         self.hass.async_create_task(
             self._store.async_save(
