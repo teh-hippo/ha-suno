@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.8 (2026-03-27)
+
+### Bug Fixes
+
+- Use pathvalidate for readable filesystem-safe names
+  ([`f279731`](https://github.com/teh-hippo/ha-suno/commit/f279731a7324fb64f47bdba51405462bd6543d1c))
+
+
 ## v4.2.7 (2026-03-27)
 
 ### Bug Fixes
