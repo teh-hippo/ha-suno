@@ -35,34 +35,42 @@ from custom_components.suno.download import (
     _build_download_summary,
     _clip_path,
     _get_source_mode,
-    _slug,
+    _safe_name,
     _source_preserves_files,
     _write_file,
     _write_m3u8_playlists,
 )
 
-# ── Filename slugification ─────────────────────────────────────────
+# ── Filename sanitisation ──────────────────────────────────────────
 
 
-class TestSlug:
-    def test_basic_slugify(self) -> None:
-        assert _slug("Hello World") == "hello_world"
+class TestSafeName:
+    def test_preserves_spaces_and_case(self) -> None:
+        assert _safe_name("Hello World") == "Hello World"
 
-    def test_unsafe_chars_removed(self) -> None:
-        assert _slug('test<>:"/\\|?*file') == "test_file"
+    def test_unsafe_chars_replaced(self) -> None:
+        result = _safe_name('test<>:"/\\|?*file')
+        assert "<" not in result
+        assert "/" not in result
 
     def test_empty_string_returns_untitled(self) -> None:
-        assert _slug("") == "untitled"
+        assert _safe_name("") == "untitled"
 
-    def test_unicode_transliterated(self) -> None:
-        assert _slug("café résumé") == "cafe_resume"
+    def test_unicode_preserved(self) -> None:
+        assert _safe_name("café résumé") == "café résumé"
 
-    def test_emoji_stripped(self) -> None:
-        assert _slug("🎵 Music") == "music"
+    def test_emoji_preserved(self) -> None:
+        assert "Music" in _safe_name("🎵 Music")
 
     def test_traversal_neutralised(self) -> None:
-        assert "/" not in _slug("../../etc/passwd")
-        assert ".." not in _slug("../secret")
+        assert "/" not in _safe_name("../../etc/passwd")
+
+    def test_windows_reserved_handled(self) -> None:
+        result = _safe_name("CON")
+        assert result != "CON"  # pathvalidate appends underscore
+
+    def test_truncates_long_names(self) -> None:
+        assert len(_safe_name("a" * 300)) <= 200
 
 
 # ── Clip path generation ───────────────────────────────────────────
@@ -86,17 +94,17 @@ class TestClipPath:
     def test_high_quality_flac(self) -> None:
         clip = self._make_clip()
         result = _clip_path(clip, "high")
-        assert result == "testuser/my_song/testuser-my_song_abcd1234.flac"
+        assert result == "testuser/My Song/testuser-My Song [abcd1234].flac"
 
     def test_standard_quality_mp3(self) -> None:
         clip = self._make_clip()
         result = _clip_path(clip, "standard")
-        assert result == "testuser/my_song/testuser-my_song_abcd1234.mp3"
+        assert result == "testuser/My Song/testuser-My Song [abcd1234].mp3"
 
     def test_missing_display_name(self) -> None:
         clip = self._make_clip(display_name="")
         result = _clip_path(clip, "high")
-        assert result == "suno/my_song/suno-my_song_abcd1234.flac"
+        assert result == "Suno/My Song/Suno-My Song [abcd1234].flac"
 
     def test_different_clips_same_title_get_different_paths(self) -> None:
         clip_a = self._make_clip(clip_id="aaaaaaaa-1111-2222-3333-444444444444")
@@ -555,24 +563,24 @@ class TestWriteM3u8Playlists:
     def test_writes_absolute_paths(self, tmp_path: Path) -> None:
         """Playlist entries must use absolute paths for Jellyfin compatibility."""
         clip = self._make_clip()
-        clips_state = {"clip1": {"path": "artist/test_song/artist-test_song_clip1aaa.flac", "title": "Test Song"}}
+        clips_state = {"clip1": {"path": "artist/test_song/artist-test_song [clip1aaa].flac", "title": "Test Song"}}
         desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
-        content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
         assert "./" not in content
-        assert str(tmp_path / "artist/test_song/artist-test_song_clip1aaa.flac") in content
+        assert str(tmp_path / "artist/test_song/artist-test_song [clip1aaa].flac") in content
 
     def test_uses_clip_duration(self, tmp_path: Path) -> None:
         """Duration in #EXTINF should come from clip metadata, not hardcoded -1."""
         clip = self._make_clip(duration=95.7)
-        clips_state = {"clip1": {"path": "artist/test_song/artist-test_song_clip1aaa.flac", "title": "Test Song"}}
+        clips_state = {"clip1": {"path": "artist/test_song/artist-test_song [clip1aaa].flac", "title": "Test Song"}}
         desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
-        content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
         assert "#EXTINF:95," in content
 
     def test_duration_fallback_when_zero(self, tmp_path: Path) -> None:
@@ -583,7 +591,7 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired)
 
-        content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
         assert "#EXTINF:-1," in content
 
     def test_header_format(self, tmp_path: Path) -> None:
@@ -595,7 +603,7 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
-        content = (tmp_path / "my_playlist.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
         assert content.startswith("#EXTM3U\n")
         assert "#PLAYLIST:My Playlist\n" in content
 
@@ -608,8 +616,8 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
-        assert (tmp_path / "liked_songs.m3u8").exists()
-        assert (tmp_path / "favourites.m3u8").exists()
+        assert (tmp_path / "Liked Songs.m3u8").exists()
+        assert (tmp_path / "Favourites.m3u8").exists()
 
     def test_clip_liked_and_in_playlist_no_duplicates(self, tmp_path: Path) -> None:
         """A liked clip also in a playlist appears once in each M3U8, not twice in Liked Songs."""
@@ -620,8 +628,8 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
-        liked_content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
-        album_content = (tmp_path / "the_second_album.m3u8").read_text(encoding="utf-8")
+        liked_content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
+        album_content = (tmp_path / "The Second album.m3u8").read_text(encoding="utf-8")
         assert liked_content.count("song.flac") == 1
         assert album_content.count("song.flac") == 1
 
@@ -634,10 +642,10 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
-        assert (tmp_path / "playlist_a.m3u8").exists()
-        assert (tmp_path / "playlist_b.m3u8").exists()
-        a_content = (tmp_path / "playlist_a.m3u8").read_text(encoding="utf-8")
-        b_content = (tmp_path / "playlist_b.m3u8").read_text(encoding="utf-8")
+        assert (tmp_path / "Playlist A.m3u8").exists()
+        assert (tmp_path / "Playlist B.m3u8").exists()
+        a_content = (tmp_path / "Playlist A.m3u8").read_text(encoding="utf-8")
+        b_content = (tmp_path / "Playlist B.m3u8").read_text(encoding="utf-8")
         assert "song.flac" in a_content
         assert "song.flac" in b_content
 
@@ -656,10 +664,10 @@ class TestWriteM3u8Playlists:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
 
-        assert (tmp_path / "liked_songs.m3u8").exists()
-        assert (tmp_path / "keep.m3u8").exists()
-        assert (tmp_path / "zac_xavi.m3u8").exists()
-        for f in ["liked_songs.m3u8", "keep.m3u8", "zac_xavi.m3u8"]:
+        assert (tmp_path / "Liked Songs.m3u8").exists()
+        assert (tmp_path / "Keep.m3u8").exists()
+        assert (tmp_path / "Zac & Xavi.m3u8").exists()
+        for f in ["Liked Songs.m3u8", "Keep.m3u8", "Zac & Xavi.m3u8"]:
             content = (tmp_path / f).read_text(encoding="utf-8")
             assert content.count("song.flac") == 1
 
@@ -1056,12 +1064,12 @@ async def test_reconcile_keeps_tracked_files(hass: HomeAssistant, tmp_path: Path
 async def test_reconcile_skips_non_audio(hass: HomeAssistant, tmp_path: Path) -> None:
     """Non-audio files (.json, .m3u8, .tmp) are left alone."""
     sync = SunoDownloadManager(hass, "test_sync")
-    for name in (".suno_download.json", "liked_songs.m3u8", "partial.tmp"):
+    for name in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"):
         (tmp_path / name).write_text("x")
 
     removed = await sync._reconcile_disk(tmp_path, {})
     assert removed == 0
-    assert all((tmp_path / n).exists() for n in (".suno_download.json", "liked_songs.m3u8", "partial.tmp"))
+    assert all((tmp_path / n).exists() for n in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"))
 
 
 async def test_reconcile_cleans_empty_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -2345,7 +2353,7 @@ class TestPlaylistOrderPreservation:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order=playlist_order)
 
-        content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
         lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
         assert "Song 3" in lines[0]
         assert "Song 1" in lines[1]
@@ -2360,7 +2368,7 @@ class TestPlaylistOrderPreservation:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order={})
 
-        content = (tmp_path / "liked_songs.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
         lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
         assert len(lines) == 3
         assert "Song 0" in lines[0]
@@ -2379,7 +2387,7 @@ class TestPlaylistOrderPreservation:
 
         _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name, playlist_order)
 
-        content = (tmp_path / "my_playlist.m3u8").read_text(encoding="utf-8")
+        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
         lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
         assert len(lines) == 5
         for idx, api_clip_id in enumerate(api_order):
@@ -2394,7 +2402,7 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
     initial_state = {
         "clips": {
             clip_id: {
-                "path": "suno/song/suno-song_clip0099.flac",
+                "path": "Suno/Song/Suno-Song [clip0099].flac",
                 "title": "Song",
                 "created": "2026-03-15",
                 "sources": ["liked"],
@@ -2409,7 +2417,7 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
         await sync.async_init()
 
     # Pre-create the file so no download is triggered
-    dest = tmp_path / "mirror" / "suno" / "song" / "suno-song_clip0099.flac"
+    dest = tmp_path / "mirror" / "Suno" / "Song" / "Suno-Song [clip0099].flac"
     dest.parent.mkdir(parents=True)
     dest.write_bytes(b"fLaC" + b"\x00" * 50)
 

@@ -17,7 +17,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
-from homeassistant.util import slugify
+from pathvalidate import sanitize_filename
 
 from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from .const import (
@@ -66,11 +66,13 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 _SERVICE_DOWNLOAD = "download_library"
 _MANIFEST_FILENAME = ".suno_download.json"
+_MAX_FILENAME_LEN = 200
 
 
-def _slug(name: str) -> str:
-    """Slugify a name for use in file paths."""
-    return slugify(name) or "untitled"
+def _safe_name(name: str) -> str:
+    """Sanitise a string for use as a file or directory name."""
+    safe = sanitize_filename(name, replacement_text="_")
+    return safe[:_MAX_FILENAME_LEN] if safe else "untitled"
 
 
 @dataclass
@@ -161,7 +163,7 @@ def _write_m3u8_playlists(
     written: set[str] = set()
     for name, tracks in playlists.items():
         safe_name = name.replace("\n", " ").replace("\r", "")
-        filename = f"{_slug(safe_name)}.m3u8"
+        filename = f"{_safe_name(safe_name)}.m3u8"
         lines = [f"#EXTM3U\n#PLAYLIST:{safe_name}"]
         for abs_path, title, duration in tracks:
             lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
@@ -180,14 +182,14 @@ def _write_m3u8_playlists(
 def _clip_path(clip: SunoClip, quality: str) -> str:
     """Build the relative file path for a clip.
 
-    Structure: <artist>/<title>/<artist>-<title>_<clip_short>.<ext>
-    Uses HA slugify for safe, predictable path components.
+    Structure: <artist>/<title>/<artist>-<title> [<clip_short>].<ext>
+    Uses pathvalidate for filesystem-safe, human-readable path components.
     """
-    artist = _slug(clip.display_name or "Suno")
-    title = _slug(clip.title or "untitled")
+    artist = _safe_name(clip.display_name or "Suno")
+    title = _safe_name(clip.title or "untitled")
     clip_short = clip.id[:8]
     ext = "flac" if quality == QUALITY_HIGH else "mp3"
-    return f"{artist}/{title}/{artist}-{title}_{clip_short}.{ext}"
+    return f"{artist}/{title}/{artist}-{title} [{clip_short}].{ext}"
 
 
 def _add_clip(
