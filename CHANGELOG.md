@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.4 (2026-03-27)
+
+### Bug Fixes
+
+- Sync config entry title and avoid blocking I/O in retag
+  ([`fbcf625`](https://github.com/teh-hippo/ha-suno/commit/fbcf625349cb4264ef6b22b5c69806c3dbf58932))
+
+
 ## v4.2.3 (2026-03-27)
 
 ### Bug Fixes
