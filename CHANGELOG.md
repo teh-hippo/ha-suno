@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.5 (2026-03-27)
+
+### Bug Fixes
+
+- Revert Clerk auth priority, use API display_name as identity
+  ([`ecc81f1`](https://github.com/teh-hippo/ha-suno/commit/ecc81f104203774cd9e5ab2e7a8dbcb314ff6b4f))
+
+
 ## v4.2.4 (2026-03-27)
 
 ### Bug Fixes
