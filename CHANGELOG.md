@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v4.2.2 (2026-03-27)
+
+### Bug Fixes
+
+- Retag embedded metadata after file rename
+  ([`b66dace`](https://github.com/teh-hippo/ha-suno/commit/b66dace316c261c328856c29d97b93f12de7ecab))
+
+### Chores
+
+- Sync uv.lock with v4.2.1
+  ([`ea5f403`](https://github.com/teh-hippo/ha-suno/commit/ea5f4036c74ae7a3288c911dbe8384eebf720bd9))
+
+
 ## v4.2.1 (2026-03-26)
 
 ### Bug Fixes
