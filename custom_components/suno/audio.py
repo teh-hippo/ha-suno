@@ -518,11 +518,14 @@ async def retag_flac(
             tmp_out.unlink(missing_ok=True)
             return False
 
-        result = tmp_out.read_bytes()
-        if meta.image_data:
-            result = _fix_flac_cover_type(result)
-            tmp_out.write_bytes(result)
-        os.replace(str(tmp_out), str(file_path))
+        def _finalise() -> None:
+            result = tmp_out.read_bytes()
+            if meta.image_data:
+                result = _fix_flac_cover_type(result)
+                tmp_out.write_bytes(result)
+            os.replace(str(tmp_out), str(file_path))
+
+        await asyncio.to_thread(_finalise)
         return True
     except TimeoutError:
         _LOGGER.error("ffmpeg re-tag timed out for %s", file_path)

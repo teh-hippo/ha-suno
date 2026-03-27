@@ -280,8 +280,10 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         if authoritative_name and authoritative_name != self.user.display_name:
             _LOGGER.info("Display name changed: '%s' -> '%s'", self.user.display_name, authoritative_name)
             self.user = SunoUser(id=self.user.id, display_name=authoritative_name)
-            if authoritative_name != self.config_entry.title:
-                self.hass.config_entries.async_update_entry(self.config_entry, title=authoritative_name)
+
+        # Keep config entry title in sync (may be stale from a previous version)
+        if self.user.display_name != self.config_entry.title:
+            self.hass.config_entries.async_update_entry(self.config_entry, title=self.user.display_name)
 
         # Correct stale display_name on clips from the API.
         # After a profile rename, the feed still returns the old name on clips.
