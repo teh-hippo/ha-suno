@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +17,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
+from homeassistant.util import slugify
 
 from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from .const import (
@@ -66,7 +66,11 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 _SERVICE_DOWNLOAD = "download_library"
 _MANIFEST_FILENAME = ".suno_download.json"
-_UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*~\x00-\x1f]')
+
+
+def _slug(name: str) -> str:
+    """Slugify a name for use in file paths."""
+    return slugify(name) or "untitled"
 
 
 @dataclass
@@ -76,12 +80,6 @@ class DownloadItem:
     clip: SunoClip
     sources: list[str]
     quality: str  # "high" | "standard"
-
-
-def _sanitise_filename(name: str, max_len: int = 200) -> str:
-    safe = _UNSAFE_CHARS.sub("_", name).strip(". ")
-    safe = re.sub(r"\.{2,}", "_", safe)  # collapse directory traversal sequences
-    return safe[:max_len] if safe else "untitled"
 
 
 def _build_download_summary(
@@ -163,7 +161,7 @@ def _write_m3u8_playlists(
     written: set[str] = set()
     for name, tracks in playlists.items():
         safe_name = name.replace("\n", " ").replace("\r", "")
-        filename = f"{_sanitise_filename(safe_name)}.m3u8"
+        filename = f"{_slug(safe_name)}.m3u8"
         lines = [f"#EXTM3U\n#PLAYLIST:{safe_name}"]
         for abs_path, title, duration in tracks:
             lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
@@ -182,14 +180,14 @@ def _write_m3u8_playlists(
 def _clip_path(clip: SunoClip, quality: str) -> str:
     """Build the relative file path for a clip.
 
-    Structure: <display_name>/<title>/<display_name>-<title> [<clip_short>].<ext>
-    Uses clip ID prefix for uniqueness when multiple clips share the same title.
+    Structure: <artist>/<title>/<artist>-<title>_<clip_short>.<ext>
+    Uses HA slugify for safe, predictable path components.
     """
-    artist = _sanitise_filename(clip.display_name or "Suno")
-    title = _sanitise_filename(clip.title or "untitled")
+    artist = _slug(clip.display_name or "Suno")
+    title = _slug(clip.title or "untitled")
     clip_short = clip.id[:8]
     ext = "flac" if quality == QUALITY_HIGH else "mp3"
-    return f"{artist}/{title}/{artist}-{title} [{clip_short}].{ext}"
+    return f"{artist}/{title}/{artist}-{title}_{clip_short}.{ext}"
 
 
 def _add_clip(
