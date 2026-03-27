@@ -2719,11 +2719,13 @@ async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -
 
     with (
         patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
         patch("custom_components.suno.download.async_get_clientsession"),
         patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
+        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
     ):
+        mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
         opts = {
             CONF_DOWNLOAD_PATH: str(sync_dir),
             CONF_SHOW_LIKED: True,
@@ -2732,8 +2734,11 @@ async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -
         }
         await sync.async_download(opts, client)
 
-    # No re-downloads should have occurred (display_name excluded from hash)
+    # No re-downloads should have occurred
     mock_dl.assert_not_called()
+
+    # All 3 files should have been re-tagged (renamed files queue for retag)
+    assert mock_retag.call_count == 3
 
     # All files should be at new paths
     for clip in clips_new:

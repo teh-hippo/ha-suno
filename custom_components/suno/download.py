@@ -498,6 +498,7 @@ class SunoDownloadManager:
                         await self.hass.async_add_executor_job(old_file.rename, new_file)
                         existing["path"] = new_path
                         migrated += 1
+                        to_retag.append(item)
                         _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
                         # Move video sidecar if it exists
                         old_video = old_file.with_suffix(".mp4")
