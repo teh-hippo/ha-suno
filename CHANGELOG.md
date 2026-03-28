@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.2.9 (2026-03-28)
+
+### Bug Fixes
+
+- Embed album art in MP3 proxy streams
+  ([`8eeff51`](https://github.com/teh-hippo/ha-suno/commit/8eeff51a4fb48372b505231a1f9c873a20fbfe28))
+
+
 ## v4.2.8 (2026-03-27)
 
 ### Bug Fixes
