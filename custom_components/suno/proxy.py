@@ -121,7 +121,7 @@ class SunoMediaProxyView(HomeAssistantView):
         """Stream MP3 with ID3 header injection and optional caching."""
         meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
         if meta.image_data is None and clip:
-            image_url = clip.image_large_url or clip.image_url
+            image_url = clip.image_large_url or clip.image_url or clip.video_cover_url
             if image_url:
                 session = async_get_clientsession(self.hass)
                 image_data = await fetch_album_art(session, image_url)
@@ -224,7 +224,7 @@ class SunoMediaProxyView(HomeAssistantView):
             clip_id,
             meta,
             duration=clip.duration if clip else 0.0,
-            image_url=clip.image_large_url or clip.image_url if clip else None,
+            image_url=clip.image_large_url or clip.image_url or clip.video_cover_url if clip else None,
         )
 
     @staticmethod

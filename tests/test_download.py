@@ -37,6 +37,7 @@ from custom_components.suno.download import (
     _get_source_mode,
     _safe_name,
     _source_preserves_files,
+    _video_clip_path,
     _write_file,
     _write_m3u8_playlists,
 )
@@ -1766,7 +1767,7 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
 
 
 async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Video .mp4 sidecar is moved alongside audio during migration."""
+    """Video .mp4 sidecar is moved to music-videos/ directory during migration."""
     clip_id = "abcd1234-0000-0000-0000-000000000000"
     sync_dir = tmp_path / "mirror"
     old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
@@ -1812,8 +1813,8 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
         }
         await sync.async_download(opts, client)
 
-    new_rel = _clip_path(clip, "high")
-    new_video = (sync_dir / new_rel).with_suffix(".mp4")
+    # Video should be in music-videos/ directory, not alongside audio
+    new_video = sync_dir / _video_clip_path(clip)
     assert new_video.exists()
     assert not old_video.exists()
 
@@ -2168,8 +2169,7 @@ async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> No
         }
         await sync.async_download(opts, client)
 
-    rel_path = _clip_path(clip, "high")
-    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
     assert video_path.exists()
     assert video_path.read_bytes() == fake_video
 
@@ -2218,8 +2218,7 @@ async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_pat
         }
         await sync.async_download(opts, client)
 
-    rel_path = _clip_path(clip, "high")
-    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
     assert not video_path.exists()
     # session.get should never have been called for video
     mock_session.get.assert_not_called()
@@ -2277,8 +2276,7 @@ async def test_video_download_handles_non_200(hass: HomeAssistant, tmp_path: Pat
         }
         await sync.async_download(opts, client)
 
-    rel_path = _clip_path(clip, "high")
-    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
     assert not video_path.exists()
     # Audio should still succeed
     assert sync.errors == 0
@@ -2326,9 +2324,7 @@ async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp
         }
         await sync.async_download(opts, client)
 
-    rel_path = _clip_path(clip, "high")
-    video_path = (tmp_path / "mirror" / rel_path).with_suffix(".mp4")
-    assert not video_path.exists()
+    assert not (tmp_path / "mirror" / _video_clip_path(clip)).exists()
     mock_session.get.assert_not_called()
 
 
