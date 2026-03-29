@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v4.3.0 (2026-03-29)
+
+### Chores
+
+- Add pre-commit hook for fast staged-file checks
+  ([`eea6395`](https://github.com/teh-hippo/ha-suno/commit/eea639535b81b9367a16ade994f9b116abab3158))
+
+- Sync uv.lock with v4.2.9
+  ([`f0c13cc`](https://github.com/teh-hippo/ha-suno/commit/f0c13ccad41d3fe14abd15a3e4424b1441ab8285))
+
+- Update uv.lock version
+  ([`fe914be`](https://github.com/teh-hippo/ha-suno/commit/fe914bed3ec6a5b4339aecb2b83c4367f3c6a8db))
+
+### Features
+
+- Store music videos in dedicated directory
+  ([`636f2ef`](https://github.com/teh-hippo/ha-suno/commit/636f2ef9d9bc468ae745c5b00870ae0217388203))
+
+
 ## v4.2.9 (2026-03-28)
 
 ### Bug Fixes
