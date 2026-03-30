@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.3.3 (2026-03-30)
+
+### Bug Fixes
+
+- Pass relative path to _api_get in get_clip_parent
+  ([`3a6accb`](https://github.com/teh-hippo/ha-suno/commit/3a6accb886f7b2a88704f7517a29c130bbcf4134))
+
+
 ## v4.3.2 (2026-03-30)
 
 ### Build System
