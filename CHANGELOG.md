@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.3.1 (2026-03-30)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`675d515`](https://github.com/teh-hippo/ha-suno/commit/675d51598486a2f804d0050a0179fdce2228fc2a))
+
+
 ## v4.3.0 (2026-03-29)
 
 ### Chores
