@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v4.3.6 (2026-04-05)
+
+### Build System
+
+- Update Renovate config for weekly grouped updates
+  ([`abd8882`](https://github.com/teh-hippo/ha-suno/commit/abd88825e379c1dc02180640141f05fcbd068813))
+
+### Chores
+
+- Remove pre-commit hook, pre-push is sufficient
+  ([`a8d60b2`](https://github.com/teh-hippo/ha-suno/commit/a8d60b21c4c3d875dd08e18a46c6c035d97efea7))
+
+### Documentation
+
+- Add AGENTS.md
+  ([`ca37f6e`](https://github.com/teh-hippo/ha-suno/commit/ca37f6e276c865f261602496a4f400b20213745e))
+
+
 ## v4.3.5 (2026-03-30)
 
 ### Build System
