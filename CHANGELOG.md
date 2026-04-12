@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v4.3.9 (2026-04-12)
+
+### Build System
+
+- **deps**: Update softprops/action-gh-release action to v3
+  ([`b18f818`](https://github.com/teh-hippo/ha-suno/commit/b18f818bdab5b7250d40d4467b9f693be2cc16e2))
+
+- **deps**: Upgrade
+  ([`8edd586`](https://github.com/teh-hippo/ha-suno/commit/8edd58609c2e7ad70f1339f334614c17cf28be25))
+
+
 ## v4.3.8 (2026-04-05)
 
 ### Build System
