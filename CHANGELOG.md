@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.3.10 (2026-04-14)
+
+### Build System
+
+- **deps**: Update dependency pytest to v9.0.3 [SECURITY]
+  ([`49be964`](https://github.com/teh-hippo/ha-suno/commit/49be964dfda9740acae1f84899dd2a613d67f039))
+
+
 ## v4.3.9 (2026-04-12)
 
 ### Build System
