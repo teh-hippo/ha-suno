@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.3.12 (2026-04-19)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`5a153f2`](https://github.com/teh-hippo/ha-suno/commit/5a153f20ce8e1fc7c685a0ac1c542ff512fe765e))
+
+
 ## v4.3.11 (2026-04-19)
 
 ### Build System
