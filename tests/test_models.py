@@ -155,3 +155,34 @@ class TestSafePlaylist:
         ]
         pls = _safe_playlists(raw_list)
         assert len(pls) == 2
+
+
+class TestToTrackMetadataAlbumArtist:
+    """Album artist propagation (Release 2: 2.11)."""
+
+    def _make(self, display_name: str = "AmeonAI"):
+        from custom_components.suno.models import SunoClip
+
+        return SunoClip(
+            id="abc",
+            title="Song",
+            audio_url="https://x/y.mp3",
+            image_url="",
+            image_large_url="",
+            is_liked=False,
+            status="complete",
+            created_at="2026-04-20T00:00:00Z",
+            tags="",
+            duration=120.0,
+            clip_type="gen",
+            has_vocal=True,
+            display_name=display_name,
+        )
+
+    def test_album_artist_uses_display_name(self) -> None:
+        meta = self._make().to_track_metadata()
+        assert meta.album_artist == "AmeonAI"
+
+    def test_album_artist_falls_back_to_suno(self) -> None:
+        meta = self._make(display_name="").to_track_metadata()
+        assert meta.album_artist == "Suno"
