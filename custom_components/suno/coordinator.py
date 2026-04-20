@@ -55,10 +55,22 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self.cache: SunoCache | None = None
         self.download_manager: SunoDownloadManager | None = None
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
+        self._data_version: int = 0
         self.user = SunoUser(
             id=client.user_id or "",
             display_name=client.display_name,
         )
+
+    @property
+    def data_version(self) -> int:
+        """Monotonic counter incremented on every successful coordinator update.
+
+        Consumers (e.g. the proxy clip cache) use this to invalidate derived
+        state without comparing object identity, which is fragile when the
+        coordinator returns the same SunoData instance after an in-place
+        mutation.
+        """
+        return self._data_version
 
     async def async_load_stored_data(self) -> SunoData | None:
         """Load persisted library from HA Store."""
@@ -277,7 +289,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             self.hass.config_entries.async_update_entry(self.config_entry, title=self.user.display_name)
 
         self.hass.async_create_task(
-            self._store.async_save(
+            self._async_store_save(
                 {
                     "clips": [asdict(c) for c in data.clips],
                     "liked_clips": [asdict(c) for c in data.liked_clips],
@@ -287,4 +299,17 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             ),
             f"suno_store_save_{self.config_entry.entry_id}",
         )
+        self._data_version += 1
         return data
+
+    async def _async_store_save(self, payload: dict[str, Any]) -> None:
+        """Persist library to Store, logging any failure instead of raising.
+
+        Wrapped because the call is fire-and-forget via ``async_create_task``;
+        without this wrapper an exception would surface as a task-not-awaited
+        warning with no useful context.
+        """
+        try:
+            await self._store.async_save(payload)
+        except Exception:  # noqa: BLE001 - intentionally broad: best-effort write
+            _LOGGER.warning("Failed to persist Suno library to Store", exc_info=True)

@@ -43,9 +43,10 @@ class SunoMediaProxyView(HomeAssistantView):
         first_coordinator: SunoCoordinator | None = None
         for entry in entries:
             if (coordinator := getattr(entry, "runtime_data", None)) is not None:
-                generation += id(coordinator.data)
-                if first_coordinator is None and isinstance(coordinator, SunoCoordinator):
-                    first_coordinator = coordinator
+                if isinstance(coordinator, SunoCoordinator):
+                    generation += coordinator.data_version
+                    if first_coordinator is None:
+                        first_coordinator = coordinator
         if generation != self._clips_generation:
             lookup: dict[str, tuple[SunoClip, SunoCoordinator]] = {}
             for entry in entries:
