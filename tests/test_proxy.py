@@ -191,6 +191,57 @@ async def test_view_falls_back_for_uncached_clip(hass: HomeAssistant, mock_suno_
     assert resp.status == 502
 
 
+# ── Auth (Release 1: proxy now requires auth) ────────────────────────
+
+
+def test_view_requires_auth_attribute() -> None:
+    """Regression guard: proxy view must declare requires_auth=True."""
+    assert SunoMediaProxyView.requires_auth is True
+
+
+async def test_view_unauthenticated_returns_401(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, hass_client_no_auth
+) -> None:
+    """Unauthenticated GET to the proxy must be rejected with 401."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    client = await hass_client_no_auth()
+    for ext in ("mp3", "flac"):
+        resp = await client.get(f"/api/suno/media/clip-aaa-111.{ext}")
+        assert resp.status == 401, f"{ext} did not require auth"
+
+
+async def test_view_cancelled_error_propagates(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Cache-hit branch must NOT swallow CancelledError."""
+    import asyncio as _asyncio
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    view = SunoMediaProxyView(hass)
+    # Pre-populate inflight with a future that will appear cancelled.
+    fut: _asyncio.Future[bytes | None] = _asyncio.get_running_loop().create_future()
+    fut.cancel()
+    view._inflight["clip-x.flac"] = fut
+
+    # Build a minimal Request-like stub; we exercise _handle_hq directly.
+    # Cancellation from asyncio.shield on a cancelled future should raise CancelledError,
+    # not return a 200/502 response.
+    raised = False
+    try:
+        await view._handle_hq("clip-x", None, "t", "a", "audio/flac", None, "", client=None)
+    except _asyncio.CancelledError:
+        raised = True
+    finally:
+        view._inflight.pop("clip-x.flac", None)
+    assert raised, "CancelledError was swallowed"
+
+
 # ── RIFF INFO builder ───────────────────────────────────────────────
 
 

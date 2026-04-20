@@ -28,7 +28,7 @@ class SunoMediaProxyView(HomeAssistantView):
 
     url = "/api/suno/media/{clip_id}.{ext}"
     name = "api:suno:media"
-    requires_auth = False
+    requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -186,7 +186,7 @@ class SunoMediaProxyView(HomeAssistantView):
         if key in self._inflight:
             try:
                 result = await asyncio.wait_for(asyncio.shield(self._inflight[key]), timeout=150)
-            except TimeoutError, asyncio.CancelledError, Exception:
+            except TimeoutError, Exception:
                 result = None
             if result is not None:
                 return web.Response(body=result, content_type=content_type)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.components.media_player import BrowseError, MediaClass  # type: ignore[attr-defined]
 from homeassistant.components.media_source import BrowseMediaSource, MediaSource, MediaSourceItem, PlayMedia
 from homeassistant.core import HomeAssistant
@@ -124,7 +126,9 @@ class SunoMediaSource(MediaSource):
             quality = QUALITY_STANDARD
         ext = "flac" if quality == QUALITY_HIGH else "mp3"
         mime = "audio/flac" if quality == QUALITY_HIGH else "audio/mpeg"
-        return PlayMedia(url=f"/api/suno/media/{clip_id}.{ext}", mime_type=mime)
+        path = f"/api/suno/media/{clip_id}.{ext}"
+        signed = async_sign_path(self.hass, path, timedelta(hours=1), use_content_user=True)
+        return PlayMedia(url=signed, mime_type=mime)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the Suno library."""

@@ -326,7 +326,8 @@ async def test_resolve_media_success(hass: HomeAssistant, mock_suno_client: Asyn
     result = await source.async_resolve_media(item)
 
     # clip-aaa-111 is liked, and default quality_liked is "high" → FLAC
-    assert result.url == "/api/suno/media/clip-aaa-111.flac"
+    assert result.url.startswith("/api/suno/media/clip-aaa-111.flac")
+    assert "authSig=" in result.url
     assert result.mime_type == "audio/flac"
 
 
@@ -340,7 +341,8 @@ async def test_resolve_media_unknown_clip(hass: HomeAssistant, mock_suno_client:
     item = MediaSourceItem(hass, "suno", "clip/nonexistent", None)
 
     result = await source.async_resolve_media(item)
-    assert result.url == "/api/suno/media/nonexistent.mp3"
+    assert result.url.startswith("/api/suno/media/nonexistent.mp3")
+    assert "authSig=" in result.url
     assert result.mime_type == "audio/mpeg"
 
 
@@ -393,7 +395,8 @@ async def test_resolve_media_from_liked_clips(hass: HomeAssistant, mock_suno_cli
     result = await source.async_resolve_media(item)
 
     # clip-aaa-111 is liked, quality_liked defaults to "high" → FLAC
-    assert result.url == "/api/suno/media/clip-aaa-111.flac"
+    assert result.url.startswith("/api/suno/media/clip-aaa-111.flac")
+    assert "authSig=" in result.url
     assert result.mime_type == "audio/flac"
 
 
@@ -448,13 +451,15 @@ async def test_resolve_searches_all_entries(hass: HomeAssistant, mock_suno_clien
     item = MediaSourceItem(hass, "suno", "clip/clip-second-only", None)
     result = await source.async_resolve_media(item)
     # clip-second-only is liked, quality_liked defaults to "high" → FLAC
-    assert result.url == "/api/suno/media/clip-second-only.flac"
+    assert result.url.startswith("/api/suno/media/clip-second-only.flac")
+    assert "authSig=" in result.url
     assert result.mime_type == "audio/flac"
 
     # Clip from entry 1 should still resolve fine
     item1 = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result1 = await source.async_resolve_media(item1)
-    assert result1.url == "/api/suno/media/clip-aaa-111.flac"
+    assert result1.url.startswith("/api/suno/media/clip-aaa-111.flac")
+    assert "authSig=" in result1.url
 
 
 async def test_browse_playlists(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -539,7 +544,7 @@ async def test_get_clip_quality_liked_standard(hass: HomeAssistant, mock_suno_cl
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url.endswith(".mp3")
+    assert ".mp3?authSig=" in result.url
     assert result.mime_type == "audio/mpeg"
 
 
@@ -564,7 +569,7 @@ async def test_get_clip_quality_playlists_standard(hass: HomeAssistant, mock_sun
     item = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result = await source.async_resolve_media(item)
 
-    assert result.url.endswith(".mp3")
+    assert ".mp3?authSig=" in result.url
     assert result.mime_type == "audio/mpeg"
 
 
@@ -586,7 +591,7 @@ async def test_get_clip_quality_neither_liked_nor_playlist(hass: HomeAssistant, 
     result = await source.async_resolve_media(item)
 
     # Not in liked or playlists -> STANDARD -> mp3
-    assert result.url.endswith(".mp3")
+    assert ".mp3?authSig=" in result.url
     assert result.mime_type == "audio/mpeg"
 
 
