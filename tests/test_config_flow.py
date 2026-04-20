@@ -38,7 +38,7 @@ from custom_components.suno.const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from custom_components.suno.exceptions import SunoAuthError
+from custom_components.suno.exceptions import SunoAuthError, SunoConnectionError
 
 from .conftest import MOCK_COOKIE, MOCK_USER_ID, make_entry, patch_suno_setup, setup_entry
 
@@ -696,3 +696,71 @@ async def test_options_flow_archive_mode_valid(hass: HomeAssistant, mock_suno_cl
     # Should finish (liked and my_songs disabled)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_DOWNLOAD_MODE_PLAYLISTS] == "archive"
+
+
+# ── SunoConnectionError handling + reauth identity (Release 2: 2.6) ─────
+
+
+async def test_user_flow_handles_suno_connection_error(hass: HomeAssistant) -> None:
+    """SunoConnectionError during user setup maps to cannot_connect."""
+    result = await hass.config_entries.flow.async_init(
+        "suno", context={"source": config_entries.SOURCE_USER}
+    )
+    mock_client = _make_flow_client(
+        authenticate=AsyncMock(side_effect=SunoConnectionError("network down"))
+    )
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: MOCK_COOKIE},
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"
+
+
+async def test_reauth_flow_handles_suno_connection_error(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """SunoConnectionError during reauth maps to cannot_connect."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    result = await entry.start_reauth_flow(hass)
+    mock_client = _make_flow_client(
+        authenticate=AsyncMock(side_effect=SunoConnectionError("network down"))
+    )
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: "new-cookie"},
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "cannot_connect"
+
+
+async def test_reauth_flow_aborts_on_wrong_account(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Reauth with a cookie for a different Suno account aborts cleanly."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    assert entry.unique_id == MOCK_USER_ID
+    result = await entry.start_reauth_flow(hass)
+
+    different_user_id = MOCK_USER_ID + "-other"
+    mock_client = _make_flow_client(authenticate=AsyncMock(return_value=different_user_id))
+    mock_client.get_feed = AsyncMock(return_value=[])
+
+    original_cookie = entry.data[CONF_COOKIE]
+    with _patch_client(mock_client):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_COOKIE: "stranger-cookie"},
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    # Original cookie must NOT have been overwritten.
+    assert entry.data[CONF_COOKIE] == original_cookie

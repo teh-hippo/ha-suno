@@ -67,7 +67,7 @@ from .const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from .exceptions import SunoAuthError
+from .exceptions import SunoAuthError, SunoConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_id = await auth.authenticate()
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
-            except aiohttp.ClientError, TimeoutError:
+            except aiohttp.ClientError, TimeoutError, SunoConnectionError:
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno authentication")
@@ -211,16 +211,21 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
             auth = ClerkAuth(session, cookie)
 
             try:
-                await auth.authenticate()
+                user_id = await auth.authenticate()
             except SunoAuthError:
                 errors["base"] = "invalid_cookie"
-            except aiohttp.ClientError, TimeoutError:
+            except aiohttp.ClientError, TimeoutError, SunoConnectionError:
                 errors["base"] = "cannot_connect"
             except Exception:
                 _LOGGER.exception("Unexpected error during Suno re-authentication")
                 errors["base"] = "unknown"
             else:
                 entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                if entry and entry.unique_id and user_id != entry.unique_id:
+                    # The new cookie authenticates as a different Suno account
+                    # than the one originally configured. Refuse silently rather
+                    # than corrupt the existing entry's identity.
+                    return self.async_abort(reason="wrong_account")
                 if entry:
                     self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_COOKIE: cookie})
                     await self.hass.config_entries.async_reload(entry.entry_id)

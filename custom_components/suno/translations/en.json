@@ -43,7 +43,8 @@
     },
     "abort": {
       "already_configured": "This Suno account is already configured.",
-      "reauth_successful": "Re-authentication successful."
+      "reauth_successful": "Re-authentication successful.",
+      "wrong_account": "The new cookie belongs to a different Suno account. Re-authenticate with the original account, or remove this entry and add a new one."
     }
   },
   "options": {
