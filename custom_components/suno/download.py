@@ -317,22 +317,66 @@ def _clip_entry(item: DownloadItem, rel_path: str, file_size: int) -> dict[str, 
 
 
 async def _update_cover_art(
-    hass: HomeAssistant, session: Any, image_url: str, cover_path: Path, hash_path: Path
+    hass: HomeAssistant,
+    session: Any,
+    image_url: str,
+    cover_path: Path,
+    hash_path: Path,
+    track_path: Path | None = None,
 ) -> bool:
-    """Check image URL hash and write cover.jpg if changed. Returns True if updated."""
+    """Check image URL hash and write cover.jpg if changed. Returns True if updated.
+
+    If ``track_path`` is given, also writes a per-track JPG sidecar matching
+    the audio basename (e.g. ``Foo.flac`` -> ``Foo.jpg``) so library scanners
+    such as Jellyfin can show track-level cover art rather than only album art.
+    """
     url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
     existing_hash = ""
     if await hass.async_add_executor_job(hash_path.exists):
         existing_hash = (await hass.async_add_executor_job(hash_path.read_text)).strip()
+    track_sidecar = track_path.with_suffix(".jpg") if track_path else None
     if url_hash == existing_hash:
+        # Hash matched, but the per-track sidecar may still be missing if the
+        # cover.jpg predates this feature. Backfill cheaply from cover.jpg.
+        if (
+            track_sidecar is not None
+            and not await hass.async_add_executor_job(track_sidecar.exists)
+            and await hass.async_add_executor_job(cover_path.exists)
+        ):
+            await _write_track_sidecar(hass, cover_path, track_sidecar)
         return False
     image_data = await fetch_album_art(session, image_url)
     if image_data:
         await hass.async_add_executor_job(cover_path.parent.mkdir, 0o755, True, True)
         await _write_file(hass, cover_path, image_data)
         await hass.async_add_executor_job(hash_path.write_text, url_hash)
+        if track_sidecar is not None:
+            await _write_track_sidecar(hass, cover_path, track_sidecar)
         return True
     return False
+
+
+def _link_or_copy_sync(src: Path, dst: Path) -> None:
+    """Hardlink ``src`` to ``dst``, falling back to copy if linking fails."""
+    import shutil  # noqa: PLC0415
+
+    if dst.exists():
+        try:
+            dst.unlink()
+        except OSError:
+            return
+    try:
+        os.link(src, dst)
+    except OSError:
+        try:
+            shutil.copyfile(src, dst)
+        except OSError:
+            pass
+
+
+async def _write_track_sidecar(hass: HomeAssistant, cover_path: Path, sidecar_path: Path) -> None:
+    """Write the per-track JPG sidecar, preferring a hardlink when supported."""
+    await hass.async_add_executor_job(_link_or_copy_sync, cover_path, sidecar_path)
 
 
 class SunoDownloadManager:
@@ -556,6 +600,15 @@ class SunoDownloadManager:
                                 if await self.hass.async_add_executor_job(old_sc.exists):
                                     new_sc = new_file.parent / sidecar_name
                                     await self.hass.async_add_executor_job(old_sc.rename, new_sc)
+                        # Move the per-track JPG sidecar (matches audio basename)
+                        old_track_jpg = old_file.with_suffix(".jpg")
+                        if await self.hass.async_add_executor_job(old_track_jpg.exists):
+                            new_track_jpg = new_file.with_suffix(".jpg")
+                            await self.hass.async_add_executor_job(new_track_jpg.parent.mkdir, 0o755, True, True)
+                            try:
+                                await self.hass.async_add_executor_job(old_track_jpg.rename, new_track_jpg)
+                            except OSError:
+                                _LOGGER.debug("Could not move track sidecar JPG for %s", old_path)
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
@@ -717,7 +770,12 @@ class SunoDownloadManager:
                 continue
             target = base / entry["path"]
             if await _update_cover_art(
-                self.hass, session, image_url, target.parent / "cover.jpg", target.parent / ".cover_hash"
+                self.hass,
+                session,
+                image_url,
+                target.parent / "cover.jpg",
+                target.parent / ".cover_hash",
+                track_path=target,
             ):
                 covers_fixed += 1
         if covers_fixed:
@@ -731,6 +789,7 @@ class SunoDownloadManager:
                 sidecars = (
                     video_file,
                     clip_file.with_suffix(".mp4"),  # legacy sidecar location
+                    clip_file.with_suffix(".jpg"),  # per-track Jellyfin cover sidecar
                     clip_file.parent / "cover.jpg",
                     clip_file.parent / ".cover_hash",
                 )
@@ -956,7 +1015,12 @@ class SunoDownloadManager:
             # Write cover.jpg for Jellyfin album art discovery
             if image_data and image_url:
                 await _update_cover_art(
-                    self.hass, session, image_url, target.parent / "cover.jpg", target.parent / ".cover_hash"
+                    self.hass,
+                    session,
+                    image_url,
+                    target.parent / "cover.jpg",
+                    target.parent / ".cover_hash",
+                    track_path=target,
                 )
 
             # Download video if enabled and available
