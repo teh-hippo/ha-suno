@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v5.0.0 (2026-04-20)
+
+### Bug Fixes
+
+- Declare correct HA minimum version in HACS manifest
+  ([`5b5e747`](https://github.com/teh-hippo/ha-suno/commit/5b5e7473b996ae76a51320871d21b45fec1ed38e))
+
+### Features
+
+- Require auth on media proxy and sign media_source URLs
+  ([`c6fce56`](https://github.com/teh-hippo/ha-suno/commit/c6fce56614432c8ab4a04a13ac4fedb89386e2fa))
+
+### Breaking Changes
+
+- Direct unauthenticated requests to `/api/suno/media/{clip_id}.{ext}` now return 401. External
+  scripts must include `Authorization: Bearer <token>` or use a signed URL from
+  `media_source.async_resolve_media`.
+
+
 ## v4.3.16 (2026-04-19)
 
 ### Build System
