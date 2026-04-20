@@ -683,3 +683,44 @@ async def test_store_save_failure_logged_not_raised(
 
     assert coordinator.last_update_success is True
     assert any("Failed to persist Suno library" in rec.message for rec in caplog.records)
+
+
+# ── Remix hash skip (Release 2: 2.8) ────────────────────────────────────
+
+
+async def test_remix_set_change_invalidates_hash(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Remix hash is recomputed when the unresolved remix set changes."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    # First refresh populated _last_remix_hash (or left it None if no remixes).
+    initial_hash = coordinator._last_remix_hash
+
+    # Simulate a remix appearing in the next refresh cycle by injecting an
+    # extra unresolved-remix clip into the data and re-running the resolver.
+    new_clip = SunoClip(
+        id="remix-new-id",
+        title="Remix Track",
+        audio_url="https://cdn1.suno.ai/remix-new-id.mp3",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-04-20T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="missing-parent",  # makes it look like a remix
+        is_remix=True,
+    )
+    data_with_remix = SunoData(clips=[*coordinator.data.clips, new_clip])
+    mock_suno_client.get_clip_parent = AsyncMock(return_value=None)
+    await coordinator._resolve_root_ancestors(data_with_remix)
+    after_hash = coordinator._last_remix_hash
+
+    assert after_hash != initial_hash
+    assert after_hash is not None

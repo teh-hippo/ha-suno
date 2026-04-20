@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
@@ -56,6 +57,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self.download_manager: SunoDownloadManager | None = None
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
         self._data_version: int = 0
+        self._last_remix_hash: str | None = None
         self.user = SunoUser(
             id=client.user_id or "",
             display_name=client.display_name,
@@ -150,6 +152,17 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         unresolved = [c for c in all_clips.values() if not c.root_ancestor_id and c.is_remix]
         if not unresolved:
             return
+
+        # Skip the (slow) ancestor API calls if the unresolved remix set is
+        # identical to the previous cycle — nothing has changed, the answer
+        # would be the same, and we'd just spend ~6s sleeping between calls.
+        remix_hash = hashlib.sha1(  # noqa: S324 - non-cryptographic identity hash
+            ",".join(sorted(c.id for c in unresolved)).encode()
+        ).hexdigest()
+        if remix_hash == self._last_remix_hash:
+            _LOGGER.debug("Remix set unchanged, skipping ancestor resolution")
+            return
+        self._last_remix_hash = remix_hash
 
         api_calls = 0
         parent_cache: dict[str, str] = {}
