@@ -622,3 +622,64 @@ async def test_phased_resolution_caps_api_calls(hass: HomeAssistant, mock_suno_c
         await coordinator._resolve_root_ancestors(data)
 
     assert coordinator.client.get_clip_parent.call_count <= _MAX_PARENT_LOOKUPS_PER_CYCLE
+
+
+# ── data_version monotonic counter (Release 2: 2.4) ─────────────────────
+
+
+async def test_data_version_starts_at_zero(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Coordinator data_version starts at 0 before the first update."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        coordinator = SunoCoordinator(hass, mock_suno_client, entry)
+    assert coordinator.data_version == 0
+
+
+async def test_data_version_increments_on_success(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Each successful coordinator refresh bumps data_version by one."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    initial = coordinator.data_version
+    assert initial >= 1
+    await coordinator.async_refresh()
+    assert coordinator.data_version == initial + 1
+
+
+async def test_data_version_unchanged_on_failure(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """A failed update does not advance the version counter."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    before = coordinator.data_version
+    mock_suno_client.get_all_songs.side_effect = SunoApiError("boom")
+    await coordinator.async_refresh()
+    assert coordinator.data_version == before
+
+
+# ── Store save error handling (Release 2: 2.7) ──────────────────────────
+
+
+async def test_store_save_failure_logged_not_raised(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If Store.async_save raises, the coordinator logs and continues."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    with patch.object(coordinator._store, "async_save", side_effect=OSError("disk full")):
+        caplog.set_level(logging.WARNING, logger="custom_components.suno.coordinator")
+        await coordinator.async_refresh()
+        # Drain background tasks so the wrapped save coroutine actually runs.
+        await hass.async_block_till_done()
+
+    assert coordinator.last_update_success is True
+    assert any("Failed to persist Suno library" in rec.message for rec in caplog.records)

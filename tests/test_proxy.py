@@ -30,9 +30,9 @@ class TestBuildId3Header:
         result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         assert result[:3] == b"ID3"
 
-    def test_header_version_is_2_4(self) -> None:
+    def test_header_version_is_2_3(self) -> None:
         result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
-        assert result[3:5] == b"\x04\x00"
+        assert result[3:5] == b"\x03\x00"
 
     def test_contains_tit2_frame(self) -> None:
         result = _build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
