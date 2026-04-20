@@ -3570,3 +3570,59 @@ async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tm
     result = await sync._retag_clip(item, target)
 
     assert result is RetagResult.MISSING
+
+
+# ── Per-track JPG sidecar (Release 2: 2.10) ─────────────────────────────
+
+
+async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When track_path is given, _update_cover_art writes <basename>.jpg too."""
+    from custom_components.suno.download import _update_cover_art
+
+    track = tmp_path / "Foo.flac"
+    track.write_bytes(b"fLaC")
+    cover = tmp_path / "cover.jpg"
+    hash_path = tmp_path / ".cover_hash"
+
+    session = AsyncMock()
+    with patch(
+        "custom_components.suno.download.fetch_album_art",
+        new_callable=AsyncMock,
+        return_value=b"\xff\xd8\xff" + b"\x00" * 100,
+    ):
+        result = await _update_cover_art(
+            hass, session, "https://x/y.jpg", cover, hash_path, track_path=track
+        )
+
+    assert result is True
+    assert cover.exists()
+    track_jpg = track.with_suffix(".jpg")
+    assert track_jpg.exists()
+    assert track_jpg.read_bytes() == cover.read_bytes()
+
+
+async def test_update_cover_art_backfills_missing_track_sidecar(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Hash-match path still backfills track sidecar if it's missing."""
+    import hashlib
+
+    from custom_components.suno.download import _update_cover_art
+
+    track = tmp_path / "Foo.flac"
+    track.write_bytes(b"fLaC")
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+    hash_path = tmp_path / ".cover_hash"
+    image_url = "https://x/y.jpg"
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
+    hash_path.write_text(url_hash)
+    track_jpg = track.with_suffix(".jpg")
+    assert not track_jpg.exists()
+
+    session = AsyncMock()
+    result = await _update_cover_art(hass, session, image_url, cover, hash_path, track_path=track)
+
+    # Hash matched so result is False, but the sidecar was backfilled.
+    assert result is False
+    assert track_jpg.exists()
