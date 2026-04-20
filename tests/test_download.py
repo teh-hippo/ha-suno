@@ -795,6 +795,12 @@ async def test_quality_match_skips_download(hass: HomeAssistant, tmp_path: Path)
     with patch.object(sync._store, "async_load", return_value=initial_state):
         await sync.async_init()
 
+    # Pre-create the manifest's target file so reconciliation does not flag it
+    # as missing and trigger a re-download.
+    target = tmp_path / "mirror" / "2026-03-15" / "Song [clip0002].flac"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
     clip = _make_clip("clip0002-0000-0000-0000-000000000000", "Song")
     client = AsyncMock()
     client.get_liked_songs = AsyncMock(return_value=[clip])
@@ -2871,7 +2877,11 @@ async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: P
         return original_rename(self_path, target)
 
     with (
-        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=b"fLaC" + b"\x00" * 50,
+        ) as mock_dl,
         patch("custom_components.suno.download.get_ffmpeg_manager"),
         patch("custom_components.suno.download.async_get_clientsession"),
         patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
@@ -2889,18 +2899,21 @@ async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: P
     # The second clip should have been renamed despite the first failing
     # At least one rename was attempted for each clip
     assert call_count >= 2
-    mock_dl.assert_not_called()
+    # The clip whose rename raised OSError should have its stale path cleared
+    # and be queued for re-download to the new location.
+    assert mock_dl.call_count == 1
 
-    # Verify the failed clip's state still has the old path
+    # Verify exactly one clip was renamed in place; the other was queued for
+    # re-download (its manifest entry has the new path written by Phase 4).
     clip0_id = "clip0000-0000-0000-0000-000000000000"
     clip1_id = "clip0001-0000-0000-0000-000000000000"
     clip0_state = sync._state["clips"][clip0_id]
     clip1_state = sync._state["clips"][clip1_id]
-    # One succeeded and one failed — check at least one has the new path
     new_paths = [_clip_path(c, QUALITY_HIGH) for c in new_clips]
     paths = [clip0_state["path"], clip1_state["path"]]
-    # At least one clip should have been renamed to new path
-    assert any(p in new_paths for p in paths)
+    # Both clips should now reference the new path — one via in-place rename,
+    # one via re-download after the rename failure cleared the stale path.
+    assert all(p in new_paths for p in paths)
 
 
 async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -3336,3 +3349,224 @@ async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> No
 
     # Fallback: album == clip's own title
     assert captured_meta.get("album") == "Standalone Track"
+
+
+# ── Manifest reconciliation (Release 2: 2.1 + 2.2 + 2.3) ───────────────────
+
+
+async def test_reconcile_manifest_marks_missing_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manifest entries whose files are gone get path/meta_hash cleared."""
+    from custom_components.suno.download import RetagResult  # noqa: F401
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    base = tmp_path / "mirror"
+    base.mkdir()
+    # Two manifest entries: one present on disk, one missing.
+    (base / "present.flac").write_bytes(b"fLaC" + b"\x00" * 50)
+    clips_state: dict[str, dict[str, object]] = {
+        "present-id": {"path": "present.flac", "meta_hash": "abc"},
+        "missing-id": {"path": "gone.flac", "meta_hash": "def"},
+    }
+
+    count = await sync._reconcile_manifest(base, clips_state)
+
+    assert count == 1
+    assert clips_state["present-id"]["path"] == "present.flac"
+    assert clips_state["present-id"]["meta_hash"] == "abc"
+    assert clips_state["missing-id"]["path"] == ""
+    assert "meta_hash" not in clips_state["missing-id"]
+
+
+async def test_reconcile_manifest_treats_zero_byte_as_missing(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Zero-byte files are reconciled the same as fully missing files."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    base = tmp_path / "mirror"
+    base.mkdir()
+    (base / "empty.flac").write_bytes(b"")
+    clips_state: dict[str, dict[str, object]] = {
+        "empty-id": {"path": "empty.flac", "meta_hash": "abc"},
+    }
+
+    count = await sync._reconcile_manifest(base, clips_state)
+
+    assert count == 1
+    assert clips_state["empty-id"]["path"] == ""
+
+
+async def test_reconcile_manifest_idempotent_when_clean(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manifest with all files present: no mutation, returns 0."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    base = tmp_path / "mirror"
+    base.mkdir()
+    (base / "a.flac").write_bytes(b"fLaC" + b"\x00" * 10)
+    (base / "b.flac").write_bytes(b"fLaC" + b"\x00" * 10)
+    clips_state: dict[str, dict[str, object]] = {
+        "a-id": {"path": "a.flac", "meta_hash": "h1"},
+        "b-id": {"path": "b.flac", "meta_hash": "h2"},
+    }
+    snapshot = json.dumps(clips_state, sort_keys=True)
+
+    count = await sync._reconcile_manifest(base, clips_state)
+
+    assert count == 0
+    assert json.dumps(clips_state, sort_keys=True) == snapshot
+
+
+async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """End-to-end: manifest entry whose file is gone → re-download queued."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _make_clip("clip0001-0000-0000-0000-000000000000", "Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    from custom_components.suno.models import clip_meta_hash
+
+    initial_state = {
+        "clips": {
+            clip.id: {
+                "path": rel_path,
+                "title": clip.title,
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": clip_meta_hash(clip),
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    # Note: rel_path is NOT created on disk — that is the entire point.
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    fake_flac = b"fLaC" + b"\x00" * 50
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+            return_value=fake_flac,
+        ) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    assert mock_dl.call_count == 1
+    assert (sync_dir / rel_path).is_file()
+    assert sync._state["clips"][clip.id]["path"] == rel_path
+
+
+async def test_present_file_does_not_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Negative control: file present + hash match → no re-download work."""
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _make_clip("clip0002-0000-0000-0000-000000000000", "Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    from custom_components.suno.models import clip_meta_hash
+
+    initial_state = {
+        "clips": {
+            clip.id: {
+                "path": rel_path,
+                "title": clip.title,
+                "created": "2026-03-15",
+                "sources": ["liked"],
+                "size": 54,
+                "meta_hash": clip_meta_hash(clip),
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    client = AsyncMock()
+    client.get_liked_songs = AsyncMock(return_value=[clip])
+    client.get_playlists = AsyncMock(return_value=[])
+    client.get_all_songs = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ) as mock_dl,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch.object(sync._store, "async_save"),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    mock_dl.assert_not_called()
+
+
+async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_retag_clip pre-checks for missing files and signals MISSING."""
+    from custom_components.suno.download import RetagResult
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip("clipA-0000-0000-0000-000000000000", "Song")
+    item = DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)
+    sync._clip_index = {clip.id: clip}
+    target = tmp_path / "ghost.flac"
+
+    result = await sync._retag_clip(item, target)
+
+    assert result is RetagResult.MISSING
+
+
+async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_retag_clip treats zero-byte files as MISSING."""
+    from custom_components.suno.download import RetagResult
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    with patch.object(sync._store, "async_load", return_value=None):
+        await sync.async_init()
+
+    clip = _make_clip("clipB-0000-0000-0000-000000000000", "Song")
+    item = DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)
+    sync._clip_index = {clip.id: clip}
+    target = tmp_path / "empty.flac"
+    target.write_bytes(b"")
+
+    result = await sync._retag_clip(item, target)
+
+    assert result is RetagResult.MISSING

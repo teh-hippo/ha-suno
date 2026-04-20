@@ -456,7 +456,9 @@ async def retag_flac(
     """
     file_path = Path(path) if not isinstance(path, Path) else path
     if not file_path.is_file():
-        _LOGGER.warning("Cannot re-tag FLAC, file missing: %s", file_path)
+        # Caller (_retag_clip) pre-checks for missing files and routes to re-download;
+        # log at DEBUG only if we somehow reach here to avoid noisy warnings.
+        _LOGGER.debug("Cannot re-tag FLAC, file missing: %s", file_path)
         return False
 
     tmp_img_path: str | None = None

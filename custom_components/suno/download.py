@@ -9,6 +9,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +69,14 @@ _SERVICE_DOWNLOAD = "download_library"
 _MANIFEST_FILENAME = ".suno_download.json"
 _MAX_FILENAME_LEN = 200
 _MUSIC_VIDEOS_DIR = "music-videos"
+
+
+class RetagResult(Enum):
+    """Outcome of attempting to re-tag an existing audio file on disk."""
+
+    OK = "ok"
+    MISSING = "missing"  # File is gone or zero-byte; caller should re-download.
+    FAILED = "failed"  # Re-tag was attempted but failed for another reason.
 
 
 def _safe_name(name: str) -> str:
@@ -505,6 +514,13 @@ class SunoDownloadManager:
         to_download: list[DownloadItem] = []
         to_retag: list[DownloadItem] = []
 
+        # Phase 0: Manifest → disk reconciliation. Walk every entry that claims a
+        # file on disk; if the file is gone or zero-byte, clear the path so the
+        # later phases treat the clip as missing (rename or re-download).
+        missing_on_disk = await self._reconcile_manifest(base, clips_state)
+        if missing_on_disk:
+            _LOGGER.info("Manifest reconciliation: %d files missing on disk", missing_on_disk)
+
         # Phase 1: Rename pass — move files whose path has changed (e.g. display_name or title change)
         migrated = 0
         for item in desired:
@@ -543,6 +559,10 @@ class SunoDownloadManager:
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
+                    # Clear stale path so the next reconciliation pass treats this
+                    # entry as missing and re-downloads to the new location.
+                    existing["path"] = ""
+                    existing.pop("meta_hash", None)
         if migrated:
             _LOGGER.info("Renamed %d files", migrated)
             # Persist state after renames to prevent orphans on crash
@@ -577,7 +597,10 @@ class SunoDownloadManager:
         seen_ids: set[str] = set()
         for item in desired:
             seen_ids.add(item.clip.id)
-            if item.clip.id not in clips_state or force:
+            existing = clips_state.get(item.clip.id)
+            if item.clip.id not in clips_state or force or not (existing and existing.get("path")):
+                # New clip, force re-download, or manifest entry whose path was
+                # cleared by Phase 0 reconciliation / Phase 1 rename failure.
                 to_download.append(item)
             else:
                 existing = clips_state[item.clip.id]
@@ -628,19 +651,31 @@ class SunoDownloadManager:
 
         # Phase 3: Re-tag pass — update embedded metadata in existing files
         retagged = 0
+        retag_missing = 0
         for item in to_retag:
             existing = clips_state.get(item.clip.id)
             if not existing or not existing.get("path"):
                 continue
             target = base / existing["path"]
-            if await self._retag_clip(item, target):
+            result = await self._retag_clip(item, target)
+            if result is RetagResult.OK:
                 existing["meta_hash"] = clip_meta_hash(item.clip)
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
+            elif result is RetagResult.MISSING:
+                # File vanished from disk — drop the dead path so Phase 4 will
+                # re-download to a fresh location, and queue it now.
+                _LOGGER.info("Re-tag target missing, re-downloading: %s", existing["path"])
+                existing["path"] = ""
+                existing.pop("meta_hash", None)
+                to_download.append(item)
+                retag_missing += 1
             else:
                 self._errors += 1
         if retagged:
             _LOGGER.info("Re-tagged %d files", retagged)
+        if retag_missing:
+            _LOGGER.info("Queued %d missing files for re-download", retag_missing)
 
         # Phase 4: Download new clips
         downloaded = 0
@@ -976,9 +1011,60 @@ class SunoDownloadManager:
         except Exception:
             _LOGGER.debug("Failed to download video from %s", video_url)
 
-    async def _retag_clip(self, item: DownloadItem, target: Path) -> bool:
-        """Re-tag an existing audio file with updated metadata."""
+    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
+        """Walk the manifest and clear paths whose files are missing on disk.
+
+        Returns the count of entries reconciled. Mutates ``clips_state`` in
+        place; the caller persists state later. Idempotent: if every manifest
+        entry has a matching file, no mutation occurs.
+        """
+
+        def _check_paths(rel_paths: list[tuple[str, str]]) -> set[str]:
+            """Return the set of clip_ids whose audio file is missing or empty."""
+            missing: set[str] = set()
+            for clip_id, rel_path in rel_paths:
+                target = base / rel_path
+                try:
+                    if not target.is_file() or target.stat().st_size == 0:
+                        missing.add(clip_id)
+                except OSError:
+                    missing.add(clip_id)
+            return missing
+
+        rel_paths: list[tuple[str, str]] = [
+            (cid, entry["path"])
+            for cid, entry in clips_state.items()
+            if isinstance(entry, dict) and entry.get("path")
+        ]
+        if not rel_paths:
+            return 0
+        missing = await self.hass.async_add_executor_job(_check_paths, rel_paths)
+        for cid in missing:
+            entry = clips_state.get(cid)
+            if not entry:
+                continue
+            entry["path"] = ""
+            entry.pop("meta_hash", None)
+        return len(missing)
+
+    async def _retag_clip(self, item: DownloadItem, target: Path) -> RetagResult:
+        """Re-tag an existing audio file with updated metadata.
+
+        Returns OK on success, MISSING if the target file is gone or empty
+        (caller should re-queue for download), or FAILED for any other error.
+        """
         clip = item.clip
+        # Pre-check: if the file is gone or zero-byte, signal MISSING so the
+        # caller can re-download instead of letting ffmpeg fail noisily.
+        try:
+            stat = await self.hass.async_add_executor_job(target.stat)
+        except FileNotFoundError:
+            return RetagResult.MISSING
+        except OSError:
+            _LOGGER.exception("Failed to stat re-tag target %s", target)
+            return RetagResult.FAILED
+        if stat.st_size == 0:
+            return RetagResult.MISSING
         album_title = None
         if clip.root_ancestor_id and clip.root_ancestor_id != clip.id:
             root_clip = self._clip_index.get(clip.root_ancestor_id)
@@ -988,11 +1074,13 @@ class SunoDownloadManager:
         try:
             if target.suffix == ".flac":
                 ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
-                return await retag_flac(ffmpeg_binary, target, meta)
-            return await self.hass.async_add_executor_job(retag_mp3, target, meta)
+                ok = await retag_flac(ffmpeg_binary, target, meta)
+            else:
+                ok = await self.hass.async_add_executor_job(retag_mp3, target, meta)
         except Exception:
             _LOGGER.exception("Failed to re-tag %s", target)
-            return False
+            return RetagResult.FAILED
+        return RetagResult.OK if ok else RetagResult.FAILED
 
     # fmt: off
     async def cleanup_tmp_files(self, download_path: str) -> None:
