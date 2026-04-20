@@ -106,6 +106,7 @@ class SunoClip:
             title=t,
             artist=artist or self.display_name or "Suno",
             album=album or t,
+            album_artist=self.display_name or "Suno",
             date=self.created_at[:10] if self.created_at else "",
             lyrics=self.prompt,
             comment=self.gpt_description_prompt,
