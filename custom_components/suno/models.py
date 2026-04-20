@@ -90,7 +90,7 @@ class SunoClip:
             display_name=raw.get("display_name", ""),
             handle=raw.get("handle", ""),
             edited_clip_id=metadata.get("edited_clip_id", ""),
-            is_remix=metadata.get("is_remix", False) or False,
+            is_remix=bool(metadata.get("is_remix", False)),
             history=metadata.get("history"),
         )
 
