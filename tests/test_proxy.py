@@ -213,9 +213,7 @@ async def test_view_unauthenticated_returns_401(
         assert resp.status == 401, f"{ext} did not require auth"
 
 
-async def test_view_cancelled_error_propagates(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_view_cancelled_error_propagates(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Cache-hit branch must NOT swallow CancelledError."""
     import asyncio as _asyncio
 
