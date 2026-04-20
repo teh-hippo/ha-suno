@@ -197,9 +197,13 @@ class SunoCache:
             try:
                 size = await self._hass.async_add_executor_job(self._file_size, path)
                 await self._hass.async_add_executor_job(path.unlink, True)
-                current -= size
             except OSError:
+                # Could not unlink — leave the on-disk byte count untouched
+                # so the caller doesn't think it freed space it didn't.
                 pass
+            else:
+                if size > 0:
+                    current -= size
             self._index.pop(filename, None)
         self._schedule_save()
 
