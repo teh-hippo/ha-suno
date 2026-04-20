@@ -57,7 +57,7 @@ def _build_id3_header(meta: TrackMetadata) -> bytes:
     syncsafe = (
         ((size & 0x0FE00000) << 3) | ((size & 0x001FC000) << 2) | ((size & 0x00003F80) << 1) | (size & 0x0000007F)
     )
-    return b"ID3\x04\x00\x00" + syncsafe.to_bytes(4, "big") + frames
+    return b"ID3\x03\x00\x00" + syncsafe.to_bytes(4, "big") + frames
 
 
 def _skip_existing_id3(chunk: bytes) -> bytes:
