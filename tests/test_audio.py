@@ -283,7 +283,7 @@ def test_build_id3_header_valid() -> None:
     header = _build_id3_header(TrackMetadata(title="My Song", artist="My Artist"))
 
     assert header[:3] == b"ID3"
-    assert header[3] == 0x04  # Version 2.4
+    assert header[3] == 0x03  # Version 2.3
     assert len(header) > 10
     # Should contain the title and artist text
     assert b"My Song" in header
