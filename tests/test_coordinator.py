@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import asdict
 from unittest.mock import AsyncMock, patch
@@ -718,3 +719,120 @@ async def test_remix_set_change_invalidates_hash(hass: HomeAssistant, mock_suno_
 
     assert after_hash != initial_hash
     assert after_hash is not None
+
+
+# ── Async-split: coordinator update returns fast, ancestor API runs in background ─
+
+
+async def test_update_does_not_await_ancestor_api(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """The 2s parent-API sleeps must not block coordinator updates."""
+    import asyncio
+    import time
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    # Inject an unresolved remix so ancestor resolution would try API calls.
+    remix = _make_lineage_clip(
+        "remix-slow-id",
+        title="Slow Remix",
+        edited_clip_id="missing-parent",
+        is_remix=True,
+    )
+    extra_clips = [*coordinator.data.clips, remix]
+    mock_suno_client.get_all_songs = AsyncMock(return_value=extra_clips)
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.get_playlists = AsyncMock(return_value=[])
+
+    slow_call = asyncio.Event()
+
+    async def _slow_parent(_clip_id: str):
+        slow_call.set()
+        await asyncio.sleep(30)
+        return None
+
+    mock_suno_client.get_clip_parent = AsyncMock(side_effect=_slow_parent)
+    # Force re-resolution by clearing the dedup hash.
+    coordinator._last_remix_hash = None
+
+    start = time.monotonic()
+    await coordinator._async_update_data()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0, f"_async_update_data took {elapsed:.2f}s, must return fast"
+    assert coordinator._ancestor_task is not None
+    assert not coordinator._ancestor_task.done()
+
+    # Cleanup: cancel the slow background task so the test loop tears down cleanly.
+    coordinator._ancestor_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await coordinator._ancestor_task
+
+
+async def test_in_memory_resolution_runs_in_update(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Cheap in-memory chain resolution still happens during the fast update path."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    # Build a chain A -> B -> C entirely in memory (no API needed).
+    clip_c = _make_lineage_clip("chain-c", title="Root")
+    clip_b = _make_lineage_clip("chain-b", edited_clip_id="chain-c", is_remix=True)
+    clip_a = _make_lineage_clip("chain-a", edited_clip_id="chain-b", is_remix=True)
+    mock_suno_client.get_all_songs = AsyncMock(return_value=[clip_a, clip_b, clip_c])
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.get_playlists = AsyncMock(return_value=[])
+
+    data = await coordinator._async_update_data()
+    by_id = {c.id: c for c in data.clips}
+    assert by_id["chain-a"].root_ancestor_id == "chain-c"
+    assert by_id["chain-b"].root_ancestor_id == "chain-c"
+    assert by_id["chain-c"].root_ancestor_id == "chain-c"
+
+
+async def test_concurrent_ancestor_resolution_dedupes(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """A second update while the ancestor task is still running does not spawn a duplicate."""
+    import asyncio
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    remix = _make_lineage_clip(
+        "remix-dedup-id",
+        edited_clip_id="missing-parent",
+        is_remix=True,
+    )
+    mock_suno_client.get_all_songs = AsyncMock(return_value=[*coordinator.data.clips, remix])
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.get_playlists = AsyncMock(return_value=[])
+
+    async def _slow_parent(_clip_id: str):
+        await asyncio.sleep(30)
+        return None
+
+    mock_suno_client.get_clip_parent = AsyncMock(side_effect=_slow_parent)
+    coordinator._last_remix_hash = None
+
+    await coordinator._async_update_data()
+    first_task = coordinator._ancestor_task
+    assert first_task is not None and not first_task.done()
+
+    # Second refresh while first is still running should not replace the task.
+    await coordinator._async_update_data()
+    assert coordinator._ancestor_task is first_task
+
+    first_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await first_task

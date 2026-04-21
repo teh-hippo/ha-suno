@@ -58,6 +58,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self._store: Store[dict[str, Any]] = Store(hass, _STORE_VERSION, f"suno_library_{entry.entry_id}")
         self._data_version: int = 0
         self._last_remix_hash: str | None = None
+        self._ancestor_task: asyncio.Task[None] | None = None
         self.user = SunoUser(
             id=client.user_id or "",
             display_name=client.display_name,
@@ -104,8 +105,16 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
 
     async def _resolve_root_ancestors(self, data: SunoData) -> None:
-        """Resolve root ancestor IDs for clips via lineage chains."""
-        # Build unified clip index
+        """Resolve root ancestor IDs for clips via lineage chains.
+
+        Kept for backward compat with tests that exercise the full pipeline.
+        Production callers go through the split fast/slow paths instead.
+        """
+        self._resolve_root_ancestors_in_memory(data)
+        await self._resolve_root_ancestors_api(data)
+
+    def _build_clip_index(self, data: SunoData) -> dict[str, SunoClip]:
+        """Build a unified clip_id → clip map across all data buckets."""
         all_clips: dict[str, SunoClip] = {}
         for clip in data.clips:
             all_clips[clip.id] = clip
@@ -114,14 +123,16 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         for clips in data.playlist_clips.values():
             for clip in clips:
                 all_clips[clip.id] = clip
+        return all_clips
 
-        # Phase 1: In-memory chain resolution
-        resolved: dict[str, str] = {}  # clip_id -> root_ancestor_id
+    def _resolve_root_ancestors_in_memory(self, data: SunoData) -> None:
+        """Fast pass: resolve every chain we can answer without API calls."""
+        all_clips = self._build_clip_index(data)
+        resolved: dict[str, str] = {}
         for clip in all_clips.values():
             if clip.root_ancestor_id:
                 resolved[clip.id] = clip.root_ancestor_id
                 continue
-            # Trace chain
             visited: set[str] = set()
             chain: list[str] = []
             current = clip.id
@@ -130,25 +141,39 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 chain.append(current)
                 parent_id = all_clips[current].edited_clip_id
                 if not parent_id:
-                    # Found root
                     for cid in chain:
                         resolved[cid] = current
                     break
                 if parent_id in resolved:
-                    # Connect to already-resolved chain
                     root = resolved[parent_id]
                     for cid in chain:
                         resolved[cid] = root
                     break
                 current = parent_id
-            # If chain broke (current not in index), leave unresolved
-
-        # Apply Phase 1 results
         for clip in all_clips.values():
             if clip.id in resolved:
                 clip.root_ancestor_id = resolved[clip.id]
 
-        # Phase 2: API resolution for orphan remixes
+    def _schedule_ancestor_api_resolution(self, data: SunoData) -> None:
+        """Kick off the slow per-clip parent API lookups in the background.
+
+        Returns immediately. If a previous resolution task is still running we
+        leave it alone — when it finishes the next coordinator tick will see
+        the up-to-date ancestors.
+        """
+        if self._ancestor_task is not None and not self._ancestor_task.done():
+            return
+        self._ancestor_task = self.hass.async_create_background_task(
+            self._resolve_root_ancestors_api(data),
+            f"suno_ancestor_resolution_{self.config_entry.entry_id}",
+        )
+
+    async def _resolve_root_ancestors_api(self, data: SunoData) -> None:
+        """Slow pass: per-clip parent lookups for orphan remixes (with sleeps)."""
+        all_clips = self._build_clip_index(data)
+        resolved: dict[str, str] = {
+            cid: clip.root_ancestor_id for cid, clip in all_clips.items() if clip.root_ancestor_id
+        }
         unresolved = [c for c in all_clips.values() if not c.root_ancestor_id and c.is_remix]
         if not unresolved:
             return
@@ -170,7 +195,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             if api_calls > 0:
                 await asyncio.sleep(_PARENT_LOOKUP_DELAY)
 
-            # Trace via API
             current_id = clip.id
             chain = [current_id]
             visited = {current_id}
@@ -190,7 +214,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                     parent_cache[current_id] = parent_id
 
                 if not parent_id or parent_id in visited:
-                    # Root found or circular
                     for cid in chain:
                         resolved[cid] = current_id
                     break
@@ -198,7 +221,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 visited.add(parent_id)
                 chain.append(parent_id)
 
-                # Check if parent is in our index
                 if parent_id in all_clips:
                     parent_clip = all_clips[parent_id]
                     if parent_clip.root_ancestor_id:
@@ -214,7 +236,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
                 else:
                     current_id = parent_id
 
-            # Apply results for this clip
             if clip.id in resolved:
                 clip.root_ancestor_id = resolved[clip.id]
 
@@ -287,7 +308,13 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         data = SunoData(
             clips=clips, liked_clips=liked_clips, playlists=playlists, playlist_clips=playlist_clips, credits=credits
         )
-        await self._resolve_root_ancestors(data)
+
+        # Resolve cheap in-memory lineage chains synchronously so the data we
+        # return reflects what we already know. The slow path (per-clip parent
+        # API calls with 2s sleeps between them) runs as a background task so
+        # individual sensor refreshes don't trip HA's 10s watchdog warning.
+        self._resolve_root_ancestors_in_memory(data)
+        self._schedule_ancestor_api_resolution(data)
 
         # Update user identity from Suno API data.
         # suno_display_name (from feed clips) is the authoritative source.
