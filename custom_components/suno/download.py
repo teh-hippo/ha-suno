@@ -548,13 +548,6 @@ class SunoDownloadManager:
         initial: bool = False,
     ) -> None:
         base = Path(download_path)
-        # Clean up legacy .trash directory if it exists
-        trash_dir = base / ".trash"
-        if await self.hass.async_add_executor_job(trash_dir.is_dir):
-            import shutil  # noqa: PLC0415
-
-            await self.hass.async_add_executor_job(shutil.rmtree, str(trash_dir), True)
-            _LOGGER.info("Removed legacy .trash directory")
         self._state.pop("trash", None)
         desired, preserved_ids, source_to_name, playlist_order = await self._build_desired(
             options, client, coordinator_data

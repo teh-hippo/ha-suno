@@ -109,11 +109,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
 
     async def _resolve_root_ancestors(self, data: SunoData) -> None:
-        """Resolve root ancestor IDs for clips via lineage chains.
-
-        Kept for backward compat with tests that exercise the full pipeline.
-        Production callers go through the split fast/slow paths instead.
-        """
+        """Run the in-memory + API ancestor passes back to back. Test entry-point."""
         self._resolve_root_ancestors_in_memory(data)
         await self._resolve_root_ancestors_api(data)
 

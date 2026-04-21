@@ -91,25 +91,6 @@ async def test_remove_entry_cleans_cache_dir(hass: HomeAssistant, tmp_path: Path
     assert not cache_dir.exists()
 
 
-async def test_remove_entry_cleans_old_cache_dir(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Removes the legacy suno_cache directory when it exists."""
-    old_cache_dir = tmp_path / "suno_cache"
-    old_cache_dir.mkdir()
-    (old_cache_dir / "clip.mp3").write_bytes(b"data")
-
-    storage_dir = tmp_path / ".storage"
-    storage_dir.mkdir()
-
-    with (
-        patch.object(hass.config, "cache_path", return_value=str(tmp_path / ".cache" / "suno")),
-        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
-    ):
-        entry = make_entry()
-        await async_remove_entry(hass, entry)
-
-    assert not old_cache_dir.exists()
-
-
 async def test_remove_entry_cleans_storage_files(hass: HomeAssistant, tmp_path: Path) -> None:
     """Removes per-entry and shared storage files when last entry is removed."""
     entry = make_entry()

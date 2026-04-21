@@ -164,11 +164,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> Non
             await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
             _LOGGER.debug("Removed cache directory: %s", cache_dir)
 
-        old_cache_dir = Path(hass.config.path("suno_cache"))
-        if old_cache_dir.is_dir():
-            await hass.async_add_executor_job(shutil.rmtree, old_cache_dir, True)
-            _LOGGER.debug("Removed legacy cache directory: %s", old_cache_dir)
-
         # Clean shared storage (cache index)
         if storage_dir.is_dir():
             for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_cache*"))):

@@ -364,24 +364,6 @@ async def test_async_init_corrupt_stored_data(hass: HomeAssistant, tmp_path: Pat
     assert not (cache_dir / "stale.mp3").exists()
 
 
-async def test_async_init_old_schema_numeric_values(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Old-schema data with numeric values triggers wipe."""
-    cache_dir = tmp_path / "suno_cache"
-    cache_dir.mkdir()
-    (cache_dir / "old.mp3").write_bytes(_mp3_bytes())
-
-    old_index = {"old.mp3": 1234567890.0, "other.mp3": 9876543210.0}
-
-    with patch.object(hass.config, "cache_path", return_value=str(cache_dir)):
-        cache = SunoCache(hass, max_size_mb=10)
-
-    with patch.object(cache._store, "async_load", return_value=old_index):
-        await cache.async_init()
-
-    assert cache._index == {}
-    assert not (cache_dir / "old.mp3").exists()
-
-
 async def test_eviction_skips_size_decrement_when_unlink_fails(hass: HomeAssistant, tmp_path: Path) -> None:
     """If unlink raises OSError, eviction must NOT subtract the missing size."""
     cache_dir = tmp_path / "suno_cache"
