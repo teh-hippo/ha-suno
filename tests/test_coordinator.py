@@ -724,9 +724,7 @@ async def test_remix_set_change_invalidates_hash(hass: HomeAssistant, mock_suno_
 # ── Async-split: coordinator update returns fast, ancestor API runs in background ─
 
 
-async def test_update_does_not_await_ancestor_api(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_update_does_not_await_ancestor_api(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """The 2s parent-API sleeps must not block coordinator updates."""
     import asyncio
     import time
@@ -774,9 +772,7 @@ async def test_update_does_not_await_ancestor_api(
         await coordinator._ancestor_task
 
 
-async def test_in_memory_resolution_runs_in_update(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_in_memory_resolution_runs_in_update(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Cheap in-memory chain resolution still happens during the fast update path."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
@@ -798,9 +794,7 @@ async def test_in_memory_resolution_runs_in_update(
     assert by_id["chain-c"].root_ancestor_id == "chain-c"
 
 
-async def test_concurrent_ancestor_resolution_dedupes(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_concurrent_ancestor_resolution_dedupes(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """A second update while the ancestor task is still running does not spawn a duplicate."""
     import asyncio
 
