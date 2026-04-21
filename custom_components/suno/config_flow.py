@@ -137,7 +137,7 @@ def _library_schema(opts: dict[str, Any]) -> vol.Schema:
 class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Suno."""
 
-    VERSION = 3
+    VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: cookie input."""

@@ -66,7 +66,7 @@ def make_entry(
         domain=DOMAIN,
         title="Suno",
         unique_id=unique_id,
-        version=3,
+        version=1,
         data=data or {CONF_COOKIE: MOCK_COOKIE},
         options=options
         or {

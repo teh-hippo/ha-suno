@@ -103,15 +103,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
 
     entry.runtime_data = coordinator
 
-    # Clean up removed sensors from the entity registry
-    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
-
-    registry = er.async_get(hass)
-    for old_key in ("total_songs",):
-        old_uid = f"{entry.unique_id}_{old_key}"
-        if eid := registry.async_get_entity_id("sensor", DOMAIN, old_uid):
-            registry.async_remove(eid)
-
     # Always create cache
     from .cache import SunoCache  # noqa: PLC0415
 
