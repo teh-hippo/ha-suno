@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v5.0.3 (2026-04-21)
+
+### Bug Fixes
+
+- Return cached data fast from coordinator update
+  ([`a9b0c9c`](https://github.com/teh-hippo/ha-suno/commit/a9b0c9ca125b059ac0d309ecd061d3d47cc1912d))
+
+
 ## v5.0.2 (2026-04-21)
 
 ### Bug Fixes
