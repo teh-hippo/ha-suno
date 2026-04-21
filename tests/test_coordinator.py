@@ -68,7 +68,7 @@ async def test_coordinator_auth_failure_raises_config_entry_auth_failed(
     mock_suno_client.get_all_songs.side_effect = SunoAuthError("Token expired")
 
     with pytest.raises(ConfigEntryAuthFailed):
-        await coordinator._async_update_data()
+        await coordinator._async_fetch_remote_data()
 
 
 async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -81,7 +81,7 @@ async def test_coordinator_generic_error_raises_update_failed(hass: HomeAssistan
     mock_suno_client.get_all_songs.side_effect = SunoApiError("Server error")
 
     with pytest.raises(UpdateFailed):
-        await coordinator._async_update_data()
+        await coordinator._async_fetch_remote_data()
 
 
 async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -187,7 +187,7 @@ async def test_display_name_change_logged(
 
     mock_suno_client.suno_display_name = "NewName"
     with caplog.at_level(logging.INFO, logger="custom_components.suno.coordinator"):
-        await coordinator._async_update_data()
+        await coordinator._async_fetch_remote_data()
 
     assert "Display name changed: 'OldName' -> 'NewName'" in caplog.text
 
@@ -206,7 +206,7 @@ async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_cli
     with patch.object(
         hass.config_entries, "async_update_entry", wraps=hass.config_entries.async_update_entry
     ) as mock_update:
-        await coordinator._async_update_data()
+        await coordinator._async_fetch_remote_data()
         # display_name == user.display_name so the update branch is skipped entirely
         for call in mock_update.call_args_list:
             if "title" in call.kwargs:
@@ -644,7 +644,11 @@ async def test_data_version_increments_on_success(hass: HomeAssistant, mock_suno
     coordinator: SunoCoordinator = entry.runtime_data
     initial = coordinator.data_version
     assert initial >= 1
+    # data_version is incremented by _async_fetch_remote_data, which now runs
+    # in the background. async_refresh schedules it; await the task directly.
     await coordinator.async_refresh()
+    assert coordinator._refresh_task is not None
+    await coordinator._refresh_task
     assert coordinator.data_version == initial + 1
 
 
@@ -675,7 +679,11 @@ async def test_store_save_failure_logged_not_raised(
     with patch.object(coordinator._store, "async_save", side_effect=OSError("disk full")):
         caplog.set_level(logging.WARNING, logger="custom_components.suno.coordinator")
         await coordinator.async_refresh()
-        # Drain background tasks so the wrapped save coroutine actually runs.
+        # The fast path schedules a background fetch which then schedules the
+        # store save. Await the background fetch first, then drain to flush
+        # the inner async_create_task('suno_store_save_*').
+        assert coordinator._refresh_task is not None
+        await coordinator._refresh_task
         await hass.async_block_till_done()
 
     assert coordinator.last_update_success is True
@@ -725,7 +733,7 @@ async def test_remix_set_change_invalidates_hash(hass: HomeAssistant, mock_suno_
 
 
 async def test_update_does_not_await_ancestor_api(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """The 2s parent-API sleeps must not block coordinator updates."""
+    """The 2s parent-API sleeps must not block the slow fetch path either."""
     import asyncio
     import time
 
@@ -759,10 +767,10 @@ async def test_update_does_not_await_ancestor_api(hass: HomeAssistant, mock_suno
     coordinator._last_remix_hash = None
 
     start = time.monotonic()
-    await coordinator._async_update_data()
+    await coordinator._async_fetch_remote_data()
     elapsed = time.monotonic() - start
 
-    assert elapsed < 2.0, f"_async_update_data took {elapsed:.2f}s, must return fast"
+    assert elapsed < 2.0, f"_async_fetch_remote_data took {elapsed:.2f}s, must return fast"
     assert coordinator._ancestor_task is not None
     assert not coordinator._ancestor_task.done()
 
@@ -773,7 +781,7 @@ async def test_update_does_not_await_ancestor_api(hass: HomeAssistant, mock_suno
 
 
 async def test_in_memory_resolution_runs_in_update(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Cheap in-memory chain resolution still happens during the fast update path."""
+    """Cheap in-memory chain resolution still happens during the slow fetch path."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
@@ -787,7 +795,7 @@ async def test_in_memory_resolution_runs_in_update(hass: HomeAssistant, mock_sun
     mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
     mock_suno_client.get_playlists = AsyncMock(return_value=[])
 
-    data = await coordinator._async_update_data()
+    data = await coordinator._async_fetch_remote_data()
     by_id = {c.id: c for c in data.clips}
     assert by_id["chain-a"].root_ancestor_id == "chain-c"
     assert by_id["chain-b"].root_ancestor_id == "chain-c"
@@ -795,7 +803,7 @@ async def test_in_memory_resolution_runs_in_update(hass: HomeAssistant, mock_sun
 
 
 async def test_concurrent_ancestor_resolution_dedupes(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """A second update while the ancestor task is still running does not spawn a duplicate."""
+    """A second fetch while the ancestor task is still running does not spawn a duplicate."""
     import asyncio
 
     entry = make_entry()
@@ -819,14 +827,281 @@ async def test_concurrent_ancestor_resolution_dedupes(hass: HomeAssistant, mock_
     mock_suno_client.get_clip_parent = AsyncMock(side_effect=_slow_parent)
     coordinator._last_remix_hash = None
 
-    await coordinator._async_update_data()
+    await coordinator._async_fetch_remote_data()
     first_task = coordinator._ancestor_task
     assert first_task is not None and not first_task.done()
 
-    # Second refresh while first is still running should not replace the task.
-    await coordinator._async_update_data()
+    # Second fetch while first is still running should not replace the task.
+    await coordinator._async_fetch_remote_data()
     assert coordinator._ancestor_task is first_task
 
     first_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await first_task
+
+
+# ── Release 4: Fast-return coordinator (kill 10s watchdog warning) ──────
+
+
+async def test_update_returns_cached_data_fast_when_warm(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """When data is already cached, _async_update_data must return in <1s
+    even if the API takes 30s. This is the headline R4 fix."""
+    import asyncio
+    import time
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    assert coordinator.data is not None  # warm
+
+    cached = coordinator.data
+
+    # Make every API call hang for 30s.
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(30)
+        return []
+
+    mock_suno_client.get_all_songs = AsyncMock(side_effect=_hang)
+    mock_suno_client.get_liked_songs = AsyncMock(side_effect=_hang)
+    mock_suno_client.get_playlists = AsyncMock(side_effect=_hang)
+    mock_suno_client.get_credits = AsyncMock(side_effect=_hang)
+
+    start = time.monotonic()
+    result = await coordinator._async_update_data()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0, f"_async_update_data took {elapsed:.2f}s, must return cached data fast"
+    assert result is cached, "Hot path must return the cached SunoData instance"
+    # Background refresh task should be running.
+    assert coordinator._refresh_task is not None
+    assert not coordinator._refresh_task.done()
+
+    # Cleanup the hung background task.
+    coordinator._refresh_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await coordinator._refresh_task
+
+
+async def test_cold_start_blocks_for_real_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Cold start (no cached data) must still block on the API so sensors
+    come up populated rather than 'unknown'."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    # Simulate a cold start by clearing data and resetting tracking state.
+    coordinator.data = None  # type: ignore[assignment]
+    coordinator._data_version = 0
+
+    result = await coordinator._async_update_data()
+
+    assert result is not None
+    assert len(result.clips) >= 1, "Cold start must return real data, not empty"
+    # No background task should have been scheduled — the synchronous path
+    # already produced the data.
+    assert coordinator._refresh_task is None
+
+
+async def test_concurrent_refresh_dedupes(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Two _async_update_data calls in quick succession schedule only one
+    background refresh task."""
+    import asyncio
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.sleep(30)
+        return []
+
+    mock_suno_client.get_all_songs = AsyncMock(side_effect=_hang)
+
+    await coordinator._async_update_data()
+    first_task = coordinator._refresh_task
+    assert first_task is not None and not first_task.done()
+
+    await coordinator._async_update_data()
+    assert coordinator._refresh_task is first_task, "Second call must reuse running task"
+
+    first_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await first_task
+
+
+async def test_background_refresh_publishes_fresh_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """After background refresh completes, async_set_updated_data is called
+    with the new data so sensors observe the update."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    initial_version = coordinator.data_version
+
+    # Tweak the API response so we can detect the refresh landed.
+    new_clip = _make_lineage_clip("freshly-fetched-clip", title="Fresh")
+    mock_suno_client.get_all_songs = AsyncMock(return_value=[new_clip])
+    mock_suno_client.get_liked_songs = AsyncMock(return_value=[])
+    mock_suno_client.get_playlists = AsyncMock(return_value=[])
+
+    await coordinator._async_update_data()
+    # Background refresh isn't drained by async_block_till_done; await it.
+    assert coordinator._refresh_task is not None
+    await coordinator._refresh_task
+
+    assert coordinator.data_version == initial_version + 1
+    assert any(c.id == "freshly-fetched-clip" for c in coordinator.data.clips)
+
+
+async def test_background_refresh_auth_failure_propagates(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """If the background refresh gets SunoAuthError, the coordinator surfaces
+    the failure via async_set_update_error so HA triggers reauth."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    mock_suno_client.get_all_songs = AsyncMock(side_effect=SunoAuthError("Token expired"))
+
+    await coordinator._async_update_data()
+    assert coordinator._refresh_task is not None
+    await coordinator._refresh_task
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, ConfigEntryAuthFailed)
+
+
+async def test_background_refresh_generic_error_propagates(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """If the background refresh gets a generic API error, last_update_success
+    becomes False and last_exception is UpdateFailed."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    mock_suno_client.get_all_songs = AsyncMock(side_effect=SunoApiError("500 server"))
+
+    await coordinator._async_update_data()
+    assert coordinator._refresh_task is not None
+    await coordinator._refresh_task
+
+    assert coordinator.last_update_success is False
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+
+
+async def test_background_refresh_unexpected_exception_caught(
+    hass: HomeAssistant, mock_suno_client: AsyncMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A truly unexpected exception in the background task is logged and
+    surfaced via async_set_update_error rather than escaping as an
+    'unhandled task exception'."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    # Patch a downstream pure-Python helper to blow up. This is a path the
+    # API gather's return_exceptions=True can't intercept, so it bubbles
+    # directly out of _async_fetch_remote_data and exercises the broad
+    # `except Exception` safety net.
+    with patch.object(coordinator, "_resolve_root_ancestors_in_memory", side_effect=RuntimeError("bug")):
+        with caplog.at_level(logging.ERROR, logger="custom_components.suno.coordinator"):
+            await coordinator._async_update_data()
+            assert coordinator._refresh_task is not None
+            await coordinator._refresh_task
+
+    assert coordinator.last_update_success is False
+    assert any("Unexpected error in background refresh" in rec.message for rec in caplog.records)
+
+
+async def test_finished_refresh_task_allows_new_refresh(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """After a refresh task completes, a subsequent _async_update_data call
+    schedules a fresh task rather than reusing the dead one."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    await coordinator._async_update_data()
+    first_task = coordinator._refresh_task
+    assert first_task is not None
+    await first_task
+    assert first_task.done()
+
+    await coordinator._async_update_data()
+    second_task = coordinator._refresh_task
+    assert second_task is not None
+    assert second_task is not first_task, "Completed task should not be reused"
+    await second_task
+
+
+async def test_cold_start_auth_failure_raises_config_entry_auth(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Auth failure on cold start (no cached data) raises ConfigEntryAuthFailed
+    directly so HA triggers reauth on first setup."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator.data = None  # type: ignore[assignment]
+    coordinator._data_version = 0
+
+    mock_suno_client.get_all_songs = AsyncMock(side_effect=SunoAuthError("Token expired"))
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_update_connection_error_raises_update_failed(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """ensure_authenticated raising SunoConnectionError surfaces as UpdateFailed."""
+    from custom_components.suno.exceptions import SunoConnectionError
+
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    mock_suno_client.ensure_authenticated = AsyncMock(side_effect=SunoConnectionError("dns"))
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+async def test_update_auth_error_at_pre_check_raises_config_entry_auth(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """ensure_authenticated raising SunoAuthError surfaces as ConfigEntryAuthFailed."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+
+    mock_suno_client.ensure_authenticated = AsyncMock(side_effect=SunoAuthError("token"))
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_stored_data_load_bumps_version(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """async_load_stored_data marks the coordinator as initialised so the next
+    refresh takes the fast path instead of blocking."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator._data_version = 0  # simulate fresh start
+
+    stored = {
+        "clips": [asdict(c) for c in sample_clips()],
+        "liked_clips": [],
+        "playlists": [],
+        "playlist_clips": {},
+    }
+    with patch.object(coordinator._store, "async_load", return_value=stored):
+        await coordinator.async_load_stored_data()
+
+    assert coordinator._data_version == 1, "Stored library load must mark coordinator initialised"
