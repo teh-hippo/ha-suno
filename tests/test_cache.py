@@ -382,9 +382,7 @@ async def test_async_init_old_schema_numeric_values(hass: HomeAssistant, tmp_pat
     assert not (cache_dir / "old.mp3").exists()
 
 
-async def test_eviction_skips_size_decrement_when_unlink_fails(
-    hass: HomeAssistant, tmp_path: Path
-) -> None:
+async def test_eviction_skips_size_decrement_when_unlink_fails(hass: HomeAssistant, tmp_path: Path) -> None:
     """If unlink raises OSError, eviction must NOT subtract the missing size."""
     cache_dir = tmp_path / "suno_cache"
     cache_dir.mkdir()

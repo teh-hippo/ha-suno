@@ -635,9 +635,7 @@ async def test_data_version_starts_at_zero(hass: HomeAssistant, mock_suno_client
     assert coordinator.data_version == 0
 
 
-async def test_data_version_increments_on_success(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_data_version_increments_on_success(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Each successful coordinator refresh bumps data_version by one."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
@@ -649,9 +647,7 @@ async def test_data_version_increments_on_success(
     assert coordinator.data_version == initial + 1
 
 
-async def test_data_version_unchanged_on_failure(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_data_version_unchanged_on_failure(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """A failed update does not advance the version counter."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
@@ -688,9 +684,7 @@ async def test_store_save_failure_logged_not_raised(
 # ── Remix hash skip (Release 2: 2.8) ────────────────────────────────────
 
 
-async def test_remix_set_change_invalidates_hash(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_remix_set_change_invalidates_hash(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Remix hash is recomputed when the unresolved remix set changes."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
