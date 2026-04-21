@@ -3356,8 +3356,6 @@ async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> No
 
 async def test_reconcile_manifest_marks_missing_files(hass: HomeAssistant, tmp_path: Path) -> None:
     """Manifest entries whose files are gone get path/meta_hash cleared."""
-    from custom_components.suno.download import RetagResult  # noqa: F401
-
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
         await sync.async_init()
