@@ -21,7 +21,6 @@ from .conftest import (
     patch_suno_setup,
     sample_clips,
     sample_credits,
-    sample_liked_clips,
     sample_playlists,
     setup_entry,
 )
@@ -354,7 +353,7 @@ async def test_valid_stored_data_restores_coordinator(hass: HomeAssistant, mock_
     coordinator: SunoCoordinator = entry.runtime_data
     stored = {
         "clips": [asdict(c) for c in sample_clips()],
-        "liked_clips": [asdict(c) for c in sample_liked_clips()],
+        "liked_clips": [asdict(c) for c in sample_clips(1)],
         "playlists": [asdict(p) for p in sample_playlists()],
         "playlist_clips": {},
     }

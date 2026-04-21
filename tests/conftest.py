@@ -91,7 +91,7 @@ def make_entry(
     )
 
 
-def _make_mock_auth() -> AsyncMock:
+def make_mock_auth() -> AsyncMock:
     """Return a mocked ClerkAuth."""
     auth = AsyncMock()
     auth.user_id = MOCK_USER_ID
@@ -101,6 +101,10 @@ def _make_mock_auth() -> AsyncMock:
     return auth
 
 
+# Backward-compat alias for existing imports.
+_make_mock_auth = make_mock_auth
+
+
 @pytest.fixture
 def mock_suno_client() -> AsyncMock:
     """Return a mocked SunoClient."""
@@ -108,11 +112,11 @@ def mock_suno_client() -> AsyncMock:
     client.user_id = MOCK_USER_ID
     client.display_name = "Suno"
     client.suno_display_name = None
-    client._auth = _make_mock_auth()
+    client._auth = make_mock_auth()
     client.authenticate = AsyncMock(return_value=MOCK_USER_ID)
     client.get_feed = AsyncMock(return_value=(sample_clips(), False))
     client.get_all_songs = AsyncMock(return_value=sample_clips())
-    client.get_liked_songs = AsyncMock(return_value=sample_liked_clips())
+    client.get_liked_songs = AsyncMock(return_value=sample_clips(1))
     client.get_playlists = AsyncMock(return_value=sample_playlists())
     client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
     client.get_credits = AsyncMock(return_value=sample_credits())
@@ -177,26 +181,6 @@ def sample_clips(count: int = 2) -> list[SunoClip]:
         ),
     ]
     return clips[:count]
-
-
-def sample_liked_clips() -> list[SunoClip]:
-    """Return sample liked clips for testing."""
-    return [
-        SunoClip(
-            id="clip-aaa-111",
-            title="Test Song Alpha",
-            audio_url="https://cdn1.suno.ai/clip-aaa-111.mp3",
-            image_url="https://cdn1.suno.ai/image_clip-aaa-111.jpeg",
-            image_large_url="https://cdn1.suno.ai/image_large_clip-aaa-111.jpeg",
-            is_liked=True,
-            status="complete",
-            created_at="2026-03-19T10:00:00Z",
-            tags="pop, upbeat",
-            duration=120.5,
-            clip_type="gen",
-            has_vocal=True,
-        ),
-    ]
 
 
 def sample_playlists() -> list[SunoPlaylist]:
