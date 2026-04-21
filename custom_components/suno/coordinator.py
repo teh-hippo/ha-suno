@@ -59,6 +59,7 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         self._data_version: int = 0
         self._last_remix_hash: str | None = None
         self._ancestor_task: asyncio.Task[None] | None = None
+        self._refresh_task: asyncio.Task[None] | None = None
         self.user = SunoUser(
             id=client.user_id or "",
             display_name=client.display_name,
@@ -90,6 +91,9 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             _LOGGER.warning("Stored library corrupt, ignoring")
             return None
         self.data = data
+        # Mark that we have *some* data so _async_update_data takes the
+        # fast path on the first refresh instead of blocking on the API.
+        self._data_version += 1
         _LOGGER.info("Loaded stored library: %d clips", len(data.clips))
         return data
 
@@ -249,6 +253,26 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             )
 
     async def _async_update_data(self) -> SunoData:
+        """Return cached data immediately and refresh in the background.
+
+        The Suno API can take 10–30s to respond on slow networks (4 endpoints
+        plus per-playlist fetches). Doing that synchronously inside the
+        coordinator update contract trips HA's 10s "update is taking over 10
+        seconds" watchdog warning every time a sensor refreshes.
+
+        Strategy: serve the previous tick's data (or empty SunoData on
+        first run) and kick off the slow API gather + ancestor resolution as
+        a background task. When that task finishes it calls
+        ``async_set_updated_data`` so listeners (sensors, the download
+        manager) pick up the fresh data.
+
+        First-run behaviour: if there's no cached data yet, we still need
+        to block — otherwise sensors would come up "unknown". We detect
+        this via ``self.data is None`` and fall back to the synchronous
+        path for that one call. Stored library (loaded by
+        ``async_load_stored_data``) counts as data, so a normal restart
+        never blocks.
+        """
         try:
             await self.client.ensure_authenticated()
         except SunoConnectionError as err:
@@ -256,6 +280,56 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         except SunoAuthError as err:
             raise ConfigEntryAuthFailed(translation_domain=DOMAIN, translation_key="auth_failed") from err
 
+        if self._data_version == 0:
+            # Cold start: no successful refresh yet (stored data, if any,
+            # is loaded via async_load_stored_data which also bumps the
+            # version path is _async_fetch_remote_data only). Block so the
+            # first tick produces real data before sensors are added.
+            return await self._async_fetch_remote_data()
+
+        # Hot path: schedule a background refresh and return current data.
+        self._schedule_remote_refresh()
+        return self.data
+
+    def _schedule_remote_refresh(self) -> None:
+        """Kick off the slow API gather + reconciliation in the background.
+
+        Idempotent: if a refresh is already in flight we leave it alone.
+        Returns immediately so ``_async_update_data`` can complete in <1s.
+        """
+        if self._refresh_task is not None and not self._refresh_task.done():
+            return
+        self._refresh_task = self.hass.async_create_background_task(
+            self._async_background_refresh(),
+            f"suno_refresh_{self.config_entry.entry_id}",
+        )
+
+    async def _async_background_refresh(self) -> None:
+        """Fetch fresh data from Suno API and publish via async_set_updated_data."""
+        try:
+            data = await self._async_fetch_remote_data()
+        except ConfigEntryAuthFailed as err:
+            # Surface auth failures via the standard coordinator path so
+            # HA puts the entry into reauth.
+            self.async_set_update_error(err)
+            return
+        except UpdateFailed as err:
+            self.async_set_update_error(err)
+            return
+        except Exception as err:  # noqa: BLE001 - last-resort catch for background task
+            _LOGGER.exception("Unexpected error in background refresh")
+            self.async_set_update_error(UpdateFailed(str(err)))
+            return
+        self.async_set_updated_data(data)
+
+    async def _async_fetch_remote_data(self) -> SunoData:
+        """Synchronously fetch all Suno data and return a populated SunoData.
+
+        This is the slow path: 4 parallel API calls plus per-playlist clip
+        fetches plus in-memory ancestor resolution. Used directly on cold
+        start (when there's no cached data yet); otherwise scheduled via
+        ``_schedule_remote_refresh``.
+        """
         results = await asyncio.gather(
             self.client.get_all_songs(),
             self.client.get_liked_songs(),
