@@ -987,9 +987,7 @@ async def test_quality_downgrade_on_source_removal(hass: HomeAssistant, tmp_path
     assert entry["sources"] == ["my_songs"]
 
     # Exactly one audio file on disk for this clip (no duplicate FLAC + MP3).
-    audio_files = [
-        p for p in (sync_dir).rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3")
-    ]
+    audio_files = [p for p in (sync_dir).rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3")]
     assert len(audio_files) == 1, f"expected one audio file, got: {audio_files}"
 
 
