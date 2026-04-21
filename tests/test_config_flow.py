@@ -40,21 +40,18 @@ from custom_components.suno.const import (
 )
 from custom_components.suno.exceptions import SunoAuthError, SunoConnectionError
 
-from .conftest import MOCK_COOKIE, MOCK_USER_ID, make_entry, patch_suno_setup, setup_entry
+from .conftest import MOCK_COOKIE, MOCK_USER_ID, make_entry, make_mock_auth, patch_suno_setup, setup_entry
 
 
 def _patch_client(mock_client: AsyncMock):
     """Patch ClerkAuth at the config_flow import path."""
-    mock_auth = mock_client._auth
-    return patch("custom_components.suno.config_flow.ClerkAuth", return_value=mock_auth)
+    return patch("custom_components.suno.config_flow.ClerkAuth", return_value=mock_client._auth)
 
 
 def _make_flow_client(**auth_kwargs) -> AsyncMock:
     """Create a mock client for config flow tests with _auth set up."""
-    from .conftest import _make_mock_auth  # noqa: PLC0415
-
     mock = AsyncMock()
-    mock._auth = _make_mock_auth()
+    mock._auth = make_mock_auth()
     for key, value in auth_kwargs.items():
         setattr(mock._auth, key, value)
     return mock
