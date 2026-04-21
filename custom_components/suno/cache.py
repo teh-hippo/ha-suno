@@ -100,13 +100,7 @@ class SunoCache:
             await self._hass.async_add_executor_job(self._wipe_cache_files)
             saved = None
         if saved is not None:
-            if saved and any(isinstance(v, (int, float)) for v in saved.values()):
-                _LOGGER.info("Cache index has old schema, wiping cache")
-                await self._hass.async_add_executor_job(self._wipe_cache_files)
-                self._index = {}
-                await self._store.async_save(self._index)
-            else:
-                self._index = saved
+            self._index = saved
 
     def _wipe_cache_files(self) -> None:
         """Remove all cached audio files."""
