@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v5.0.1 (2026-04-21)
+
+### Bug Fixes
+
+- Catch SunoConnectionError + verify reauth keeps the same account
+  ([`91e5cb3`](https://github.com/teh-hippo/ha-suno/commit/91e5cb3b7ae4eb594c7877973f6526a9e63b5be9))
+
+- Emit valid ID3v2.3 header instead of mislabeled v2.4
+  ([`66a9426`](https://github.com/teh-hippo/ha-suno/commit/66a9426a44773cf4427d8468d19c92ed6aa7bbef))
+
+- Pass user display_name as album_artist for richer media metadata
+  ([`7d34c27`](https://github.com/teh-hippo/ha-suno/commit/7d34c27a66ae6a0298c2288001ef47985466d152))
+
+- Re-download missing files instead of looping warnings
+  ([`2f59bb5`](https://github.com/teh-hippo/ha-suno/commit/2f59bb54427c11edafcddd829b1ce82021020a46))
+
+- Scope album inheritance to remixes only
+  ([`f594a09`](https://github.com/teh-hippo/ha-suno/commit/f594a097ff0992e5e0b0a2b1df9e9a180a67f02d))
+
+- Skip ancestor API resolution when remix set is unchanged
+  ([`986f6a0`](https://github.com/teh-hippo/ha-suno/commit/986f6a0cfece24df0680db5215fc8d4be37fcf0f))
+
+- Tighten cache eviction accounting and drop dead truthy fallback
+  ([`618a29b`](https://github.com/teh-hippo/ha-suno/commit/618a29b5820ce1e9c0063cfdbb26396b00f1479b))
+
+- Track coordinator updates with monotonic data_version counter
+  ([`abee4b8`](https://github.com/teh-hippo/ha-suno/commit/abee4b8b03e47d59f1998c408a91a548dc66c115))
+
+- Write per-track JPG sidecars so Jellyfin shows track-level art
+  ([`16cc3c8`](https://github.com/teh-hippo/ha-suno/commit/16cc3c85d8b2018398493180fcafaf2f5e064e9f))
+
+### Code Style
+
+- Apply ruff format to test files
+  ([`660ad73`](https://github.com/teh-hippo/ha-suno/commit/660ad7353aa6e3eefaf070f1dcb910b8c857d827))
+
+### Testing
+
+- Drop unused RetagResult import in reconciliation test
+  ([`d0d4c71`](https://github.com/teh-hippo/ha-suno/commit/d0d4c714fa037a68f4788e730047459588f524dc))
+
+
 ## v5.0.0 (2026-04-20)
 
 ### Bug Fixes
