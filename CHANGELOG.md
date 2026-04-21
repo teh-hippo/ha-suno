@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v6.0.0 (2026-04-21)
+
+### Refactoring
+
+- Drop legacy total_songs cleanup, reset config flow VERSION to 1 (v6 fresh start)
+  ([`19456c1`](https://github.com/teh-hippo/ha-suno/commit/19456c1c1662611f24eabd9ed819521c63906288))
+
+- Drop migration tombstones (suno_cache dir, old cache schema, .trash dir)
+  ([`64dfca6`](https://github.com/teh-hippo/ha-suno/commit/64dfca6d6f57de19325a1059fe325a096a463df7))
+
+- **tests**: Drop sample_liked_clips, parametrize JWT/normalise tests, lift conftest helper
+  ([`097749b`](https://github.com/teh-hippo/ha-suno/commit/097749bd5de413ffb94037baa1c3ea269c86bdce))
+
+
 ## v5.0.3 (2026-04-21)
 
 ### Bug Fixes
