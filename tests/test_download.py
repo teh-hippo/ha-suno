@@ -3615,7 +3615,7 @@ async def test_update_cover_art_backfills_missing_track_sidecar(
     cover.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
     hash_path = tmp_path / ".cover_hash"
     image_url = "https://x/y.jpg"
-    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
     hash_path.write_text(url_hash)
     track_jpg = track.with_suffix(".jpg")
     assert not track_jpg.exists()
@@ -3626,3 +3626,86 @@ async def test_update_cover_art_backfills_missing_track_sidecar(
     # Hash matched so result is False, but the sidecar was backfilled.
     assert result is False
     assert track_jpg.exists()
+
+
+# ── Album inheritance scoped to remixes (Release 2: 2.12) ───────────────
+
+
+def test_album_for_clip_returns_none_for_non_remix() -> None:
+    """Non-remix derivatives keep their own title as the album."""
+    from custom_components.suno.download import _album_for_clip
+    from custom_components.suno.models import SunoClip
+
+    parent = SunoClip(
+        id="parent",
+        title="Parent Album",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    derived = SunoClip(
+        id="child",
+        title="Derived",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-02T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="parent",
+        root_ancestor_id="parent",
+        is_remix=False,
+    )
+    index = {"parent": parent, "child": derived}
+    assert _album_for_clip(derived, index) is None
+
+
+def test_album_for_clip_inherits_root_for_remix() -> None:
+    """Remix variants inherit the root ancestor's title as album."""
+    from custom_components.suno.download import _album_for_clip
+    from custom_components.suno.models import SunoClip
+
+    parent = SunoClip(
+        id="parent",
+        title="Original Track",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    remix = SunoClip(
+        id="remix",
+        title="Original Track (Disco Mix)",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-02T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="parent",
+        root_ancestor_id="parent",
+        is_remix=True,
+    )
+    index = {"parent": parent, "remix": remix}
+    assert _album_for_clip(remix, index) == "Original Track"

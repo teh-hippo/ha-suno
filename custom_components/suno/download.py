@@ -379,6 +379,23 @@ async def _write_track_sidecar(hass: HomeAssistant, cover_path: Path, sidecar_pa
     await hass.async_add_executor_job(_link_or_copy_sync, cover_path, sidecar_path)
 
 
+def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | None:
+    """Resolve the album title for a clip, preferring its remix lineage root.
+
+    Only inherits the root ancestor's title for actual remixes — non-remix
+    derivatives (e.g. inpaint edits) keep their own title as the album so
+    independent works don't get mis-grouped under an unrelated parent.
+    """
+    if not clip.is_remix:
+        return None
+    root_id = clip.root_ancestor_id
+    if not root_id or root_id == clip.id:
+        return None
+    if (root_clip := clip_index.get(root_id)) is None:
+        return None
+    return root_clip.title
+
+
 class SunoDownloadManager:
     """Manages background file downloads to a local directory."""
 
@@ -974,12 +991,7 @@ class SunoDownloadManager:
         target = base / rel_path
         _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
         clip = item.clip
-        # Resolve album from root ancestor
-        album_title = None
-        if clip.root_ancestor_id and clip.root_ancestor_id != clip.id:
-            root_clip = self._clip_index.get(clip.root_ancestor_id)
-            if root_clip:
-                album_title = root_clip.title
+        album_title = _album_for_clip(clip, self._clip_index)
 
         meta = clip.to_track_metadata(album=album_title)
         try:
@@ -1129,12 +1141,7 @@ class SunoDownloadManager:
             return RetagResult.FAILED
         if stat.st_size == 0:
             return RetagResult.MISSING
-        album_title = None
-        if clip.root_ancestor_id and clip.root_ancestor_id != clip.id:
-            root_clip = self._clip_index.get(clip.root_ancestor_id)
-            if root_clip:
-                album_title = root_clip.title
-        meta = clip.to_track_metadata(album=album_title)
+        meta = clip.to_track_metadata(album=_album_for_clip(clip, self._clip_index))
         try:
             if target.suffix == ".flac":
                 ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
