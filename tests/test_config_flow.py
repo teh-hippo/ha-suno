@@ -703,12 +703,8 @@ async def test_options_flow_archive_mode_valid(hass: HomeAssistant, mock_suno_cl
 
 async def test_user_flow_handles_suno_connection_error(hass: HomeAssistant) -> None:
     """SunoConnectionError during user setup maps to cannot_connect."""
-    result = await hass.config_entries.flow.async_init(
-        "suno", context={"source": config_entries.SOURCE_USER}
-    )
-    mock_client = _make_flow_client(
-        authenticate=AsyncMock(side_effect=SunoConnectionError("network down"))
-    )
+    result = await hass.config_entries.flow.async_init("suno", context={"source": config_entries.SOURCE_USER})
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=SunoConnectionError("network down")))
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -718,17 +714,13 @@ async def test_user_flow_handles_suno_connection_error(hass: HomeAssistant) -> N
     assert result["errors"]["base"] == "cannot_connect"
 
 
-async def test_reauth_flow_handles_suno_connection_error(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_reauth_flow_handles_suno_connection_error(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """SunoConnectionError during reauth maps to cannot_connect."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
     result = await entry.start_reauth_flow(hass)
-    mock_client = _make_flow_client(
-        authenticate=AsyncMock(side_effect=SunoConnectionError("network down"))
-    )
+    mock_client = _make_flow_client(authenticate=AsyncMock(side_effect=SunoConnectionError("network down")))
     with _patch_client(mock_client):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -738,9 +730,7 @@ async def test_reauth_flow_handles_suno_connection_error(
     assert result["errors"]["base"] == "cannot_connect"
 
 
-async def test_reauth_flow_aborts_on_wrong_account(
-    hass: HomeAssistant, mock_suno_client: AsyncMock
-) -> None:
+async def test_reauth_flow_aborts_on_wrong_account(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Reauth with a cookie for a different Suno account aborts cleanly."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):

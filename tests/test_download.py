@@ -3588,9 +3588,7 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
         new_callable=AsyncMock,
         return_value=b"\xff\xd8\xff" + b"\x00" * 100,
     ):
-        result = await _update_cover_art(
-            hass, session, "https://x/y.jpg", cover, hash_path, track_path=track
-        )
+        result = await _update_cover_art(hass, session, "https://x/y.jpg", cover, hash_path, track_path=track)
 
     assert result is True
     assert cover.exists()
@@ -3599,9 +3597,7 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
     assert track_jpg.read_bytes() == cover.read_bytes()
 
 
-async def test_update_cover_art_backfills_missing_track_sidecar(
-    hass: HomeAssistant, tmp_path: Path
-) -> None:
+async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """Hash-match path still backfills track sidecar if it's missing."""
     import hashlib
 
