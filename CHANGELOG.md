@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.0.1 (2026-04-21)
+
+### Build System
+
+- **renovate**: Automerge major updates when CI passes
+  ([`f66c279`](https://github.com/teh-hippo/ha-suno/commit/f66c279331f1f347f34b765b8fd7df5c72b711bd))
+
+### Chores
+
+- Ignore playwright-mcp session and recording dirs
+  ([`2af90b7`](https://github.com/teh-hippo/ha-suno/commit/2af90b75ecfafff544c1a5c16d8abfcdc7777c87))
+
+
 ## v6.0.0 (2026-04-21)
 
 ### Refactoring
