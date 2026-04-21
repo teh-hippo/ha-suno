@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v5.0.2 (2026-04-21)
+
+### Bug Fixes
+
+- Drop music-videos/ subdir; mp4 lives next to its audio file
+  ([`e7091be`](https://github.com/teh-hippo/ha-suno/commit/e7091bec3f70d6710f5413f8b9ee43afff347e68))
+
+- Split coordinator update so slow ancestor lookups run in background
+  ([`2adfde5`](https://github.com/teh-hippo/ha-suno/commit/2adfde5737c4a7857eb540918dc756cf295a643f))
+
+### Code Style
+
+- Apply ruff format to release-3 test files
+  ([`2d3c821`](https://github.com/teh-hippo/ha-suno/commit/2d3c821ca49bf16a2d72ea585e0a330bbd1d58f2))
+
+
 ## v5.0.1 (2026-04-21)
 
 ### Bug Fixes
