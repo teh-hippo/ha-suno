@@ -113,6 +113,43 @@ class TestClipPath:
         assert _clip_path(clip_a, "high") != _clip_path(clip_b, "high")
 
 
+# ── Video sidecar path ─────────────────────────────────────────────
+
+
+class TestVideoClipPath:
+    """Music videos live alongside their audio file (same dir, .mp4 suffix)."""
+
+    def _make_clip(self, clip_id: str = "abcd1234-test-clip-id", title: str = "My Song", display: str = "testuser"):
+        clip = MagicMock()
+        clip.id = clip_id
+        clip.title = title
+        clip.display_name = display
+        return clip
+
+    def test_video_path_alongside_audio_flac(self) -> None:
+        clip = self._make_clip()
+        assert _video_clip_path(clip) == "testuser/My Song/testuser-My Song [abcd1234].mp4"
+
+    def test_video_path_basename_matches_audio_basename(self) -> None:
+        clip = self._make_clip()
+        flac = _clip_path(clip, "high")
+        mp3 = _clip_path(clip, "standard")
+        video = _video_clip_path(clip)
+        # Same parent directory and same basename — only suffix differs.
+        assert Path(video).parent == Path(flac).parent == Path(mp3).parent
+        assert Path(video).stem == Path(flac).stem == Path(mp3).stem
+        assert Path(video).suffix == ".mp4"
+
+    def test_no_music_videos_directory_in_path(self) -> None:
+        """The legacy music-videos/ directory should never appear in the path."""
+        clip = self._make_clip()
+        assert "music-videos" not in _video_clip_path(clip)
+
+    def test_video_path_missing_display_name_falls_back_to_suno(self) -> None:
+        clip = self._make_clip(display="")
+        assert _video_clip_path(clip) == "Suno/My Song/Suno-My Song [abcd1234].mp4"
+
+
 # ── Sync state management ──────────────────────────────────────────
 
 
@@ -864,6 +901,98 @@ async def test_quality_stored_in_state(hass: HomeAssistant, tmp_path: Path) -> N
     assert entry["quality"] == QUALITY_HIGH
 
 
+async def test_quality_downgrade_on_source_removal(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Removing the high-quality source downgrades FLAC → MP3 end-to-end.
+
+    Initial: clip in liked (HIGH) + my_songs (STANDARD) → manifest has FLAC.
+    After:   clip removed from liked → only my_songs (STANDARD) remains.
+    Assert:  old FLAC deleted, new MP3 downloaded, manifest now standard,
+             single source `my_songs`, single audio file on disk.
+    """
+    clip_id = "downgrde-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _make_clip_with_display(clip_id, "Downgrader", display_name="testuser")
+
+    # Pre-existing FLAC on disk at the new path shape
+    flac_rel = _clip_path(clip, QUALITY_HIGH)
+    flac_path = sync_dir / flac_rel
+    flac_path.parent.mkdir(parents=True)
+    flac_path.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    initial_state = {
+        "clips": {
+            clip_id: {
+                "path": flac_rel,
+                "title": "Downgrader",
+                "created": "2026-03-15",
+                "sources": ["liked", "my_songs"],
+                "size": 54,
+                "meta_hash": "deadbeef0000",
+                "quality": QUALITY_HIGH,
+            }
+        },
+        "last_download": None,
+    }
+    with patch.object(sync._store, "async_load", return_value=initial_state):
+        await sync.async_init()
+
+    # After source removal: only my_songs (STANDARD) remains.
+    desired = [DownloadItem(clip=clip, sources=["my_songs"], quality=QUALITY_STANDARD)]
+    client = AsyncMock()
+
+    fake_mp3 = b"ID3" + b"\x00" * 50
+
+    with (
+        patch(
+            "custom_components.suno.download.download_as_mp3",
+            new_callable=AsyncMock,
+            return_value=fake_mp3,
+        ) as mock_mp3,
+        patch(
+            "custom_components.suno.download.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ) as mock_flac,
+        patch("custom_components.suno.download.get_ffmpeg_manager"),
+        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch.object(sync._store, "async_save"),
+        patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
+    ):
+        opts = {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        }
+        await sync.async_download(opts, client)
+
+    # FLAC path must NOT have been downloaded; MP3 path must have been.
+    mock_flac.assert_not_called()
+    mock_mp3.assert_called_once()
+
+    # Old FLAC must be gone; new MP3 must exist next to it.
+    assert not flac_path.exists()
+    mp3_rel = _clip_path(clip, QUALITY_STANDARD)
+    mp3_path = sync_dir / mp3_rel
+    assert mp3_path.exists()
+
+    # Manifest reflects the downgrade.
+    entry = sync._state["clips"][clip_id]
+    assert entry["quality"] == QUALITY_STANDARD
+    assert entry["path"] == mp3_rel
+    assert entry["sources"] == ["my_songs"]
+
+    # Exactly one audio file on disk for this clip (no duplicate FLAC + MP3).
+    audio_files = [
+        p for p in (sync_dir).rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3")
+    ]
+    assert len(audio_files) == 1, f"expected one audio file, got: {audio_files}"
+
+
 class TestBuildSyncSummary:
     def test_no_change(self) -> None:
         assert _build_download_summary(0, 0, 0) == "No change"
@@ -1089,6 +1218,35 @@ async def test_reconcile_cleans_empty_dirs(hass: HomeAssistant, tmp_path: Path) 
     removed = await sync._reconcile_disk(tmp_path, {})
     assert removed == 1
     assert not orphan.parent.exists()
+
+
+async def test_reconcile_keeps_mp4_sidecar_next_to_audio(hass: HomeAssistant, tmp_path: Path) -> None:
+    """mp4 sidecars sharing an audio file's basename are not treated as orphans."""
+    sync = SunoDownloadManager(hass, "test_sync")
+    rel = "artist/Song/artist-Song [abcd1234].flac"
+    audio = tmp_path / rel
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"fLaC" + b"\x00" * 50)
+    video = audio.with_suffix(".mp4")
+    video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    clips_state = {"abcd1234": {"path": rel}}
+    removed = await sync._reconcile_disk(tmp_path, clips_state)
+    assert removed == 0
+    assert audio.exists()
+    assert video.exists()
+
+
+async def test_reconcile_removes_orphan_mp4_in_legacy_music_videos(hass: HomeAssistant, tmp_path: Path) -> None:
+    """An orphan mp4 left behind in the legacy music-videos/ tree is cleaned up."""
+    sync = SunoDownloadManager(hass, "test_sync")
+    legacy_video = tmp_path / "music-videos" / "artist" / "artist-Song [abcd1234].mp4"
+    legacy_video.parent.mkdir(parents=True)
+    legacy_video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    removed = await sync._reconcile_disk(tmp_path, {})
+    assert removed == 1
+    assert not legacy_video.exists()
 
 
 # ── Per-source retention modes ────────────────────────────────────
@@ -1773,7 +1931,7 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
 
 
 async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Video .mp4 sidecar is moved to music-videos/ directory during migration."""
+    """Video .mp4 sidecar follows its audio file when the clip is renamed."""
     clip_id = "abcd1234-0000-0000-0000-000000000000"
     sync_dir = tmp_path / "mirror"
     old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
@@ -1819,10 +1977,15 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
         }
         await sync.async_download(opts, client)
 
-    # Video should be in music-videos/ directory, not alongside audio
+    # Video should be alongside the renamed audio (same basename, .mp4 suffix)
     new_video = sync_dir / _video_clip_path(clip)
     assert new_video.exists()
+    assert new_video.read_bytes() == b"\x00\x00\x00\x1cftypisom"
     assert not old_video.exists()
+    # Sanity check: the mp4 ended up next to the new flac, not under music-videos/
+    assert "music-videos" not in str(new_video.relative_to(sync_dir))
+    new_audio = sync_dir / _clip_path(clip, "high")
+    assert new_video.parent == new_audio.parent
 
 
 async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: Path) -> None:

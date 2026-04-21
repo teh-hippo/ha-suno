@@ -68,7 +68,6 @@ STORE_VERSION = 1
 _SERVICE_DOWNLOAD = "download_library"
 _MANIFEST_FILENAME = ".suno_download.json"
 _MAX_FILENAME_LEN = 200
-_MUSIC_VIDEOS_DIR = "music-videos"
 
 
 class RetagResult(Enum):
@@ -203,25 +202,15 @@ def _clip_path(clip: SunoClip, quality: str) -> str:
 
 
 def _video_clip_path(clip: SunoClip) -> str:
-    """Build the relative file path for a clip's music video.
+    """Build the relative file path for a clip's music video sidecar.
 
-    Structure: music-videos/<artist>/<artist>-<title> [<clip_short>].mp4
-    Separate directory tree so Jellyfin can scan it as a Music Videos library.
+    Mirrors the audio path shape so the .mp4 lives alongside its .flac/.mp3:
+    ``<artist>/<title>/<artist>-<title> [<clip_short>].mp4``
     """
     artist = _safe_name(clip.display_name or "Suno")
     title = _safe_name(clip.title or "untitled")
     clip_short = clip.id[:8]
-    return f"{_MUSIC_VIDEOS_DIR}/{artist}/{artist}-{title} [{clip_short}].mp4"
-
-
-def _video_clip_path_from_audio(audio_path: str) -> str:
-    """Derive the music-videos path from an audio file path.
-
-    Converts 'artist/title/artist-title [id].flac' to
-    'music-videos/artist/artist-title [id].mp4'.
-    """
-    p = Path(audio_path)
-    return f"{_MUSIC_VIDEOS_DIR}/{p.parts[0]}/{p.stem}.mp4"
+    return f"{artist}/{title}/{artist}-{title} [{clip_short}].mp4"
 
 
 def _add_clip(
@@ -601,15 +590,12 @@ class SunoDownloadManager:
                         migrated += 1
                         to_retag.append(item)
                         _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
-                        # Move music video if it exists (check both new and legacy locations)
-                        new_video = base / _video_clip_path(item.clip)
-                        old_video_mv = base / _video_clip_path_from_audio(old_path)
-                        old_video_sidecar = old_file.with_suffix(".mp4")
-                        for candidate in (old_video_mv, old_video_sidecar):
-                            if await self.hass.async_add_executor_job(candidate.exists):
-                                await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
-                                await self.hass.async_add_executor_job(candidate.rename, new_video)
-                                break
+                        # Move the music video sidecar if it exists
+                        old_video = old_file.with_suffix(".mp4")
+                        if await self.hass.async_add_executor_job(old_video.exists):
+                            new_video = base / _video_clip_path(item.clip)
+                            await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
+                            await self.hass.async_add_executor_job(old_video.rename, new_video)
                         # Move cover art sidecars if the parent directory changed
                         if old_file.parent != new_file.parent:
                             for sidecar_name in ("cover.jpg", ".cover_hash"):
@@ -638,30 +624,6 @@ class SunoDownloadManager:
             # Persist state after renames to prevent orphans on crash
             self._state["clips"] = clips_state
             await self._save_state(base)
-
-        # Migrate legacy sidecar .mp4 files to music-videos/ directory
-        videos_migrated = 0
-        for entry in clips_state.values():
-            audio_path = entry.get("path", "")
-            if not audio_path:
-                continue
-            old_sidecar = base / Path(audio_path).with_suffix(".mp4")
-            if not await self.hass.async_add_executor_job(old_sidecar.exists):
-                continue
-            new_video = base / _video_clip_path_from_audio(audio_path)
-            if await self.hass.async_add_executor_job(new_video.exists):
-                # Already migrated, remove the legacy sidecar
-                await self.hass.async_add_executor_job(old_sidecar.unlink, True)
-                videos_migrated += 1
-                continue
-            try:
-                await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
-                await self.hass.async_add_executor_job(old_sidecar.rename, new_video)
-                videos_migrated += 1
-            except OSError:
-                _LOGGER.debug("Failed to migrate video sidecar: %s", old_sidecar)
-        if videos_migrated:
-            _LOGGER.info("Migrated %d video files to music-videos/ directory", videos_migrated)
 
         # Phase 2: Change detection — new clips, quality changes, and metadata changes
         seen_ids: set[str] = set()
@@ -800,12 +762,10 @@ class SunoDownloadManager:
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
-                # Clean up associated files
+                # Clean up associated sidecars
                 clip_file = base / entry["path"]
-                video_file = base / _video_clip_path_from_audio(entry["path"])
                 sidecars = (
-                    video_file,
-                    clip_file.with_suffix(".mp4"),  # legacy sidecar location
+                    clip_file.with_suffix(".mp4"),  # music video sidecar
                     clip_file.with_suffix(".jpg"),  # per-track Jellyfin cover sidecar
                     clip_file.parent / "cover.jpg",
                     clip_file.parent / ".cover_hash",
@@ -838,11 +798,9 @@ class SunoDownloadManager:
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
         """Remove orphaned audio and video files not tracked in download state."""
         known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
-        # Track known video paths in music-videos/ directory
+        # Track sidecar video paths next to each audio file
         for entry in clips_state.values():
             if entry.get("path"):
-                known_paths.add(_video_clip_path_from_audio(entry["path"]))
-                # Legacy sidecar location (for transition period)
                 known_paths.add(str(Path(entry["path"]).with_suffix(".mp4")))
 
         def _scan_and_remove(base_path: Path, known: set[str]) -> int:
@@ -1055,7 +1013,7 @@ class SunoDownloadManager:
             return None
 
     async def _download_video(self, session: Any, video_url: str, base: Path, clip: SunoClip) -> None:
-        """Download the music video to the music-videos/ subdirectory."""
+        """Download the music video sidecar next to its audio file."""
         video_path = base / _video_clip_path(clip)
         if await self.hass.async_add_executor_job(video_path.exists):
             return
