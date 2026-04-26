@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v6.0.2 (2026-04-26)
+
+### Build System
+
+- **deps**: Update astral-sh/setup-uv action to v8
+  ([`0832f60`](https://github.com/teh-hippo/ha-suno/commit/0832f605007424588790c70e3b5ca86782f0bf1e))
+
+- **deps**: Upgrade
+  ([`2d44922`](https://github.com/teh-hippo/ha-suno/commit/2d44922da25bea6024c73d219b291915c18eabcd))
+
+
 ## v6.0.1 (2026-04-21)
 
 ### Build System
