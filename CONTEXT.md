@@ -36,6 +36,10 @@ _Avoid_: tag data, root title
 A persisted **Suno Library** snapshot used to restore Home Assistant state before or instead of a successful **Library Refresh**.
 _Avoid_: cache, store payload
 
+**Downloaded Library**:
+The selected Suno clips written to the user's local filesystem, plus the persisted download state, manifest, playlists, cover art, and sidecar files that make those files usable outside Home Assistant.
+_Avoid_: sync state, download cache, local mirror
+
 **Suno Identity**:
 The display name from Suno clip data that represents the library owner inside Home Assistant.
 _Avoid_: Clerk username, login handle
@@ -51,6 +55,13 @@ _Avoid_: Clerk username, login handle
 - An **External Lineage Root** uses `Remixes of <short-root-id>` for **Album Details**.
 - **Unavailable Lineage** uses `Remixes of unknown root` for **Album Details**.
 - A **Stored Library** restores a previous **Suno Library** snapshot.
+- A **Downloaded Library** is derived from a **Suno Library**.
+- A **Downloaded Library** may mirror or archive selected **Suno Library** sections according to download modes.
+- A **Downloaded Library** writes `.suno_download.json` as a manifest, while Home Assistant Store remains the persistence authority.
+- A **Downloaded Library** may promote fresh matching audio cache files, but the audio cache owns playback cache eviction and freshness policy.
+- A **Downloaded Library** must not run destructive reconciliation from an empty cold-start **Suno Library**.
+- A **Downloaded Library** may delete or remove a source only when the relevant **Suno Library** section is fresh enough to prove removal.
+- A manual **Downloaded Library** force run refreshes the **Suno Library** first, then preserves stale-section delete protections.
 - A **Suno Identity** belongs to one **Suno Library**.
 
 ## Example dialogue
@@ -63,4 +74,5 @@ _Avoid_: Clerk username, login handle
 ## Flagged ambiguities
 
 - "cache" can mean the audio cache or the **Stored Library**. Use **Stored Library** for persisted library snapshots and "audio cache" for cached media files.
+- "download cache" is ambiguous. Use **Downloaded Library** for local filesystem downloads and "audio cache" for ephemeral playback cache files.
 - "display name" can mean the Clerk login handle or **Suno Identity**. Use **Suno Identity** for the Suno owner name shown in Home Assistant.

@@ -1,47 +1,25 @@
-"""Background download manager for the Suno integration."""
+"""Home Assistant adapter for the Suno Downloaded Library."""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
 import logging
-import os
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.storage import Store
-from pathvalidate import sanitize_filename
 
-from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from .const import (
-    CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
-    CONF_CREATE_PLAYLISTS,
-    CONF_DOWNLOAD_MODE_LIKED,
-    CONF_DOWNLOAD_MODE_MY_SONGS,
-    CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
     CONF_DOWNLOAD_VIDEOS,
     CONF_MY_SONGS_COUNT,
     CONF_MY_SONGS_DAYS,
     CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
-    CONF_QUALITY_LIKED,
-    CONF_QUALITY_MY_SONGS,
-    CONF_QUALITY_PLAYLISTS,
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
     DEFAULT_ALL_PLAYLISTS,
-    DEFAULT_DOWNLOAD_MODE,
     DEFAULT_MY_SONGS_COUNT,
     DEFAULT_MY_SONGS_DAYS,
     DEFAULT_MY_SONGS_MINIMUM,
@@ -49,375 +27,79 @@ from .const import (
     DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
     DOMAIN,
-    DOWNLOAD_MODE_ARCHIVE,
     DOWNLOAD_MODE_CACHE,
-    DOWNLOAD_MODE_MIRROR,
-    QUALITY_HIGH,
-    QUALITY_STANDARD,
 )
-from .models import SunoClip, TrackMetadata, clip_meta_hash
+from .downloaded_library import (
+    DesiredDownloadPlan,
+    DownloadedLibrary,
+    DownloadedLibraryStatus,
+    DownloadItem,
+    HomeAssistantDownloadedLibraryAudio,
+    HomeAssistantDownloadedLibraryStorage,
+    RetagResult,
+    SunoCacheDownloadedLibraryAdapter,
+    _add_clip,
+    _album_for_clip,
+    _build_download_summary,
+    _clip_path,
+    _get_source_mode,
+    _safe_name,
+    _source_preserves_files,
+    _update_cover_art,
+    _video_clip_path,
+    _write_file,
+    _write_m3u8_playlists,
+)
+from .library_refresh import SunoData
 
 if TYPE_CHECKING:
+    import asyncio
+    from pathlib import Path
+
     from .api import SunoClient
     from .cache import SunoCache
-    from .coordinator import SunoCoordinator, SunoData
+    from .coordinator import SunoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 _SERVICE_DOWNLOAD = "download_library"
-_MANIFEST_FILENAME = ".suno_download.json"
-_MAX_FILENAME_LEN = 200
 
 
-class RetagResult(Enum):
-    """Outcome of attempting to re-tag an existing audio file on disk."""
-
-    OK = "ok"
-    MISSING = "missing"  # File is gone or zero-byte; caller should re-download.
-    FAILED = "failed"  # Re-tag was attempted but failed for another reason.
-
-
-def _safe_name(name: str) -> str:
-    """Sanitise a string for use as a file or directory name."""
-    safe = sanitize_filename(name, replacement_text="_")
-    return safe[:_MAX_FILENAME_LEN] if safe else "untitled"
-
-
-@dataclass
-class DownloadItem:
-    """A clip scheduled for download with its resolved metadata."""
-
-    clip: SunoClip
-    sources: list[str]
-    quality: str  # "high" | "standard"
-
-
-def _build_download_summary(
-    downloaded: int, removed: int, meta_updates: int, renamed: int = 0, retagged: int = 0
-) -> str:
-    """Build a human-readable summary of download results."""
-    parts: list[str] = []
-    if downloaded:
-        parts.append(f"{downloaded} new song{'s' if downloaded != 1 else ''}")
-    if renamed:
-        parts.append(f"{renamed} renamed")
-    if retagged:
-        parts.append(f"{retagged} re-tagged")
-    if meta_updates:
-        parts.append(f"{meta_updates} metadata update{'s' if meta_updates != 1 else ''}")
-    if removed:
-        parts.append(f"{removed} removal{'s' if removed != 1 else ''}")
-    return ", ".join(parts) if parts else "No change"
-
-
-def _write_m3u8_playlists(
-    base: Path,
-    clips_state: dict[str, Any],
-    desired: list[DownloadItem],
-    source_to_name: dict[str, str] | None = None,
-    playlist_order: dict[str, list[str]] | None = None,
-) -> None:
-    """Write M3U8 playlist files for Jellyfin/media player compatibility.
-
-    Each source tag (e.g. "liked", "playlist:abc") is resolved to a playlist
-    name via *source_to_name*.  The "liked" source always maps to
-    "Liked Songs"; "my_songs" sources are intentionally excluded from playlists.
-
-    *playlist_order* maps source tags to ordered clip ID lists as returned
-    by the Suno API, ensuring playlists respect the user's chosen order.
-    """
-    if source_to_name is None:
-        source_to_name = {}
-    if playlist_order is None:
-        playlist_order = {}
-    # Build clip_id → track info lookup
-    track_info: dict[str, tuple[str, str, int]] = {}
-    for item in desired:
-        entry = clips_state.get(item.clip.id)
-        if not entry or not entry.get("path"):
-            continue
-        abs_path = str(base / entry["path"])
-        title = entry.get("title") or item.clip.title or "Untitled"
-        title = title.replace("\n", " ").replace("\r", "")
-        duration = int(item.clip.duration) if item.clip.duration else -1
-        track_info[item.clip.id] = (abs_path, title, duration)
-    # Build playlist_name → ordered [(abs_path, title, duration)]
-    playlists: dict[str, list[tuple[str, str, int]]] = {}
-    seen_in_playlist: dict[str, set[str]] = {}
-    for item in desired:
-        if item.clip.id not in track_info:
-            continue
-        for source in item.sources:
-            if source == "liked":
-                name = "Liked Songs"
-            elif source.startswith("playlist:"):
-                name = source_to_name.get(source, source)
-            else:
-                continue
-            if name not in playlists:
-                order = playlist_order.get(source)
-                if order:
-                    playlists[name] = [track_info[cid] for cid in order if cid in track_info]
-                    seen_in_playlist[name] = {cid for cid in order if cid in track_info}
-                else:
-                    playlists[name] = []
-                    seen_in_playlist[name] = set()
-            if not playlist_order.get(source):
-                if item.clip.id not in seen_in_playlist.get(name, set()):
-                    playlists[name].append(track_info[item.clip.id])
-                    seen_in_playlist.setdefault(name, set()).add(item.clip.id)
-
-    # Write M3U8 files
-    written: set[str] = set()
-    for name, tracks in playlists.items():
-        safe_name = name.replace("\n", " ").replace("\r", "")
-        filename = f"{_safe_name(safe_name)}.m3u8"
-        lines = [f"#EXTM3U\n#PLAYLIST:{safe_name}"]
-        for abs_path, title, duration in tracks:
-            lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
-        try:
-            (base / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
-            written.add(filename)
-        except OSError:
-            _LOGGER.warning("Failed to write playlist file: %s", filename)
-
-    # Clean up stale M3U8 files
-    for existing in base.glob("*.m3u8"):
-        if existing.name not in written:
-            existing.unlink(missing_ok=True)
-
-
-def _clip_path(clip: SunoClip, quality: str) -> str:
-    """Build the relative file path for a clip.
-
-    Structure: <artist>/<title>/<artist>-<title> [<clip_short>].<ext>
-    Uses pathvalidate for filesystem-safe, human-readable path components.
-    """
-    artist = _safe_name(clip.display_name or "Suno")
-    title = _safe_name(clip.title or "untitled")
-    clip_short = clip.id[:8]
-    ext = "flac" if quality == QUALITY_HIGH else "mp3"
-    return f"{artist}/{title}/{artist}-{title} [{clip_short}].{ext}"
-
-
-def _video_clip_path(clip: SunoClip) -> str:
-    """Build the relative file path for a clip's music video sidecar.
-
-    Mirrors the audio path shape so the .mp4 lives alongside its .flac/.mp3:
-    ``<artist>/<title>/<artist>-<title> [<clip_short>].mp4``
-    """
-    artist = _safe_name(clip.display_name or "Suno")
-    title = _safe_name(clip.title or "untitled")
-    clip_short = clip.id[:8]
-    return f"{artist}/{title}/{artist}-{title} [{clip_short}].mp4"
-
-
-def _add_clip(
-    clip_map: dict[str, DownloadItem],
-    clip: SunoClip,
-    source: str,
-    quality: str,
-) -> None:
-    if clip.id in clip_map:
-        item = clip_map[clip.id]
-        item.sources.append(source)
-        if quality == QUALITY_HIGH:
-            item.quality = QUALITY_HIGH
-    else:
-        clip_map[clip.id] = DownloadItem(clip=clip, sources=[source], quality=quality)
-
-
-def _preserve_by(preserved: set[str], prev_clips: dict[str, Any], pred: Any) -> None:
-    preserved.update(cid for cid, e in prev_clips.items() if pred(e.get("sources", [])))
-
-
-def _cleanup_empty_dirs(base: Path, target: Path) -> None:
-    parent = target.parent
-    while parent != base:
-        try:
-            parent.rmdir()
-            parent = parent.parent
-        except OSError:
-            break
-
-
-# fmt: off
-async def _write_file(hass: HomeAssistant, target: Path, data: bytes) -> None:
-    def _write(t: Path, d: bytes) -> None:
-        t.parent.mkdir(parents=True, exist_ok=True)
-        tmp = t.with_suffix(".tmp")
-        try:
-            tmp.write_bytes(d)
-            os.replace(str(tmp), str(t))
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-    await hass.async_add_executor_job(_write, target, data)
-
-
-async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
-    def _delete(b: Path, r: str) -> None:
-        target = b / r
-        try:
-            if target.exists():
-                target.unlink()
-                _LOGGER.info("Removed: %s", r)
-                _cleanup_empty_dirs(b, target)
-        except OSError:
-            _LOGGER.warning("Failed to delete: %s", r)
-    await hass.async_add_executor_job(_delete, base, rel_path)
-
-
-
-_SOURCE_MODE_KEYS: dict[str, str] = {
-    "liked": CONF_DOWNLOAD_MODE_LIKED,
-    "my_songs": CONF_DOWNLOAD_MODE_MY_SONGS,
-}
-
-
-def _get_source_mode(source: str, options: dict[str, Any]) -> str:
-    """Return the configured download mode for a source tag."""
-    if source.startswith("playlist:"):
-        key: str | None = CONF_DOWNLOAD_MODE_PLAYLISTS
-    else:
-        key = _SOURCE_MODE_KEYS.get(source)
-    if key is None:
-        return DOWNLOAD_MODE_MIRROR
-    return str(options.get(key, DEFAULT_DOWNLOAD_MODE))
-
-
-def _source_preserves_files(source: str, options: dict[str, Any]) -> bool:
-    """Return True if the source mode keeps files permanently (archive only)."""
-    return _get_source_mode(source, options) == DOWNLOAD_MODE_ARCHIVE
-
-
-def _clip_entry(item: DownloadItem, rel_path: str, file_size: int) -> dict[str, Any]:
-    """Build a clips_state dict entry for a download item."""
-    return {
-        "path": rel_path,
-        "title": item.clip.title,
-        "created": item.clip.created_at[:10] if item.clip.created_at else None,
-        "sources": item.sources,
-        "size": file_size,
-        "meta_hash": clip_meta_hash(item.clip),
-        "quality": item.quality,
-    }
-
-
-async def _update_cover_art(
-    hass: HomeAssistant,
-    session: Any,
-    image_url: str,
-    cover_path: Path,
-    hash_path: Path,
-    track_path: Path | None = None,
-) -> bool:
-    """Check image URL hash and write cover.jpg if changed. Returns True if updated.
-
-    If ``track_path`` is given, also writes a per-track JPG sidecar matching
-    the audio basename (e.g. ``Foo.flac`` -> ``Foo.jpg``) so library scanners
-    such as Jellyfin can show track-level cover art rather than only album art.
-    """
-    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-    existing_hash = ""
-    if await hass.async_add_executor_job(hash_path.exists):
-        existing_hash = (await hass.async_add_executor_job(hash_path.read_text)).strip()
-    track_sidecar = track_path.with_suffix(".jpg") if track_path else None
-    if url_hash == existing_hash:
-        # Hash matched, but the per-track sidecar may still be missing if the
-        # cover.jpg predates this feature. Backfill cheaply from cover.jpg.
-        if (
-            track_sidecar is not None
-            and not await hass.async_add_executor_job(track_sidecar.exists)
-            and await hass.async_add_executor_job(cover_path.exists)
-        ):
-            await _write_track_sidecar(hass, cover_path, track_sidecar)
-        return False
-    image_data = await fetch_album_art(session, image_url)
-    if image_data:
-        await hass.async_add_executor_job(cover_path.parent.mkdir, 0o755, True, True)
-        await _write_file(hass, cover_path, image_data)
-        await hass.async_add_executor_job(hash_path.write_text, url_hash)
-        if track_sidecar is not None:
-            await _write_track_sidecar(hass, cover_path, track_sidecar)
-        return True
-    return False
-
-
-def _link_or_copy_sync(src: Path, dst: Path) -> None:
-    """Hardlink ``src`` to ``dst``, falling back to copy if linking fails."""
-    import shutil  # noqa: PLC0415
-
-    if dst.exists():
-        try:
-            dst.unlink()
-        except OSError:
-            return
-    try:
-        os.link(src, dst)
-    except OSError:
-        try:
-            shutil.copyfile(src, dst)
-        except OSError:
-            pass
-
-
-async def _write_track_sidecar(hass: HomeAssistant, cover_path: Path, sidecar_path: Path) -> None:
-    """Write the per-track JPG sidecar, preferring a hardlink when supported."""
-    await hass.async_add_executor_job(_link_or_copy_sync, cover_path, sidecar_path)
-
-
-def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | None:
-    """Resolve the album title for a clip, preferring its remix lineage root.
-
-    Only inherits the root ancestor's title for actual remixes — non-remix
-    derivatives (e.g. inpaint edits) keep their own title as the album so
-    independent works don't get mis-grouped under an unrelated parent.
-    """
-    if clip.album_title:
-        return clip.album_title
-    if not clip.is_remix:
-        return None
-    root_id = clip.root_ancestor_id
-    if not root_id or root_id == clip.id:
-        return None
-    if (root_clip := clip_index.get(root_id)) is None:
-        return f"Remixes of {root_id[:8]}"
-    return root_clip.title
+def _is_empty_suno_library(data: SunoData) -> bool:
+    return not data.clips and not data.liked_clips and not data.playlists and not data.playlist_clips
 
 
 class SunoDownloadManager:
-    """Manages background file downloads to a local directory."""
+    """Home Assistant adapter for Downloaded Library reconciliation."""
 
     def __init__(self, hass: HomeAssistant, store_key: str) -> None:
         self.hass = hass
-        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
-        self._state: dict[str, Any] = {"clips": {}, "last_download": None}
-        self._cache: SunoCache | None = None
+        self._storage = HomeAssistantDownloadedLibraryStorage(hass, store_key)
+        self._downloaded_library = DownloadedLibrary(
+            hass,
+            self._storage,
+            status_callback=self._handle_status_update,
+        )
         self._coordinator: SunoCoordinator | None = None
-        self._download_path = ""
-        self._download_videos = True
-        self._running = False
-        self._errors = self._pending = 0
-        self._last_result = ""
+        self._client: SunoClient | None = None
+        self._raw_cache: SunoCache | Any | None = None
         self._updating_sensors = False
-        self._clip_index: dict[str, SunoClip] = {}
 
     async def async_init(self) -> None:
-        """Load persisted download state."""
-        if (data := await self._store.async_load()) and isinstance(data, dict):
-            self._state = data
-            self._last_result = data.get("last_result", "")
+        """Load persisted Downloaded Library state."""
+        await self._downloaded_library.async_load()
 
     @classmethod
     async def async_setup(
         cls, hass: HomeAssistant, entry: ConfigEntry, coordinator: SunoCoordinator, client: SunoClient
     ) -> SunoDownloadManager:
-        """Create, initialise, and wire up download manager."""
+        """Create, initialise, and wire up the Home Assistant adapter."""
         mgr = cls(hass, f"suno_sync_{entry.entry_id}")
-        mgr._cache = coordinator.cache
         mgr._coordinator = coordinator
+        mgr._client = client
+        mgr._downloaded_library.audio = HomeAssistantDownloadedLibraryAudio(hass, client)
+        mgr._cache = coordinator.cache
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
         mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
         await mgr.async_init()
@@ -441,8 +123,9 @@ class SunoDownloadManager:
 
             def _maybe_remove_service() -> None:
                 remaining = [
-                    e for e in hass.config_entries.async_entries(DOMAIN)
-                    if e.entry_id != entry.entry_id
+                    existing_entry
+                    for existing_entry in hass.config_entries.async_entries(DOMAIN)
+                    if existing_entry.entry_id != entry.entry_id
                 ]
                 if not remaining:
                     hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
@@ -450,8 +133,7 @@ class SunoDownloadManager:
             entry.async_on_unload(_maybe_remove_service)
 
         async def _on_ha_started(_event: Any) -> None:
-            """Run initial sync once Home Assistant is fully started."""
-            _LOGGER.info("Home Assistant started — beginning initial sync")
+            _LOGGER.info("Home Assistant started - beginning initial sync")
             await mgr.async_download(dict(entry.options), client, initial=True)
 
         from homeassistant.helpers.start import async_at_started  # noqa: PLC0415
@@ -459,47 +141,45 @@ class SunoDownloadManager:
         async_at_started(hass, _on_ha_started)
         return mgr
 
-    # fmt: off
     @property
-    def last_download(self) -> str | None: return self._state.get("last_download") or self._state.get("last_sync")
+    def last_download(self) -> str | None:
+        return self._downloaded_library.last_download
+
     @property
-    def last_result(self) -> str: return self._last_result
+    def last_result(self) -> str:
+        return self._downloaded_library.last_result
+
     @property
-    def total_files(self) -> int: return len(self._state.get("clips", {}))
+    def total_files(self) -> int:
+        return self._downloaded_library.total_files
+
     @property
-    def pending(self) -> int: return self._pending
+    def pending(self) -> int:
+        return self._downloaded_library.pending
+
     @property
-    def errors(self) -> int: return self._errors
+    def errors(self) -> int:
+        return self._downloaded_library.errors
+
     @property
-    def is_running(self) -> bool: return self._running
-    # fmt: on
+    def is_running(self) -> bool:
+        return self._downloaded_library.running
 
     @property
     def library_size_mb(self) -> float:
-        """Total size of synced files in MB."""
-        return round(sum(int(e.get("size", 0)) for e in self._state.get("clips", {}).values()) / 1048576, 1)
+        return self._downloaded_library.library_size_mb
 
     @property
     def source_breakdown(self) -> dict[str, int]:
-        """Count synced clips per source tag."""
-        from collections import Counter  # noqa: PLC0415
+        return self._downloaded_library.source_breakdown
 
-        counts: Counter[str] = Counter()
-        for entry in self._state.get("clips", {}).values():
-            for src in entry.get("sources", []):
-                counts[src] += 1
-        return dict(counts)
+    @property
+    def status(self) -> DownloadedLibraryStatus:
+        return self._downloaded_library.status
 
     def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return absolute path to a downloaded file if it exists and is fresh."""
-        if not self._download_path:
-            return None
-        if not (entry := self._state.get("clips", {}).get(clip_id)):
-            return None
-        if meta_hash and entry.get("meta_hash") and entry["meta_hash"] != meta_hash:
-            return None
-        path = Path(self._download_path) / str(entry["path"])
-        return path if path.is_file() else None
+        return self._downloaded_library.get_downloaded_path(clip_id, meta_hash)
 
     async def async_download(
         self,
@@ -509,27 +189,141 @@ class SunoDownloadManager:
         coordinator_data: SunoData | None = None,
         initial: bool = False,
     ) -> None:
-        """Run a full download cycle."""
-        if self._running:
-            _LOGGER.debug("Download already running, skipping")
-            return
-        if not (download_path := options.get(CONF_DOWNLOAD_PATH)):
+        """Run a Downloaded Library reconciliation cycle."""
+        if not (options.get(CONF_DOWNLOAD_PATH) or self._download_path):
             _LOGGER.warning("No download_path configured")
             return
-        self._running = True
-        self._errors = self._pending = 0
+        if self.is_running:
+            _LOGGER.debug("Downloaded Library reconciliation already running, skipping")
+            return
+        self._ensure_audio_adapter(client)
+        suno_library = await self._library_for_run(options, client, coordinator_data, force=force)
+        allow_destructive = self._allow_destructive_reconciliation(suno_library)
+        desired_tuple = await self._build_desired(options, client, suno_library)
+        desired_plan = DesiredDownloadPlan.from_legacy_tuple(desired_tuple)
+        await self._downloaded_library.async_reconcile(
+            options,
+            suno_library,
+            force=force,
+            initial=initial,
+            allow_destructive=allow_destructive,
+            desired_plan=desired_plan,
+        )
+
+    def _ensure_audio_adapter(self, client: Any) -> None:
+        if self._client is client and self._downloaded_library.audio is not None:
+            return
+        self._client = client
+        self._downloaded_library.audio = HomeAssistantDownloadedLibraryAudio(self.hass, client)
+
+    async def _library_for_run(
+        self,
+        options: dict[str, Any],
+        client: Any,
+        coordinator_data: SunoData | None,
+        *,
+        force: bool,
+    ) -> SunoData:
+        if force and self._coordinator is not None:
+            try:
+                data = await self._coordinator._async_fetch_remote_data()
+            except Exception:
+                _LOGGER.warning("Library Refresh before forced download failed", exc_info=True)
+            else:
+                self._coordinator.async_set_updated_data(data)
+                return data
+        if coordinator_data is not None:
+            return coordinator_data
+        if self._coordinator is not None and self._coordinator.data is not None:
+            return self._coordinator.data
+        return await self._legacy_fetch_suno_library(options, client)
+
+    def _allow_destructive_reconciliation(self, data: SunoData) -> bool:
+        if self._coordinator is None or not _is_empty_suno_library(data):
+            return True
+        refresh_task: asyncio.Task[None] | None = getattr(self._coordinator, "_refresh_task", None)
+        return not (self._coordinator.data_version <= 1 and refresh_task is not None and not refresh_task.done())
+
+    async def _legacy_fetch_suno_library(self, options: dict[str, Any], client: Any) -> SunoData:
+        """Build a Suno Library from legacy private helper callers.
+
+        Production runs use the coordinator's current Suno Library. This fallback
+        preserves old private test entry points while the real download seam no
+        longer fetches Suno transport directly.
+        """
+        stale_sections: set[str] = set()
+        clips = []
+        liked_clips = []
+        playlists = []
+        playlist_clips = {}
+
+        if (
+            options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED)
+            and _get_source_mode("liked", options) != DOWNLOAD_MODE_CACHE
+        ):
+            try:
+                liked_clips = await client.get_liked_songs()
+            except Exception:
+                _LOGGER.warning("Failed to fetch liked songs for legacy sync planning")
+                stale_sections.add("liked_clips")
+
+        sync_all = options.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS)
+        selected_ids = options.get(CONF_PLAYLISTS, []) or []
+        if (
+            options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS)
+            and _get_source_mode("playlist:", options) != DOWNLOAD_MODE_CACHE
+            and (sync_all or selected_ids)
+        ):
+            try:
+                playlists = await client.get_playlists()
+            except Exception:
+                _LOGGER.warning("Failed to fetch playlists for legacy sync planning")
+                stale_sections.update(("playlists", "playlist_clips"))
+            else:
+                for playlist in playlists:
+                    if not sync_all and playlist.id not in selected_ids:
+                        continue
+                    try:
+                        playlist_clips[playlist.id] = await client.get_playlist_clips(playlist.id)
+                    except Exception:
+                        _LOGGER.warning("Failed to fetch clips for playlist %s", playlist.name)
+                        stale_sections.add(f"playlist_clips:{playlist.id}")
+
+        if (
+            options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS)
+            and _get_source_mode("my_songs", options) != DOWNLOAD_MODE_CACHE
+        ):
+            my_songs_count = options.get(CONF_MY_SONGS_COUNT, DEFAULT_MY_SONGS_COUNT)
+            my_songs_days = options.get(CONF_MY_SONGS_DAYS, DEFAULT_MY_SONGS_DAYS)
+            minimum = int(options.get(CONF_MY_SONGS_MINIMUM, DEFAULT_MY_SONGS_MINIMUM))
+            if my_songs_count or my_songs_days or minimum:
+                try:
+                    clips = await client.get_all_songs()
+                except Exception:
+                    _LOGGER.warning("Failed to fetch my songs for legacy sync planning")
+                    stale_sections.add("clips")
+
+        return SunoData(
+            clips=clips,
+            liked_clips=liked_clips,
+            playlists=playlists,
+            playlist_clips=playlist_clips,
+            stale_sections=tuple(sorted(stale_sections)),
+        )
+
+    async def _build_desired(
+        self,
+        options: dict[str, Any],
+        client: Any,
+        coordinator_data: SunoData | None = None,
+    ) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
+        data = (
+            coordinator_data if coordinator_data is not None else await self._legacy_fetch_suno_library(options, client)
+        )
+        return self._downloaded_library.build_desired(options, data).as_legacy_tuple()
+
+    def _handle_status_update(self, _status: DownloadedLibraryStatus) -> None:
         self._notify_coordinator()
-        try:
-            await self._run_download(options, client, download_path, force, coordinator_data, initial=initial)
-        except asyncio.CancelledError:
-            _LOGGER.info("Download cancelled")
-            raise
-        except Exception:
-            _LOGGER.exception("Download failed")
-            self._errors += 1
-        finally:
-            self._running = False
-            self._notify_coordinator()
 
     def _notify_coordinator(self) -> None:
         """Push sensor updates via the coordinator without re-triggering sync."""
@@ -540,590 +334,117 @@ class SunoDownloadManager:
             finally:
                 self._updating_sensors = False
 
-    async def _run_download(
-        self,
-        options: dict[str, Any],
-        client: Any,
-        download_path: str,
-        force: bool,
-        coordinator_data: SunoData | None = None,
-        initial: bool = False,
-    ) -> None:
-        base = Path(download_path)
-        self._state.pop("trash", None)
-        desired, preserved_ids, source_to_name, playlist_order = await self._build_desired(
-            options, client, coordinator_data
-        )
-        self._clip_index = {item.clip.id: item.clip for item in desired}
-        clips_state = dict(self._state.get("clips", {}))
-        to_download: list[DownloadItem] = []
-        to_retag: list[DownloadItem] = []
-
-        # Phase 0: Manifest → disk reconciliation. Walk every entry that claims a
-        # file on disk; if the file is gone or zero-byte, clear the path so the
-        # later phases treat the clip as missing (rename or re-download).
-        missing_on_disk = await self._reconcile_manifest(base, clips_state)
-        if missing_on_disk:
-            _LOGGER.info("Manifest reconciliation: %d files missing on disk", missing_on_disk)
-
-        # Phase 1: Rename pass — move files whose path has changed (e.g. display_name or title change)
-        migrated = 0
-        for item in desired:
-            if item.clip.id not in clips_state:
-                continue
-            existing = clips_state[item.clip.id]
-            old_path = existing.get("path", "")
-            new_path = _clip_path(item.clip, existing.get("quality", item.quality))
-            if old_path and old_path != new_path:
-                old_file = base / old_path
-                new_file = base / new_path
-                try:
-                    if await self.hass.async_add_executor_job(old_file.exists):
-                        await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
-                        await self.hass.async_add_executor_job(old_file.rename, new_file)
-                        existing["path"] = new_path
-                        migrated += 1
-                        to_retag.append(item)
-                        _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
-                        # Move the music video sidecar if it exists
-                        old_video = old_file.with_suffix(".mp4")
-                        if await self.hass.async_add_executor_job(old_video.exists):
-                            new_video = base / _video_clip_path(item.clip)
-                            await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
-                            await self.hass.async_add_executor_job(old_video.rename, new_video)
-                        # Move cover art sidecars if the parent directory changed
-                        if old_file.parent != new_file.parent:
-                            for sidecar_name in ("cover.jpg", ".cover_hash"):
-                                old_sc = old_file.parent / sidecar_name
-                                if await self.hass.async_add_executor_job(old_sc.exists):
-                                    new_sc = new_file.parent / sidecar_name
-                                    await self.hass.async_add_executor_job(old_sc.rename, new_sc)
-                        # Move the per-track JPG sidecar (matches audio basename)
-                        old_track_jpg = old_file.with_suffix(".jpg")
-                        if await self.hass.async_add_executor_job(old_track_jpg.exists):
-                            new_track_jpg = new_file.with_suffix(".jpg")
-                            await self.hass.async_add_executor_job(new_track_jpg.parent.mkdir, 0o755, True, True)
-                            try:
-                                await self.hass.async_add_executor_job(old_track_jpg.rename, new_track_jpg)
-                            except OSError:
-                                _LOGGER.debug("Could not move track sidecar JPG for %s", old_path)
-                        _cleanup_empty_dirs(base, old_file)
-                except OSError:
-                    _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
-                    # Clear stale path so the next reconciliation pass treats this
-                    # entry as missing and re-downloads to the new location.
-                    existing["path"] = ""
-                    existing.pop("meta_hash", None)
-        if migrated:
-            _LOGGER.info("Renamed %d files", migrated)
-            # Persist state after renames to prevent orphans on crash
-            self._state["clips"] = clips_state
-            await self._save_state(base)
-
-        # Phase 2: Change detection — new clips, quality changes, and metadata changes
-        seen_ids: set[str] = set()
-        for item in desired:
-            seen_ids.add(item.clip.id)
-            existing = clips_state.get(item.clip.id)
-            if item.clip.id not in clips_state or force or not (existing and existing.get("path")):
-                # New clip, force re-download, or manifest entry whose path was
-                # cleared by Phase 0 reconciliation / Phase 1 rename failure.
-                to_download.append(item)
-            else:
-                existing = clips_state[item.clip.id]
-                # Quality change → delete old + re-download (format change)
-                existing_quality = existing.get("quality", QUALITY_HIGH)
-                if existing_quality != item.quality:
-                    old_path = existing.get("path")
-                    if old_path:
-                        await _delete_file(self.hass, base, old_path)
-                    to_download.append(item)
-                else:
-                    existing["sources"] = item.sources
-                    # Content change → queue for re-tag (NOT delete + re-download)
-                    old_hash = existing.get("meta_hash", "")
-                    new_hash = clip_meta_hash(item.clip)
-                    if old_hash and new_hash != old_hash:
-                        to_retag.append(item)
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.get("sources", [])
-            # Only delete if NO source preserves files (archive mode)
-            # Empty sources → all() returns True → delete (orphan cleanup)
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-        self._pending = len(to_download)
-        self._notify_coordinator()
-        _LOGGER.info(
-            "Sync: %d to download, %d to re-tag, %d to remove, %d current",
-            len(to_download),
-            len(to_retag),
-            len(to_delete),
-            len(seen_ids),
-        )
-        try:
-            await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
-        except OSError:
-            _LOGGER.error("Cannot create download directory: %s", download_path)
-            self._errors += 1
-            self._pending = 0
-            return
-        label = "Initial sync" if initial else "Syncing"
-        if initial:
-            _LOGGER.info("Initial sync: %d files to download", len(to_download))
-
-        # Phase 3: Re-tag pass — update embedded metadata in existing files
-        retagged = 0
-        retag_missing = 0
-        for item in to_retag:
-            existing = clips_state.get(item.clip.id)
-            if not existing or not existing.get("path"):
-                continue
-            target = base / existing["path"]
-            result = await self._retag_clip(item, target)
-            if result is RetagResult.OK:
-                existing["meta_hash"] = clip_meta_hash(item.clip)
-                retagged += 1
-                _LOGGER.debug("Re-tagged: %s", existing["path"])
-            elif result is RetagResult.MISSING:
-                # File vanished from disk — drop the dead path so Phase 4 will
-                # re-download to a fresh location, and queue it now.
-                _LOGGER.info("Re-tag target missing, re-downloading: %s", existing["path"])
-                existing["path"] = ""
-                existing.pop("meta_hash", None)
-                to_download.append(item)
-                retag_missing += 1
-            else:
-                self._errors += 1
-        if retagged:
-            _LOGGER.info("Re-tagged %d files", retagged)
-        if retag_missing:
-            _LOGGER.info("Queued %d missing files for re-download", retag_missing)
-
-        # Phase 4: Download new clips
-        downloaded = 0
-        reconciled = 0
-        cover_dirs: set[str] = set()
-        for item in to_download:
-            rel_path = _clip_path(item.clip, item.quality)
-            target = base / rel_path
-            if not force and await self.hass.async_add_executor_job(target.exists):
-                stat = await self.hass.async_add_executor_job(target.stat)
-                if stat.st_size == 0:
-                    _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
-                else:
-                    clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size)
-                    reconciled += 1
-                    continue
-            if (file_size := await self._download_clip(client, item, base, rel_path)) is not None:
-                clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size)
-                downloaded += 1
-                # Track directory for cover.jpg writing
-                cover_dirs.add(str(target.parent))
-            else:
-                self._errors += 1
-            self._pending = max(0, len(to_download) - downloaded - reconciled)
-            self._last_result = f"{label} ({self._pending} remaining)" if self._pending > 0 else label
-            self._notify_coordinator()
-        if reconciled:
-            _LOGGER.info("Reconciled %d files already on disk", reconciled)
-
-        # Reconcile cover art for all clips (fixes stale cover.jpg files)
-        session = async_get_clientsession(self.hass)
-        covers_fixed = 0
-        for item in desired:
-            entry = clips_state.get(item.clip.id)
-            if not entry or not entry.get("path"):
-                continue
-            image_url = item.clip.image_large_url or item.clip.image_url or item.clip.video_cover_url or None
-            if not image_url:
-                continue
-            target = base / entry["path"]
-            if await _update_cover_art(
-                self.hass,
-                session,
-                image_url,
-                target.parent / "cover.jpg",
-                target.parent / ".cover_hash",
-                track_path=target,
-            ):
-                covers_fixed += 1
-        if covers_fixed:
-            _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
-        for clip_id in to_delete:
-            if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
-                await _delete_file(self.hass, base, entry["path"])
-                # Clean up associated sidecars
-                clip_file = base / entry["path"]
-                sidecars = (
-                    clip_file.with_suffix(".mp4"),  # music video sidecar
-                    clip_file.with_suffix(".jpg"),  # per-track Jellyfin cover sidecar
-                    clip_file.parent / "cover.jpg",
-                    clip_file.parent / ".cover_hash",
-                )
-                for sidecar in sidecars:
-                    if await self.hass.async_add_executor_job(sidecar.exists):
-                        try:
-                            await self.hass.async_add_executor_job(sidecar.unlink)
-                        except OSError:
-                            pass
-        self._state["clips"] = clips_state
-        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
-        self._pending = max(0, len(to_download) - downloaded - reconciled)
-        if self._pending > 0:
-            self._last_result = f"Syncing ({self._pending} remaining)"
-        else:
-            self._last_result = _build_download_summary(downloaded, len(to_delete), 0, migrated, retagged)
-        self._state["last_result"] = self._last_result
-        await self._save_state(base)
-        if options.get(CONF_CREATE_PLAYLISTS):
-            await self.hass.async_add_executor_job(
-                _write_m3u8_playlists, base, clips_state, desired, source_to_name, playlist_order
-            )
-
-        if downloaded or to_delete or migrated or force:
-            orphans = await self._reconcile_disk(base, clips_state)
-            if orphans:
-                _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
-
-    async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
-        """Remove orphaned audio and video files not tracked in download state."""
-        known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
-        # Track sidecar video paths next to each audio file
-        for entry in clips_state.values():
-            if entry.get("path"):
-                known_paths.add(str(Path(entry["path"]).with_suffix(".mp4")))
-
-        def _scan_and_remove(base_path: Path, known: set[str]) -> int:
-            count = 0
-            if not base_path.exists():
-                return 0
-            for f in base_path.rglob("*"):
-                if not f.is_file():
-                    continue
-                # Skip non-audio files (manifest, playlists, tmp, hidden)
-                if f.suffix.lower() not in (".flac", ".mp3", ".mp4"):
-                    continue
-                rel = str(f.relative_to(base_path))
-                if rel not in known:
-                    f.unlink(missing_ok=True)
-                    _LOGGER.info("Reconciliation: removed orphan %s", rel)
-                    count += 1
-            # Clean orphaned sidecars in dirs with no audio files
-            for d in base_path.rglob("*"):
-                if not d.is_dir():
-                    continue
-                has_audio = any(f.suffix.lower() in (".flac", ".mp3") for f in d.iterdir() if f.is_file())
-                if not has_audio:
-                    for sidecar in ("cover.jpg", ".cover_hash"):
-                        sc = d / sidecar
-                        if sc.exists():
-                            sc.unlink(missing_ok=True)
-                            _LOGGER.info("Reconciliation: removed orphan sidecar %s", sc.relative_to(base_path))
-                            count += 1
-            # Clean up empty directories
-            for d in sorted(base_path.rglob("*"), reverse=True):
-                if d.is_dir() and not any(d.iterdir()):
-                    d.rmdir()
-            return count
-
-        return await self.hass.async_add_executor_job(_scan_and_remove, base, known_paths)
-
-    async def _build_desired(
-        self,
-        options: dict[str, Any],
-        client: Any,
-        coordinator_data: SunoData | None = None,
-    ) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
-        clip_map: dict[str, DownloadItem] = {}
-        preserved: set[str] = set()
-        source_to_name: dict[str, str] = {"liked": "Liked Songs"}
-        playlist_order: dict[str, list[str]] = {}
-        prev_clips = self._state.get("clips", {})
-        if options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
-            if _get_source_mode("liked", options) == DOWNLOAD_MODE_CACHE:
-                pass  # cache only — skip download
-            else:
-                liked_quality = options.get(CONF_QUALITY_LIKED, QUALITY_HIGH)
-                try:
-                    liked = coordinator_data.liked_clips if coordinator_data else await client.get_liked_songs()
-                    playlist_order["liked"] = [c.id for c in liked]
-                    for clip in liked:
-                        _add_clip(clip_map, clip, "liked", liked_quality)
-                except Exception:
-                    _LOGGER.warning("Failed to fetch liked songs for sync")
-                    _preserve_by(preserved, prev_clips, lambda s: "liked" in s)
-        sync_all = options.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS)
-        selected_ids = options.get(CONF_PLAYLISTS, []) or []
-        if not options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS):
-            pass  # playlists disabled
-        elif _get_source_mode("playlist:", options) == DOWNLOAD_MODE_CACHE:
-            pass  # cache only — skip download
-        elif sync_all or selected_ids:
-            playlist_quality = options.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH)
-            try:
-                playlists = coordinator_data.playlists if coordinator_data else await client.get_playlists()
-                for pl in playlists:
-                    if not sync_all and pl.id not in selected_ids:
-                        continue
-                    tag = f"playlist:{pl.id}"
-                    source_to_name[tag] = pl.name
-                    try:
-                        pl_clips = (
-                            coordinator_data.playlist_clips.get(pl.id, [])
-                            if coordinator_data
-                            else await client.get_playlist_clips(pl.id)
-                        )
-                        playlist_order[tag] = [c.id for c in pl_clips]
-                        for clip in pl_clips:
-                            _add_clip(clip_map, clip, tag, playlist_quality)
-                    except Exception:
-                        _LOGGER.warning("Failed to fetch clips for playlist %s", pl.name)
-                        _preserve_by(preserved, prev_clips, lambda s, t=tag: t in s)
-            except Exception:
-                _LOGGER.warning("Failed to fetch playlists for sync")
-                _preserve_by(preserved, prev_clips, lambda s: any(x.startswith("playlist:") for x in s))
-        if not options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS):
-            pass  # my songs disabled
-        elif _get_source_mode("my_songs", options) == DOWNLOAD_MODE_CACHE:
-            pass  # cache only — skip download
-        else:
-            my_songs_count = options.get(CONF_MY_SONGS_COUNT, DEFAULT_MY_SONGS_COUNT)
-            my_songs_days = options.get(CONF_MY_SONGS_DAYS, DEFAULT_MY_SONGS_DAYS)
-            minimum = int(options.get(CONF_MY_SONGS_MINIMUM, DEFAULT_MY_SONGS_MINIMUM))
-            if my_songs_count or my_songs_days or minimum:
-                my_songs_quality = options.get(CONF_QUALITY_MY_SONGS, QUALITY_STANDARD)
-                try:
-                    all_clips = coordinator_data.clips if coordinator_data else await client.get_all_songs()
-
-                    # Start with all clips, then narrow
-                    by_count: set[str] | None = None
-                    if my_songs_count:
-                        by_count = set(c.id for c in all_clips[: int(my_songs_count)])
-                    by_days: set[str] | None = None
-                    if my_songs_days:
-                        cutoff = datetime.now(tz=UTC).timestamp() - int(my_songs_days) * 86400
-                        by_days = set()
-                        for clip in all_clips:
-                            if clip.created_at:
-                                try:
-                                    created = datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))
-                                    if created.timestamp() >= cutoff:
-                                        by_days.add(clip.id)
-                                except ValueError:
-                                    pass
-
-                    # AND logic: intersect the filters that are active
-                    if by_count is not None and by_days is not None:
-                        my_songs_set = by_count & by_days  # intersection
-                    elif by_count is not None:
-                        my_songs_set = by_count
-                    elif by_days is not None:
-                        my_songs_set = by_days
-                    else:
-                        my_songs_set = set()
-
-                    # Minimum floor: pad with most recent songs if below threshold
-                    if minimum and len(my_songs_set) < minimum:
-                        my_songs_set |= {c.id for c in all_clips[:minimum]}
-
-                    for clip in all_clips:
-                        if clip.id in my_songs_set:
-                            _add_clip(clip_map, clip, "my_songs", my_songs_quality)
-                except Exception:
-                    _LOGGER.warning("Failed to fetch my songs for sync")
-                    _preserve_by(preserved, prev_clips, lambda s: "my_songs" in s)
-        preserved -= clip_map.keys()
-        return list(clip_map.values()), preserved, source_to_name, playlist_order
-
-    async def _download_clip(self, client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
-        target = base / rel_path
-        _LOGGER.info("Downloading: %s (%s)", item.clip.title, item.quality)
-        clip = item.clip
-        album_title = _album_for_clip(clip, self._clip_index)
-
-        meta = clip.to_track_metadata(album=album_title)
-        try:
-            session = async_get_clientsession(self.hass)
-            image_url = clip.image_large_url or clip.image_url or clip.video_cover_url or None
-            image_data = await fetch_album_art(session, image_url) if image_url else None
-            meta = TrackMetadata(
-                title=meta.title, artist=meta.artist, album=meta.album,
-                album_artist=meta.album_artist, date=meta.date, lyrics=meta.lyrics,
-                comment=meta.comment, image_data=image_data,
-                suno_style=meta.suno_style, suno_style_summary=meta.suno_style_summary,
-                suno_model=meta.suno_model, suno_handle=meta.suno_handle,
-                suno_parent=meta.suno_parent, suno_lineage=meta.suno_lineage,
-            )
-
-            if item.quality == QUALITY_HIGH:
-                data = await download_and_transcode_to_flac(
-                    client, session, get_ffmpeg_manager(self.hass).binary,
-                    clip.id, meta, duration=clip.duration, image_url=image_url,
-                )
-                fmt = "flac"
-            else:
-                audio_url = clip.audio_url or f"{CDN_BASE_URL}/{clip.id}.mp3"
-                data = await download_as_mp3(session, audio_url, meta)
-                fmt = "mp3"
-
-            if data is None:
-                return None
-
-            await _write_file(self.hass, target, data)
-            _LOGGER.info("Downloaded: %s (%d bytes)", rel_path, len(data))
-
-            # Write cover.jpg for Jellyfin album art discovery
-            if image_data and image_url:
-                await _update_cover_art(
-                    self.hass,
-                    session,
-                    image_url,
-                    target.parent / "cover.jpg",
-                    target.parent / ".cover_hash",
-                    track_path=target,
-                )
-
-            # Download video if enabled and available
-            if self._download_videos and clip.video_url:
-                await self._download_video(session, clip.video_url, base, clip)
-
-            # Write-through to cache
-            if self._cache is not None:
-                meta_hash = clip_meta_hash(item.clip)
-                try:
-                    await self._cache.async_put(item.clip.id, fmt, data, meta_hash=meta_hash)
-                except Exception:
-                    _LOGGER.debug("Cache write-through failed for %s", item.clip.id)
-
-            return len(data)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _LOGGER.exception("Failed to download %s", item.clip.id)
-            return None
-
-    async def _download_video(self, session: Any, video_url: str, base: Path, clip: SunoClip) -> None:
-        """Download the music video sidecar next to its audio file."""
-        video_path = base / _video_clip_path(clip)
-        if await self.hass.async_add_executor_job(video_path.exists):
-            return
-        try:
-            async with session.get(video_url) as resp:
-                if resp.status != 200:
-                    _LOGGER.debug("Video download failed for %s: %d", video_url, resp.status)
-                    return
-                tmp_path = video_path.with_suffix(".mp4.tmp")
-                try:
-                    total = 0
-
-                    def _open_tmp() -> Any:
-                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-                        return open(tmp_path, "wb")  # noqa: SIM115
-
-                    fh = await self.hass.async_add_executor_job(_open_tmp)
-                    try:
-                        async for chunk in resp.content.iter_chunked(256 * 1024):
-                            await self.hass.async_add_executor_job(fh.write, chunk)
-                            total += len(chunk)
-                    finally:
-                        await self.hass.async_add_executor_job(fh.close)
-                    await self.hass.async_add_executor_job(os.replace, str(tmp_path), str(video_path))
-                    _LOGGER.info("Downloaded video: %s (%d bytes)", video_path.name, total)
-                except BaseException:
-                    await self.hass.async_add_executor_job(tmp_path.unlink, True)
-                    raise
-        except Exception:
-            _LOGGER.debug("Failed to download video from %s", video_url)
-
-    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
-        """Walk the manifest and clear paths whose files are missing on disk.
-
-        Returns the count of entries reconciled. Mutates ``clips_state`` in
-        place; the caller persists state later. Idempotent: if every manifest
-        entry has a matching file, no mutation occurs.
-        """
-
-        def _check_paths(rel_paths: list[tuple[str, str]]) -> set[str]:
-            """Return the set of clip_ids whose audio file is missing or empty."""
-            missing: set[str] = set()
-            for clip_id, rel_path in rel_paths:
-                target = base / rel_path
-                try:
-                    if not target.is_file() or target.stat().st_size == 0:
-                        missing.add(clip_id)
-                except OSError:
-                    missing.add(clip_id)
-            return missing
-
-        rel_paths: list[tuple[str, str]] = [
-            (cid, entry["path"])
-            for cid, entry in clips_state.items()
-            if isinstance(entry, dict) and entry.get("path")
-        ]
-        if not rel_paths:
-            return 0
-        missing = await self.hass.async_add_executor_job(_check_paths, rel_paths)
-        for cid in missing:
-            entry = clips_state.get(cid)
-            if not entry:
-                continue
-            entry["path"] = ""
-            entry.pop("meta_hash", None)
-        return len(missing)
-
-    async def _retag_clip(self, item: DownloadItem, target: Path) -> RetagResult:
-        """Re-tag an existing audio file with updated metadata.
-
-        Returns OK on success, MISSING if the target file is gone or empty
-        (caller should re-queue for download), or FAILED for any other error.
-        """
-        clip = item.clip
-        # Pre-check: if the file is gone or zero-byte, signal MISSING so the
-        # caller can re-download instead of letting ffmpeg fail noisily.
-        try:
-            stat = await self.hass.async_add_executor_job(target.stat)
-        except FileNotFoundError:
-            return RetagResult.MISSING
-        except OSError:
-            _LOGGER.exception("Failed to stat re-tag target %s", target)
-            return RetagResult.FAILED
-        if stat.st_size == 0:
-            return RetagResult.MISSING
-        meta = clip.to_track_metadata(album=_album_for_clip(clip, self._clip_index))
-        try:
-            if target.suffix == ".flac":
-                ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
-                ok = await retag_flac(ffmpeg_binary, target, meta)
-            else:
-                ok = await self.hass.async_add_executor_job(retag_mp3, target, meta)
-        except Exception:
-            _LOGGER.exception("Failed to re-tag %s", target)
-            return RetagResult.FAILED
-        return RetagResult.OK if ok else RetagResult.FAILED
-
-    # fmt: off
     async def cleanup_tmp_files(self, download_path: str) -> None:
         """Remove stale .tmp files from the download directory."""
-        def _cleanup(p: str) -> None:
-            base = Path(p)
-            if not base.exists():
-                return
-            for tmp in base.rglob("*.tmp"):
-                tmp.unlink(missing_ok=True)
-                _LOGGER.debug("Cleaned up: %s", tmp)
-        await self.hass.async_add_executor_job(_cleanup, download_path)
+        await self._downloaded_library.cleanup_tmp_files(download_path)
+
+    async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
+        return await self._downloaded_library._reconcile_disk(base, clips_state)
+
+    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
+        return await self._downloaded_library._reconcile_manifest(base, clips_state)
+
+    async def _retag_clip(self, item: DownloadItem, target: Path) -> RetagResult:
+        return await self._downloaded_library._retag_clip(item, target)
+
+    async def _download_clip(self, _client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
+        return await self._downloaded_library._download_clip(item, base, rel_path)
 
     async def _save_state(self, base: Path) -> None:
-        await self._store.async_save(self._state)
-        def _write_manifest(b: Path, state: dict[str, Any]) -> None:
-            try:
-                (b / _MANIFEST_FILENAME).write_text(json.dumps(state, indent=2))
-            except OSError:
-                _LOGGER.warning("Failed to write manifest file", exc_info=True)
-        await self.hass.async_add_executor_job(_write_manifest, base, self._state)
-    # fmt: on
+        await self._downloaded_library._save_state(base)
+
+    @property
+    def _store(self) -> Any:
+        return self._storage.store
+
+    @property
+    def _state(self) -> dict[str, Any]:
+        return self._downloaded_library.state
+
+    @_state.setter
+    def _state(self, value: dict[str, Any]) -> None:
+        self._downloaded_library.state = value
+
+    @property
+    def _cache(self) -> Any:
+        return self._raw_cache
+
+    @_cache.setter
+    def _cache(self, value: Any) -> None:
+        self._raw_cache = value
+        self._downloaded_library.cache = SunoCacheDownloadedLibraryAdapter(value) if value is not None else None
+
+    @property
+    def _download_path(self) -> str:
+        return self._downloaded_library.download_path
+
+    @_download_path.setter
+    def _download_path(self, value: str) -> None:
+        self._downloaded_library.download_path = value
+
+    @property
+    def _download_videos(self) -> bool:
+        return self._downloaded_library.download_videos
+
+    @_download_videos.setter
+    def _download_videos(self, value: bool) -> None:
+        self._downloaded_library.download_videos = value
+
+    @property
+    def _running(self) -> bool:
+        return self._downloaded_library.running
+
+    @_running.setter
+    def _running(self, value: bool) -> None:
+        self._downloaded_library.running = value
+
+    @property
+    def _errors(self) -> int:
+        return self._downloaded_library.errors
+
+    @_errors.setter
+    def _errors(self, value: int) -> None:
+        self._downloaded_library.errors = value
+
+    @property
+    def _pending(self) -> int:
+        return self._downloaded_library.pending
+
+    @_pending.setter
+    def _pending(self, value: int) -> None:
+        self._downloaded_library.pending = value
+
+    @property
+    def _last_result(self) -> str:
+        return self._downloaded_library.last_result
+
+    @_last_result.setter
+    def _last_result(self, value: str) -> None:
+        self._downloaded_library.last_result = value
+
+    @property
+    def _clip_index(self) -> dict[str, Any]:
+        return self._downloaded_library.clip_index
+
+    @_clip_index.setter
+    def _clip_index(self, value: dict[str, Any]) -> None:
+        self._downloaded_library.clip_index = value
+
+
+__all__ = [
+    "DownloadItem",
+    "RetagResult",
+    "STORE_VERSION",
+    "SunoDownloadManager",
+    "_add_clip",
+    "_album_for_clip",
+    "_build_download_summary",
+    "_clip_path",
+    "_get_source_mode",
+    "_safe_name",
+    "_source_preserves_files",
+    "_video_clip_path",
+    "_update_cover_art",
+    "_write_file",
+    "_write_m3u8_playlists",
+]

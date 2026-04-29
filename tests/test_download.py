@@ -41,6 +41,7 @@ from custom_components.suno.download import (
     _write_file,
     _write_m3u8_playlists,
 )
+from custom_components.suno.library_refresh import SunoData
 
 # ── Filename sanitisation ──────────────────────────────────────────
 
@@ -218,6 +219,30 @@ def _make_clip(clip_id: str, title: str = "Song", created: str = "2026-03-15T10:
     )
 
 
+async def test_force_download_refreshes_library_before_reconcile(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manual force refreshes the Suno Library before forcing download reconciliation."""
+    clip = _make_clip("clip-force-0000-0000-0000-000000000000")
+    fresh_data = SunoData(liked_clips=[clip])
+    coordinator = MagicMock()
+    coordinator.data = SunoData()
+    coordinator.data_version = 2
+    coordinator._refresh_task = None
+    coordinator._async_fetch_remote_data = AsyncMock(return_value=fresh_data)
+    coordinator.async_set_updated_data = MagicMock()
+    sync = SunoDownloadManager(hass, "test_sync_state")
+    sync._coordinator = coordinator
+    client = AsyncMock()
+
+    with patch.object(sync._downloaded_library, "async_reconcile", new_callable=AsyncMock) as reconcile:
+        await sync.async_download({CONF_DOWNLOAD_PATH: str(tmp_path)}, client, force=True)
+
+    coordinator._async_fetch_remote_data.assert_awaited_once()
+    coordinator.async_set_updated_data.assert_called_once_with(fresh_data)
+    reconcile.assert_awaited_once()
+    assert reconcile.await_args.args[1] is fresh_data
+    assert reconcile.await_args.kwargs["force"] is True
+
+
 async def test_sync_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> None:
     """Sync should download clips not in state."""
     sync = SunoDownloadManager(hass, "test_sync_state")
@@ -235,12 +260,12 @@ async def test_sync_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> 
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -781,16 +806,16 @@ async def test_quality_change_triggers_redownload(hass: HomeAssistant, tmp_path:
 
     with (
         patch(
-            "custom_components.suno.download.download_as_mp3",
+            "custom_components.suno.downloaded_library.download_as_mp3",
             new_callable=AsyncMock,
             return_value=fake_mp3,
         ),
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_flac,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -846,11 +871,11 @@ async def test_quality_match_skips_download(hass: HomeAssistant, tmp_path: Path)
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -880,12 +905,12 @@ async def test_quality_stored_in_state(hass: HomeAssistant, tmp_path: Path) -> N
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -947,17 +972,17 @@ async def test_quality_downgrade_on_source_removal(hass: HomeAssistant, tmp_path
 
     with (
         patch(
-            "custom_components.suno.download.download_as_mp3",
+            "custom_components.suno.downloaded_library.download_as_mp3",
             new_callable=AsyncMock,
             return_value=fake_mp3,
         ) as mock_mp3,
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_flac,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -1056,16 +1081,16 @@ async def test_download_clip_flac_path(hass: HomeAssistant, tmp_path: Path) -> N
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ) as mock_flac,
         patch(
-            "custom_components.suno.download.download_as_mp3",
+            "custom_components.suno.downloaded_library.download_as_mp3",
             new_callable=AsyncMock,
         ) as mock_mp3,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -1096,16 +1121,16 @@ async def test_download_clip_mp3_path(hass: HomeAssistant, tmp_path: Path) -> No
 
     with (
         patch(
-            "custom_components.suno.download.download_as_mp3",
+            "custom_components.suno.downloaded_library.download_as_mp3",
             new_callable=AsyncMock,
             return_value=fake_mp3,
         ) as mock_mp3,
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_flac,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -1143,12 +1168,12 @@ async def test_download_write_through_cache(hass: HomeAssistant, tmp_path: Path)
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -1777,12 +1802,12 @@ async def test_downloads_all_without_cap(hass: HomeAssistant, tmp_path: Path) ->
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -1822,12 +1847,12 @@ async def test_initial_sync_label(hass: HomeAssistant, tmp_path: Path) -> None:
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -1907,8 +1932,8 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
     client = AsyncMock()
 
     with (
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -1962,8 +1987,8 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
     client = AsyncMock()
 
     with (
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -2018,8 +2043,8 @@ async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: P
     client = AsyncMock()
 
     with (
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_build_desired", return_value=(desired, set(), {"liked": "Liked Songs"}, {})),
     ):
@@ -2060,14 +2085,14 @@ async def test_cover_jpg_written_on_download(hass: HomeAssistant, tmp_path: Path
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=fake_image,
         ),
@@ -2111,14 +2136,14 @@ async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path:
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=fake_image,
         ),
@@ -2182,9 +2207,9 @@ async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path:
     new_image_data = b"\xff\xd8\xff\xe0NEW_IMAGE"
 
     with (
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=new_image_data,
         ) as mock_fetch,
@@ -2250,9 +2275,9 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
     client = AsyncMock()
 
     with (
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=b"should_not_be_used",
         ) as mock_fetch,
@@ -2315,14 +2340,14 @@ async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> No
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession", return_value=mock_session),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -2364,14 +2389,14 @@ async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_pat
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession", return_value=mock_session),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -2422,14 +2447,14 @@ async def test_video_download_handles_non_200(hass: HomeAssistant, tmp_path: Pat
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession", return_value=mock_session),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -2470,14 +2495,14 @@ async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession", return_value=mock_session),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession", return_value=mock_session),
         patch(
-            "custom_components.suno.download.fetch_album_art",
+            "custom_components.suno.downloaded_library.fetch_album_art",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -2592,11 +2617,11 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
         patch.object(sync, "_reconcile_disk", new_callable=AsyncMock, return_value=0) as mock_reconcile,
     ):
@@ -2692,13 +2717,13 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -2759,14 +2784,18 @@ async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", return_value=None),
         patch.object(sync._store, "async_save"),
-        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
+        patch(
+            "custom_components.suno.downloaded_library.retag_flac",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_retag,
     ):
         mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
         opts = {
@@ -2827,11 +2856,11 @@ async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: P
     client.get_all_songs = AsyncMock(return_value=[])
 
     with (
-        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", return_value=None),
         patch.object(sync._store, "async_save"),
-        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=False),
+        patch("custom_components.suno.downloaded_library.retag_flac", new_callable=AsyncMock, return_value=False),
     ):
         mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
         opts = {
@@ -2892,12 +2921,19 @@ async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -
     client.get_all_songs = AsyncMock(return_value=[])
 
     with (
-        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch(
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ) as mock_dl,
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
-        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
+        patch(
+            "custom_components.suno.downloaded_library.retag_flac",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_retag,
     ):
         mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
         opts = {
@@ -2966,10 +3002,13 @@ async def test_liked_from_other_user_not_renamed(hass: HomeAssistant, tmp_path: 
     client.get_all_songs = AsyncMock(return_value=[])
 
     with (
-        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch(
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ) as mock_dl,
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -3039,13 +3078,13 @@ async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: P
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=b"fLaC" + b"\x00" * 50,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
         patch.object(Path, "rename", _flaky_rename),
     ):
@@ -3121,12 +3160,19 @@ async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_pa
     client.get_all_songs = AsyncMock(return_value=[])
 
     with (
-        patch("custom_components.suno.download.download_and_transcode_to_flac", new_callable=AsyncMock) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager") as mock_ffmpeg,
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch(
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
+            new_callable=AsyncMock,
+        ) as mock_dl,
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager") as mock_ffmpeg,
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
-        patch("custom_components.suno.download.retag_flac", new_callable=AsyncMock, return_value=True) as mock_retag,
+        patch(
+            "custom_components.suno.downloaded_library.retag_flac",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_retag,
     ):
         mock_ffmpeg.return_value.binary = "/usr/bin/ffmpeg"
         opts = {
@@ -3157,7 +3203,7 @@ async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_pa
     with (
         patch.object(sync._store, "async_save"),
         patch(
-            "custom_components.suno.download.Path.write_text",
+            "custom_components.suno.downloaded_library.Path.write_text",
             side_effect=OSError("disk full"),
         ),
     ):
@@ -3167,7 +3213,7 @@ async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_pa
             CONF_ALL_PLAYLISTS: False,
             CONF_PLAYLISTS: [],
         }
-        with patch("custom_components.suno.download._LOGGER"):
+        with patch("custom_components.suno.downloaded_library._LOGGER"):
             await sync.async_download(opts, client)
 
     # Should complete without errors
@@ -3430,13 +3476,13 @@ async def test_album_set_from_root_ancestor(hass: HomeAssistant, tmp_path: Path)
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             side_effect=mock_transcode,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -3491,13 +3537,13 @@ async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> No
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             side_effect=mock_transcode,
         ),
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -3616,13 +3662,13 @@ async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_p
     fake_flac = b"fLaC" + b"\x00" * 50
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
             return_value=fake_flac,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
-        patch("custom_components.suno.download.fetch_album_art", new_callable=AsyncMock, return_value=None),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.fetch_album_art", new_callable=AsyncMock, return_value=None),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -3676,11 +3722,11 @@ async def test_present_file_does_not_redownload(hass: HomeAssistant, tmp_path: P
 
     with (
         patch(
-            "custom_components.suno.download.download_and_transcode_to_flac",
+            "custom_components.suno.downloaded_library.download_and_transcode_to_flac",
             new_callable=AsyncMock,
         ) as mock_dl,
-        patch("custom_components.suno.download.get_ffmpeg_manager"),
-        patch("custom_components.suno.download.async_get_clientsession"),
+        patch("custom_components.suno.downloaded_library.get_ffmpeg_manager"),
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch.object(sync._store, "async_save"),
     ):
         opts = {
@@ -3745,7 +3791,7 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
 
     session = AsyncMock()
     with patch(
-        "custom_components.suno.download.fetch_album_art",
+        "custom_components.suno.downloaded_library.fetch_album_art",
         new_callable=AsyncMock,
         return_value=b"\xff\xd8\xff" + b"\x00" * 100,
     ):
