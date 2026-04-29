@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v6.0.8 (2026-04-29)
+
+### Build System
+
+- Release refactors through HACS
+  ([`f2b4ce5`](https://github.com/teh-hippo/ha-suno/commit/f2b4ce5e55534842a9ad09ae328e4428b7b99678))
+
+### Chores
+
+- Sync uv lock version
+  ([`fe77fac`](https://github.com/teh-hippo/ha-suno/commit/fe77fac975cc301a8d65b21d81acf29f76dc1e2f))
+
+### Refactoring
+
+- Deepen downloaded library module
+  ([`86a3653`](https://github.com/teh-hippo/ha-suno/commit/86a3653e3695ba35066bdf7e33c3cb627d52dc9b))
+
+- Deepen home assistant runtime
+  ([`1377801`](https://github.com/teh-hippo/ha-suno/commit/137780137d345a6b05ac134bee483e4aa84fa069))
+
+- Deepen library refresh module
+  ([`f7a95f7`](https://github.com/teh-hippo/ha-suno/commit/f7a95f79869785727e5888994289f671e29b03c7))
+
+
 ## v6.0.7 (2026-04-29)
 
 ### Build System
