@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.7 (2026-04-29)
+
+### Build System
+
+- Refresh lockfile version
+  ([`f99a102`](https://github.com/teh-hippo/ha-suno/commit/f99a1025b9f87e5ef5b457e1f210d326922a8845))
+
+
 ## v6.0.6 (2026-04-26)
 
 ### Build System
