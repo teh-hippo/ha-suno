@@ -92,14 +92,19 @@ class SunoDownloadManager:
 
     @classmethod
     async def async_setup(
-        cls, hass: HomeAssistant, entry: ConfigEntry, coordinator: SunoCoordinator, client: SunoClient
+        cls,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: SunoCoordinator,
+        client: SunoClient,
+        cache: SunoCache | None = None,
     ) -> SunoDownloadManager:
         """Create, initialise, and wire up the Home Assistant adapter."""
         mgr = cls(hass, f"suno_sync_{entry.entry_id}")
         mgr._coordinator = coordinator
         mgr._client = client
         mgr._downloaded_library.audio = HomeAssistantDownloadedLibraryAudio(hass, client)
-        mgr._cache = coordinator.cache
+        mgr._cache = cache if cache is not None else coordinator.cache
         mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
         mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
         await mgr.async_init()
@@ -337,6 +342,14 @@ class SunoDownloadManager:
     async def cleanup_tmp_files(self, download_path: str) -> None:
         """Remove stale .tmp files from the download directory."""
         await self._downloaded_library.cleanup_tmp_files(download_path)
+
+    async def async_cleanup_disabled_downloads(
+        self,
+        options: dict[str, Any],
+        previous_options: dict[str, Any] | None = None,
+    ) -> None:
+        """Remove Mirror-managed downloads when local downloads are disabled."""
+        await self._downloaded_library.async_cleanup_disabled_downloads(options, previous_options)
 
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
         return await self._downloaded_library._reconcile_disk(base, clips_state)

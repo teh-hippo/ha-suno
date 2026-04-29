@@ -336,8 +336,8 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             self._options.update(user_input)
             return await self._next_content_step()
 
-        coordinator = self.config_entry.runtime_data
-        playlist_options = [SelectOptionDict(value=p.id, label=p.name) for p in coordinator.data.playlists]
+        runtime = self.config_entry.runtime_data
+        playlist_options = [SelectOptionDict(value=p.id, label=p.name) for p in runtime.suno_library.playlists]
         return self.async_show_form(
             step_id="select_playlists",
             data_schema=vol.Schema(

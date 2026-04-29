@@ -494,13 +494,36 @@ def _source_preserves_files(source: str, options: Mapping[str, Any]) -> bool:
     return _get_source_mode(source, options) == DOWNLOAD_MODE_ARCHIVE
 
 
-def _clip_entry(item: DownloadItem, rel_path: str, file_size: int) -> dict[str, Any]:
+def _source_modes_for(sources: list[str], options: Mapping[str, Any]) -> dict[str, str]:
+    """Return persisted source mode metadata for a stored clip record."""
+    return {source: _get_source_mode(source, options) for source in sources}
+
+
+def _entry_source_modes(
+    entry: Mapping[str, Any],
+    sources: list[str],
+    fallback_options: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Return source mode metadata, inferring it from fallback options when absent."""
+    raw_modes = entry.get("source_modes")
+    if isinstance(raw_modes, dict):
+        modes = {str(source): str(mode) for source, mode in raw_modes.items()}
+    else:
+        modes = {}
+    if fallback_options is not None:
+        for source in sources:
+            modes.setdefault(source, _get_source_mode(source, fallback_options))
+    return modes
+
+
+def _clip_entry(item: DownloadItem, rel_path: str, file_size: int, options: Mapping[str, Any]) -> dict[str, Any]:
     """Build a stored Downloaded Library record for one clip."""
     return {
         "path": rel_path,
         "title": item.clip.title,
         "created": item.clip.created_at[:10] if item.clip.created_at else None,
         "sources": item.sources,
+        "source_modes": _source_modes_for(item.sources, options),
         "size": file_size,
         "meta_hash": clip_meta_hash(item.clip),
         "quality": item.quality,
@@ -889,6 +912,7 @@ class DownloadedLibrary:
                     to_download.append(item)
                 else:
                     existing["sources"] = item.sources
+                    existing["source_modes"] = _source_modes_for(item.sources, options)
                     old_hash = existing.get("meta_hash", "")
                     new_hash = clip_meta_hash(item.clip)
                     if old_hash and new_hash != old_hash:
@@ -960,12 +984,12 @@ class DownloadedLibrary:
                 if stat.st_size == 0:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
-                    clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size)
+                    clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size, options)
                     await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                     reconciled += 1
                     continue
             if (file_size := await self._download_clip(item, base, rel_path, force=force)) is not None:
-                clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size)
+                clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size, options)
                 await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                 downloaded += 1
             else:
@@ -1318,6 +1342,75 @@ class DownloadedLibrary:
             _LOGGER.exception("Failed to re-tag %s", target)
             return RetagResult.FAILED
         return RetagResult.OK if ok else RetagResult.FAILED
+
+    async def async_cleanup_disabled_downloads(
+        self,
+        options: Mapping[str, Any],
+        previous_options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Remove Mirror-managed downloads when local downloads are disabled."""
+        download_path = (
+            options.get(CONF_DOWNLOAD_PATH) or (previous_options or {}).get(CONF_DOWNLOAD_PATH) or self._download_path
+        )
+        if not download_path:
+            return
+
+        self._download_path = str(download_path)
+        base = Path(str(download_path))
+        clips_state = dict(self._state.get("clips", {}))
+        removed = 0
+        preserved = 0
+
+        for clip_id, entry in list(clips_state.items()):
+            if not isinstance(entry, dict):
+                clips_state.pop(clip_id, None)
+                continue
+            sources = [str(source) for source in entry.get("sources", [])]
+            source_modes = _entry_source_modes(entry, sources, previous_options)
+            archive_sources = [source for source in sources if source_modes.get(source) == DOWNLOAD_MODE_ARCHIVE]
+            if archive_sources or (sources and not source_modes):
+                preserved_sources = archive_sources or sources
+                entry["sources"] = preserved_sources
+                entry["source_modes"] = {
+                    source: source_modes.get(source, DOWNLOAD_MODE_ARCHIVE) for source in preserved_sources
+                }
+                preserved += 1
+                continue
+
+            clips_state.pop(clip_id, None)
+            if entry.get("path"):
+                await _delete_file(self.hass, base, str(entry["path"]))
+                await self._delete_sidecars(base, str(entry["path"]))
+            removed += 1
+
+        await self._delete_generated_playlists(base)
+        self._state["clips"] = clips_state
+        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
+        if removed and preserved:
+            self._last_result = f"Downloads disabled: {removed} removed, {preserved} archived"
+        elif removed:
+            self._last_result = f"Downloads disabled: {removed} removed"
+        elif preserved:
+            self._last_result = f"Downloads disabled: {preserved} archived"
+        else:
+            self._last_result = "Downloads disabled"
+        self._state["last_result"] = self._last_result
+        await self._save_state(base)
+        self._publish_status()
+
+    async def _delete_generated_playlists(self, base: Path) -> None:
+        """Remove generated playlist files from the Downloaded Library root."""
+
+        def _delete_playlists(base_path: Path) -> None:
+            if not base_path.exists():
+                return
+            for playlist in base_path.glob("*.m3u8"):
+                try:
+                    playlist.unlink(missing_ok=True)
+                except OSError:
+                    _LOGGER.warning("Failed to delete playlist file: %s", playlist)
+
+        await self.hass.async_add_executor_job(_delete_playlists, base)
 
     async def cleanup_tmp_files(self, download_path: str) -> None:
         """Remove stale temporary files from the Downloaded Library directory."""

@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.suno.const import (
     CONF_ALL_PLAYLISTS,
+    CONF_DOWNLOAD_MODE_LIKED,
     CONF_DOWNLOAD_PATH,
     CONF_MY_SONGS_COUNT,
     CONF_MY_SONGS_DAYS,
@@ -15,6 +16,9 @@ from custom_components.suno.const import (
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
+    DOWNLOAD_MODE_ARCHIVE,
+    DOWNLOAD_MODE_CACHE,
+    DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
 )
 from custom_components.suno.downloaded_library import (
@@ -238,3 +242,137 @@ def test_stale_source_membership_is_preserved_when_clip_has_fresh_source(hass: H
     )
 
     assert plan.items[0].sources == ["my_songs", "liked"]
+
+
+async def test_disabled_download_cleanup_removes_mirror_and_preserves_archive(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Disabling downloads removes Mirror files but preserves Archive files."""
+    mirror_clip = _clip("clip-mirror-0000-0000-0000-000000000000", "Mirror")
+    archive_clip = _clip("clip-archive-0000-0000-0000-000000000000", "Archive")
+    base = tmp_path / "downloads"
+    mirror_rel = _clip_path(mirror_clip, QUALITY_HIGH)
+    archive_rel = _clip_path(archive_clip, QUALITY_HIGH)
+    mirror_target = base / mirror_rel
+    archive_target = base / archive_rel
+    mirror_target.parent.mkdir(parents=True)
+    archive_target.parent.mkdir(parents=True)
+    mirror_target.write_bytes(b"fLaCmirror")
+    archive_target.write_bytes(b"fLaCarchive")
+    (base / "Liked Songs.m3u8").write_text("#EXTM3U\n")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                mirror_clip.id: {
+                    "path": mirror_rel,
+                    "sources": ["liked"],
+                    "source_modes": {"liked": DOWNLOAD_MODE_MIRROR},
+                    "size": mirror_target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                },
+                archive_clip.id: {
+                    "path": archive_rel,
+                    "sources": ["playlist:archived"],
+                    "source_modes": {"playlist:archived": DOWNLOAD_MODE_ARCHIVE},
+                    "size": archive_target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                },
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    await library.async_cleanup_disabled_downloads(
+        {
+            **_options(base),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_PLAYLISTS: True,
+        }
+    )
+
+    assert not mirror_target.exists()
+    assert archive_target.exists()
+    assert mirror_clip.id not in library.state["clips"]
+    assert archive_clip.id in library.state["clips"]
+    assert library.state["clips"][archive_clip.id]["sources"] == ["playlist:archived"]
+    assert not (base / "Liked Songs.m3u8").exists()
+
+
+async def test_disabled_download_cleanup_uses_previous_options_for_legacy_state(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Legacy state without source modes can still clean Mirror files during a live transition."""
+    clip = _clip("clip-legacy-0000-0000-0000-000000000000")
+    base = tmp_path / "downloads"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = base / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaClegacy")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    await library.async_cleanup_disabled_downloads(
+        {
+            **_options(base),
+            CONF_SHOW_LIKED: True,
+        },
+        previous_options={
+            **_options(base),
+            CONF_SHOW_LIKED: True,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
+        },
+    )
+
+    assert not target.exists()
+    assert clip.id not in library.state["clips"]
+
+
+async def test_disabled_download_cleanup_preserves_unknown_legacy_state(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Legacy state without previous modes is preserved instead of risking Archive deletion."""
+    clip = _clip("clip-unknown-0000-0000-0000-000000000000")
+    base = tmp_path / "downloads"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = base / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaCunknown")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    await library.async_cleanup_disabled_downloads(
+        {
+            **_options(base),
+            CONF_SHOW_LIKED: True,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+        }
+    )
+
+    assert target.exists()
+    assert clip.id in library.state["clips"]

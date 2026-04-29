@@ -40,6 +40,10 @@ _Avoid_: cache, store payload
 The selected Suno clips written to the user's local filesystem, plus the persisted download state, manifest, playlists, cover art, and sidecar files that make those files usable outside Home Assistant.
 _Avoid_: sync state, download cache, local mirror
 
+**Home Assistant Runtime**:
+The per-entry loaded integration state that wires authentication, Suno transport, **Library Refresh**, audio cache, **Downloaded Library**, proxy registration, entities, and cleanup into Home Assistant.
+_Avoid_: setup glue, coordinator bag, lifecycle helpers
+
 **Suno Identity**:
 The display name from Suno clip data that represents the library owner inside Home Assistant.
 _Avoid_: Clerk username, login handle
@@ -62,6 +66,11 @@ _Avoid_: Clerk username, login handle
 - A **Downloaded Library** must not run destructive reconciliation from an empty cold-start **Suno Library**.
 - A **Downloaded Library** may delete or remove a source only when the relevant **Suno Library** section is fresh enough to prove removal.
 - A manual **Downloaded Library** force run refreshes the **Suno Library** first, then preserves stale-section delete protections.
+- A **Home Assistant Runtime** owns the loaded Home Assistant entry state for one **Suno Identity**.
+- A **Home Assistant Runtime** contains the Home Assistant adapters for **Library Refresh**, audio cache, and **Downloaded Library**.
+- A **Home Assistant Runtime** controls entry setup, unload, option-transition cleanup, and removal of per-entry and shared local state.
+- When a **Home Assistant Runtime** transitions every downloaded section to cache mode, it deletes managed Mirror **Downloaded Library** files and persisted download state but preserves files previously managed only by Archive mode.
+- Archive mode is durable: disabling downloads does not delete archived files; a later change of the same section to Mirror may make those files removable through normal **Downloaded Library** reconciliation.
 - A **Suno Identity** belongs to one **Suno Library**.
 
 ## Example dialogue

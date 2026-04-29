@@ -24,6 +24,7 @@ from .const import (
     DOWNLOAD_MODE_CACHE,
 )
 from .coordinator import SunoCoordinator, SunoData
+from .runtime import HomeAssistantRuntime
 
 PARALLEL_UPDATES = 0
 
@@ -47,8 +48,9 @@ class _SunoSensor(CoordinatorEntity[SunoCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, key: str) -> None:
-        super().__init__(coordinator)
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry, key: str) -> None:
+        super().__init__(runtime.coordinator)
+        self._runtime = runtime
         self._attr_unique_id = f"{entry.unique_id}_{key}"
         self._entry = entry
 
@@ -63,17 +65,17 @@ class _SimpleSensor(_SunoSensor):
 
     def __init__(
         self,
-        coordinator: SunoCoordinator,
+        runtime: HomeAssistantRuntime,
         entry: SunoConfigEntry,
         key: str,
         icon: str,
-        value_fn: Callable[[SunoCoordinator], Any],
+        value_fn: Callable[[HomeAssistantRuntime], Any],
         unit: str | None = None,
         state_class: SensorStateClass | None = SensorStateClass.MEASUREMENT,
         device_class: SensorDeviceClass | None = None,
-        attr_fn: Callable[[SunoCoordinator], dict[str, Any]] | None = None,
+        attr_fn: Callable[[HomeAssistantRuntime], dict[str, Any]] | None = None,
     ) -> None:
-        super().__init__(coordinator, entry, key)
+        super().__init__(runtime, entry, key)
         self._attr_translation_key = key
         self._attr_icon = icon
         if state_class is not None:
@@ -87,32 +89,32 @@ class _SimpleSensor(_SunoSensor):
 
     @property
     def native_value(self) -> Any:
-        return self._value_fn(self.coordinator)
+        return self._value_fn(self._runtime)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if self._attr_fn:
-            return self._attr_fn(self.coordinator)
+            return self._attr_fn(self._runtime)
         return None
 
 
 # ── Sensor definitions ──────────────────────────────────────────────
 
-_LIBRARY_SENSORS: list[tuple[str, str, Callable[[SunoCoordinator], Any], str | None]] = [
-    ("liked_songs", "mdi:heart-outline", lambda c: len(c.data.liked_clips), None),
+_LIBRARY_SENSORS: list[tuple[str, str, Callable[[HomeAssistantRuntime], Any], str | None]] = [
+    ("liked_songs", "mdi:heart-outline", lambda runtime: len(runtime.suno_library.liked_clips), None),
 ]
 
 
-def _library_files_breakdown(c: SunoCoordinator) -> dict[str, int]:
+def _library_files_breakdown(runtime: HomeAssistantRuntime) -> dict[str, int]:
     """Source breakdown for library_files attributes."""
-    return c.download_manager.source_breakdown if c.download_manager else {}
+    return runtime.download_status.source_breakdown
 
 
-def _parse_last_sync(c: SunoCoordinator) -> datetime | None:
+def _parse_last_sync(runtime: HomeAssistantRuntime) -> datetime | None:
     """Parse last_download ISO string to datetime for TIMESTAMP sensor."""
-    if c.download_manager and c.download_manager.last_download:
+    if runtime.download_status.last_download:
         try:
-            return datetime.fromisoformat(c.download_manager.last_download)
+            return datetime.fromisoformat(runtime.download_status.last_download)
         except ValueError:
             return None
     return None
@@ -122,7 +124,7 @@ _SYNC_SENSORS: list[tuple[Any, ...]] = [
     (
         "library_files",
         "mdi:file-music",
-        lambda c: c.download_manager.total_files if c.download_manager else 0,
+        lambda runtime: runtime.download_status.file_count,
         None,
         SensorStateClass.MEASUREMENT,
         None,
@@ -131,13 +133,13 @@ _SYNC_SENSORS: list[tuple[Any, ...]] = [
     (
         "sync_remaining",
         "mdi:sync",
-        lambda c: c.download_manager.pending if c.download_manager else 0,
+        lambda runtime: runtime.download_status.pending,
         None,
     ),
     (
         "library_size",
         "mdi:harddisk",
-        lambda c: c.download_manager.library_size_mb if c.download_manager else 0.0,
+        lambda runtime: runtime.download_status.size_mb,
         "MB",
     ),
     (
@@ -151,7 +153,7 @@ _SYNC_SENSORS: list[tuple[Any, ...]] = [
     (
         "last_sync_result",
         "mdi:text-box-check-outline",
-        lambda c: c.download_manager.last_result if c.download_manager else "",
+        lambda runtime: runtime.download_status.last_result,
         None,
         None,
     ),
@@ -168,17 +170,17 @@ class SunoCreditsSensor(_SunoSensor):
     _attr_native_unit_of_measurement = "credits"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, "credits")
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry) -> None:
+        super().__init__(runtime, entry, "credits")
 
     @property
     def native_value(self) -> int | None:
-        data: SunoData = self.coordinator.data
+        data: SunoData = self._runtime.suno_library
         return data.credits.credits_left if data.credits else None
 
     @property
     def extra_state_attributes(self) -> dict[str, int | str | None]:
-        data: SunoData = self.coordinator.data
+        data: SunoData = self._runtime.suno_library
         if not data.credits:
             return {}
         return {
@@ -196,8 +198,8 @@ class SunoCacheSizeSensor(_SunoSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:database"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, "cache_size")
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry) -> None:
+        super().__init__(runtime, entry, "cache_size")
         self._cached_size: float = 0.0
 
     @property
@@ -205,13 +207,11 @@ class SunoCacheSizeSensor(_SunoSensor):
         return self._cached_size
 
     async def async_update(self) -> None:
-        cache = self.coordinator.cache
-        self._cached_size = await cache.async_size_mb() if cache else 0.0
+        self._cached_size = await self._runtime.async_cache_size_mb()
 
     @property
     def extra_state_attributes(self) -> dict[str, int]:
-        cache = self.coordinator.cache
-        return {"cached_files": cache.file_count} if cache is not None else {}
+        return {"cached_files": self._runtime.cache_file_count}
 
 
 class SunoDownloadStatusSensor(_SunoSensor):
@@ -222,26 +222,24 @@ class SunoDownloadStatusSensor(_SunoSensor):
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["idle", "syncing", "error"]
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, "sync_status")
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry) -> None:
+        super().__init__(runtime, entry, "sync_status")
 
     @property
     def native_value(self) -> str:
-        dm = self.coordinator.download_manager
-        if dm is None:
-            return "idle"
-        if dm.is_running:
+        status = self._runtime.download_status
+        if status.running:
             return "syncing"
-        return "error" if dm.errors > 0 else "idle"
+        return "error" if status.errors > 0 else "idle"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs: dict[str, Any] = {
             "download_path": self._entry.options.get(CONF_DOWNLOAD_PATH, ""),
         }
-        dm = self.coordinator.download_manager
-        if dm is not None:
-            attrs["errors"] = dm.errors
+        status = self._runtime.download_status
+        if self._runtime.downloads_enabled:
+            attrs["errors"] = status.errors
         return attrs
 
 
@@ -254,14 +252,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Suno sensors."""
-    coordinator: SunoCoordinator = entry.runtime_data
+    runtime: HomeAssistantRuntime = entry.runtime_data
 
-    entities: list[SensorEntity] = [SunoCreditsSensor(coordinator, entry)]
-    entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _LIBRARY_SENSORS)
-    entities.append(SunoCacheSizeSensor(coordinator, entry))
+    entities: list[SensorEntity] = [SunoCreditsSensor(runtime, entry)]
+    entities.extend(_SimpleSensor(runtime, entry, *cfg) for cfg in _LIBRARY_SENSORS)
+    entities.append(SunoCacheSizeSensor(runtime, entry))
 
     if _has_download_sections(entry.options) and entry.options.get(CONF_DOWNLOAD_PATH):
-        entities.append(SunoDownloadStatusSensor(coordinator, entry))
-        entities.extend(_SimpleSensor(coordinator, entry, *cfg) for cfg in _SYNC_SENSORS)
+        entities.append(SunoDownloadStatusSensor(runtime, entry))
+        entities.extend(_SimpleSensor(runtime, entry, *cfg) for cfg in _SYNC_SENSORS)
 
     async_add_entities(entities)

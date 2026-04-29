@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -17,20 +17,21 @@ from custom_components.suno.const import (
     DOWNLOAD_MODE_CACHE,
     DOWNLOAD_MODE_MIRROR,
 )
-from custom_components.suno.coordinator import SunoCoordinator
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
+from custom_components.suno.runtime import HomeAssistantRuntime
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
 
 
 async def test_setup_entry_success(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Successful setup creates a coordinator in runtime_data."""
+    """Successful setup creates a Home Assistant Runtime in runtime_data."""
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
     assert entry.state is ConfigEntryState.LOADED
-    assert isinstance(entry.runtime_data, SunoCoordinator)
+    assert isinstance(entry.runtime_data, HomeAssistantRuntime)
+    assert entry.runtime_data.coordinator is not None
     mock_suno_client._auth.authenticate.assert_awaited_once()
 
 
@@ -230,8 +231,8 @@ async def test_dm_created_when_mirror_or_archive(hass: HomeAssistant, mock_suno_
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator = entry.runtime_data
-    assert coordinator.download_manager is not None
+    runtime = entry.runtime_data
+    assert runtime.download_manager is not None
 
 
 async def test_dm_not_created_all_cache_with_path(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -248,22 +249,17 @@ async def test_dm_not_created_all_cache_with_path(hass: HomeAssistant, mock_suno
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator = entry.runtime_data
-    assert coordinator.download_manager is None
+    runtime = entry.runtime_data
+    assert runtime.download_manager is None
 
 
 async def test_all_cache_transition_cleanup(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Options change to all-cache with existing state triggers cleanup.
-
-    TODO: Add assertions once __init__.py implements cleanup-on-transition
-    logic for when all sections switch to cache mode. For now, verify the
-    entry can be set up successfully with all-cache options.
-    """
+    """Options change to all-cache with existing state triggers setup cleanup."""
     entry = make_entry(
         options={
             **make_entry().options,
             CONF_DOWNLOAD_PATH: "/music/suno",
-            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
             CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
             CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
         }
@@ -272,4 +268,64 @@ async def test_all_cache_transition_cleanup(hass: HomeAssistant, mock_suno_clien
         await setup_entry(hass, entry)
 
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.runtime_data.download_manager is None
+    runtime = entry.runtime_data
+    old_options = dict(entry.options)
+    await runtime.async_unload()
+
+    new_options = {
+        **entry.options,
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+    }
+    hass.config_entries.async_update_entry(entry, options=new_options)
+
+    with patch(
+        "custom_components.suno.download.SunoDownloadManager.async_cleanup_disabled_downloads",
+        new_callable=AsyncMock,
+    ) as cleanup:
+        await runtime._async_setup_downloaded_library()
+
+    cleanup.assert_awaited_once_with(new_options, old_options)
+
+
+async def test_setup_uses_previous_options_for_all_cache_cleanup(
+    hass: HomeAssistant, mock_suno_client: AsyncMock
+) -> None:
+    """Reload setup uses the previous loaded options when cleaning legacy download state."""
+    old_options = {
+        **make_entry().options,
+        CONF_DOWNLOAD_PATH: "/music/suno",
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
+        CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
+        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+    }
+    entry = make_entry(options=old_options)
+    entry.add_to_hass(hass)
+    coordinator = MagicMock()
+    coordinator.data = None
+    cache = MagicMock()
+    cache.async_flush = AsyncMock()
+    runtime = HomeAssistantRuntime(
+        hass,
+        entry,
+        coordinator,
+        mock_suno_client,
+        cache,
+        MagicMock(),
+    )
+    await runtime.async_unload()
+    new_options = {
+        **old_options,
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+    }
+    hass.config_entries.async_update_entry(entry, options=new_options)
+
+    with (
+        patch_suno_setup(mock_suno_client),
+        patch(
+            "custom_components.suno.download.SunoDownloadManager.async_cleanup_disabled_downloads",
+            new_callable=AsyncMock,
+        ) as cleanup,
+    ):
+        await runtime._async_setup_downloaded_library()
+
+    cleanup.assert_awaited_once_with(new_options, old_options)

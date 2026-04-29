@@ -121,11 +121,13 @@ def mock_suno_client() -> AsyncMock:
     client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
     client.get_credits = AsyncMock(return_value=sample_credits())
     client.get_clip_parent_raw = AsyncMock(return_value=None)
+    client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-aaa-111.wav")
+    client.request_wav = AsyncMock()
     return client
 
 
 @contextmanager
-def patch_suno_setup(mock_client: AsyncMock, module: str = "custom_components.suno"):
+def patch_suno_setup(mock_client: AsyncMock, module: str = "custom_components.suno.runtime"):
     """Patch both ClerkAuth and SunoClient for setup tests."""
     mock_auth = mock_client._auth
     with (

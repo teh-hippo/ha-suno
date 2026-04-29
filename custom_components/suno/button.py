@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import SunoConfigEntry
 from .const import CONF_DOWNLOAD_PATH
 from .coordinator import SunoCoordinator
+from .runtime import HomeAssistantRuntime
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -23,8 +24,9 @@ class _SunoButton(CoordinatorEntity[SunoCoordinator], ButtonEntity):
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry, *, key: str) -> None:
-        super().__init__(coordinator)
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry, *, key: str) -> None:
+        super().__init__(runtime.coordinator)
+        self._runtime = runtime
         self._attr_unique_id = f"{entry.unique_id}_{key}"
         self._entry = entry
 
@@ -36,28 +38,24 @@ class _SunoButton(CoordinatorEntity[SunoCoordinator], ButtonEntity):
 class SunoClearCacheButton(_SunoButton):
     _attr_translation_key = "clear_cache"
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, key="clear_cache")
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry) -> None:
+        super().__init__(runtime, entry, key="clear_cache")
 
     async def async_press(self) -> None:
-        if self.coordinator.cache:
-            await self.coordinator.cache.async_clear()
-            _LOGGER.info("Suno audio cache cleared")
+        await self._runtime.async_clear_cache()
+        _LOGGER.info("Suno audio cache cleared")
 
 
 class SunoDownloadLibraryButton(_SunoButton):
     _attr_translation_key = "sync_library"
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, coordinator: SunoCoordinator, entry: SunoConfigEntry) -> None:
-        super().__init__(coordinator, entry, key="sync_library")
+    def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry) -> None:
+        super().__init__(runtime, entry, key="sync_library")
 
     async def async_press(self) -> None:
-        if self.coordinator.download_manager:
-            await self.coordinator.download_manager.async_download(
-                dict(self._entry.options), self.coordinator.client, force=True
-            )
-            _LOGGER.info("Suno library download triggered")
+        await self._runtime.async_force_download()
+        _LOGGER.info("Suno library download triggered")
 
 
 async def async_setup_entry(
@@ -65,8 +63,8 @@ async def async_setup_entry(
     entry: SunoConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: SunoCoordinator = entry.runtime_data
-    entities: list[ButtonEntity] = [SunoClearCacheButton(coordinator, entry)]
+    runtime: HomeAssistantRuntime = entry.runtime_data
+    entities: list[ButtonEntity] = [SunoClearCacheButton(runtime, entry)]
     if entry.options.get(CONF_DOWNLOAD_PATH):
-        entities.append(SunoDownloadLibraryButton(coordinator, entry))
+        entities.append(SunoDownloadLibraryButton(runtime, entry))
     async_add_entities(entities)

@@ -8,7 +8,9 @@ from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant
 
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
+from custom_components.suno.downloaded_library import DownloadedLibraryStatus
 from custom_components.suno.models import SunoCredits
+from custom_components.suno.runtime import HomeAssistantRuntime
 from custom_components.suno.sensor import (
     _SYNC_SENSORS,
     SunoDownloadStatusSensor,
@@ -112,21 +114,42 @@ async def test_sensor_unique_ids(hass: HomeAssistant, mock_suno_client: AsyncMoc
 
 
 def _make_sync_sensor(sensor_cls, dm_mock=None, **kwargs):
-    """Create a library sync sensor with a mocked coordinator."""
+    """Create a library sync sensor with a mocked Home Assistant Runtime."""
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.download_manager = dm_mock
     coordinator.data = SunoData()
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.coordinator = coordinator
+    runtime.suno_library = SunoData()
+    runtime.downloads_enabled = dm_mock is not None
+    runtime.download_status = _download_status_from_mock(dm_mock)
     entry = make_entry()
     if sensor_cls is _SimpleSensor:
         sensor = _SimpleSensor.__new__(_SimpleSensor)
         sensor.coordinator = coordinator
+        sensor._runtime = runtime
         sensor._entry = entry
         sensor._value_fn = kwargs["value_fn"]
     else:
         sensor = sensor_cls.__new__(sensor_cls)
         sensor.coordinator = coordinator
+        sensor._runtime = runtime
         sensor._entry = entry
     return sensor
+
+
+def _download_status_from_mock(dm_mock) -> DownloadedLibraryStatus:
+    if dm_mock is None:
+        return DownloadedLibraryStatus()
+    return DownloadedLibraryStatus(
+        running=bool(getattr(dm_mock, "is_running", False)),
+        pending=int(getattr(dm_mock, "pending", 0)),
+        errors=int(getattr(dm_mock, "errors", 0)),
+        last_result=str(getattr(dm_mock, "last_result", "")),
+        last_download=getattr(dm_mock, "last_download", None),
+        file_count=int(getattr(dm_mock, "total_files", 0)),
+        size_mb=float(getattr(dm_mock, "library_size_mb", 0.0)),
+        source_breakdown=dict(getattr(dm_mock, "source_breakdown", {})),
+    )
 
 
 def test_sync_status_idle_when_no_dm() -> None:
@@ -257,35 +280,35 @@ def test_library_files_breakdown_returns_source_counts() -> None:
     """library_files attr_fn returns source counts from download manager."""
     dm = MagicMock()
     dm.source_breakdown = {"liked": 10, "latest": 50, "playlist:abc": 5}
-    coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.download_manager = dm
-    assert _library_files_breakdown(coordinator) == {"liked": 10, "latest": 50, "playlist:abc": 5}
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.download_status = _download_status_from_mock(dm)
+    assert _library_files_breakdown(runtime) == {"liked": 10, "latest": 50, "playlist:abc": 5}
 
 
 def test_library_files_breakdown_empty_when_no_dm() -> None:
     """Returns empty dict when download_manager is None."""
-    coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.download_manager = None
-    assert _library_files_breakdown(coordinator) == {}
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.download_status = DownloadedLibraryStatus()
+    assert _library_files_breakdown(runtime) == {}
 
 
 def test_parse_last_sync_returns_datetime() -> None:
     """Parses ISO string to datetime."""
     from datetime import datetime
 
-    coordinator = MagicMock(spec=SunoCoordinator)
     dm = MagicMock()
     dm.last_download = "2026-03-22T10:00:00+00:00"
-    coordinator.download_manager = dm
-    result = _parse_last_sync(coordinator)
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.download_status = _download_status_from_mock(dm)
+    result = _parse_last_sync(runtime)
     assert isinstance(result, datetime)
 
 
 def test_parse_last_sync_none_when_no_dm() -> None:
     """Returns None when download_manager is None."""
-    coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.download_manager = None
-    assert _parse_last_sync(coordinator) is None
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.download_status = DownloadedLibraryStatus()
+    assert _parse_last_sync(runtime) is None
 
 
 def test_last_sync_has_no_state_class() -> None:
@@ -346,14 +369,15 @@ def test_cache_size_sensor_exposes_cached_files_attr() -> None:
     """When cache is present, extra_state_attributes includes cached_files."""
     from custom_components.suno.sensor import SunoCacheSizeSensor
 
-    coordinator = MagicMock(spec=SunoCoordinator)
     mock_cache = MagicMock()
     mock_cache.file_count = 42
-    coordinator.cache = mock_cache
-    coordinator.data = SunoData()
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.coordinator = MagicMock(spec=SunoCoordinator)
+    runtime.cache_file_count = mock_cache.file_count
 
     sensor = SunoCacheSizeSensor.__new__(SunoCacheSizeSensor)
-    sensor.coordinator = coordinator
+    sensor.coordinator = runtime.coordinator
+    sensor._runtime = runtime
     attrs = sensor.extra_state_attributes
     assert attrs["cached_files"] == 42
 
@@ -365,19 +389,20 @@ async def test_cache_size_sensor_async_update() -> None:
     """async_update calls cache.async_size_mb() and updates native value."""
     from custom_components.suno.sensor import SunoCacheSizeSensor
 
-    coordinator = MagicMock(spec=SunoCoordinator)
     mock_cache = AsyncMock()
     mock_cache.async_size_mb = AsyncMock(return_value=12.3)
-    coordinator.cache = mock_cache
-    coordinator.data = SunoData()
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.coordinator = MagicMock(spec=SunoCoordinator)
+    runtime.async_cache_size_mb = AsyncMock(return_value=12.3)
 
     sensor = SunoCacheSizeSensor.__new__(SunoCacheSizeSensor)
-    sensor.coordinator = coordinator
+    sensor.coordinator = runtime.coordinator
+    sensor._runtime = runtime
     sensor._cached_size = 0.0
 
     await sensor.async_update()
 
-    mock_cache.async_size_mb.assert_awaited_once()
+    runtime.async_cache_size_mb.assert_awaited_once()
     assert sensor.native_value == 12.3
 
 
@@ -386,11 +411,11 @@ async def test_cache_size_sensor_async_update() -> None:
 
 def test_parse_last_sync_malformed_timestamp() -> None:
     """Malformed ISO string returns None instead of crashing."""
-    coordinator = MagicMock(spec=SunoCoordinator)
     dm = MagicMock()
     dm.last_download = "not-a-timestamp"
-    coordinator.download_manager = dm
-    result = _parse_last_sync(coordinator)
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.download_status = _download_status_from_mock(dm)
+    result = _parse_last_sync(runtime)
     assert result is None
 
 

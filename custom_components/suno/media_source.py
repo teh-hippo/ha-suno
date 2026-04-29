@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import timedelta
 
 from homeassistant.components.http.auth import async_sign_path
@@ -12,8 +11,6 @@ from homeassistant.core import HomeAssistant
 
 from . import SunoConfigEntry
 from .const import (
-    CONF_QUALITY_LIKED,
-    CONF_QUALITY_PLAYLISTS,
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
@@ -24,10 +21,9 @@ from .const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from .coordinator import SunoCoordinator, SunoData
 from .models import SunoClip
+from .runtime import HomeAssistantRuntime, iter_entry_runtimes
 
-_LOGGER = logging.getLogger(__name__)
 _CHUNK_SIZE = 50
 
 
@@ -74,40 +70,22 @@ class SunoMediaSource(MediaSource):
         super().__init__(DOMAIN)
         self.hass = hass
 
-    def _get_entry_and_coordinator(self) -> tuple[SunoConfigEntry, SunoCoordinator] | None:
-        """Find the active Suno config entry and its coordinator."""
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if hasattr(entry, "runtime_data") and entry.runtime_data is not None:
-                return entry, entry.runtime_data
+    def _get_entry_and_runtime(self) -> tuple[SunoConfigEntry, HomeAssistantRuntime] | None:
+        """Find the active Suno config entry and its runtime."""
+        for entry, runtime in iter_entry_runtimes(self.hass):
+            return entry, runtime
         return None
 
-    def _get_clip_quality(self, clip: SunoClip, entry: SunoConfigEntry, coordinator: SunoCoordinator) -> str:
+    def _get_clip_quality(self, clip: SunoClip, _entry: SunoConfigEntry, runtime: HomeAssistantRuntime) -> str:
         """Determine quality for a clip based on source membership."""
-        opts = entry.options
-        if opts.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
-            if opts.get(CONF_QUALITY_LIKED, QUALITY_HIGH) == QUALITY_HIGH:
-                if clip.is_liked or any(c.id == clip.id for c in coordinator.data.liked_clips):
-                    return QUALITY_HIGH
-        if opts.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS):
-            if opts.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH) == QUALITY_HIGH:
-                for pl_clips in coordinator.data.playlist_clips.values():
-                    if any(c.id == clip.id for c in pl_clips):
-                        return QUALITY_HIGH
-        # Clips not in a FLAC source default to standard (MP3).
-        # "Latest" membership is expensive to check and not worth computing per-resolve.
-        return QUALITY_STANDARD
+        return runtime.quality_for_clip(clip)
 
-    def _find_clip_entry(self, clip_id: str) -> tuple[SunoConfigEntry, SunoCoordinator, SunoClip] | None:
+    def _find_clip_entry(self, clip_id: str) -> tuple[SunoConfigEntry, HomeAssistantRuntime, SunoClip] | None:
         """Find which entry owns a specific clip by searching all loaded entries."""
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
-                continue
-            coordinator: SunoCoordinator = entry.runtime_data
-            clip = next((c for c in coordinator.data.clips if c.id == clip_id), None)
-            if not clip:
-                clip = next((c for c in coordinator.data.liked_clips if c.id == clip_id), None)
+        for entry, runtime in iter_entry_runtimes(self.hass):
+            clip = runtime.find_clip(clip_id)
             if clip:
-                return entry, coordinator, clip
+                return entry, runtime, clip
         return None
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
@@ -118,10 +96,10 @@ class SunoMediaSource(MediaSource):
         clip_id = identifier.removeprefix("clip/")
         result = self._find_clip_entry(clip_id)
         if result:
-            entry, coordinator, clip = result
-            quality = self._get_clip_quality(clip, entry, coordinator)
+            entry, runtime, clip = result
+            quality = self._get_clip_quality(clip, entry, runtime)
         else:
-            if not self._get_entry_and_coordinator():
+            if not self._get_entry_and_runtime():
                 raise BrowseError("Suno integration not configured")
             quality = QUALITY_STANDARD
         ext = "flac" if quality == QUALITY_HIGH else "mp3"
@@ -132,31 +110,31 @@ class SunoMediaSource(MediaSource):
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the Suno library."""
-        if not (result := self._get_entry_and_coordinator()):
+        if not (result := self._get_entry_and_runtime()):
             return _folder("", "Suno", [])
-        entry, coordinator = result
+        entry, runtime = result
         identifier = item.identifier or ""
         ct = "audio/mpeg"
         if not identifier:
-            return await self._browse_root(entry, coordinator)
+            return await self._browse_root(entry, runtime)
         if identifier == "liked":
-            return self._browse_liked(coordinator, ct)
+            return self._browse_liked(runtime, ct)
         if identifier == "my_songs":
-            return await self._browse_my_songs(coordinator, ct)
+            return await self._browse_my_songs(runtime, ct)
         if identifier == "playlists":
-            return self._browse_playlists(coordinator)
+            return self._browse_playlists(runtime)
         if identifier.startswith("playlist/"):
-            return await self._browse_playlist(coordinator, identifier.removeprefix("playlist/"), ct)
+            return await self._browse_playlist(runtime, identifier.removeprefix("playlist/"), ct)
         if identifier == "all":
-            return self._browse_all(coordinator, ct)
+            return self._browse_all(runtime, ct)
         if identifier.startswith("all/page/"):
-            return self._browse_all_page(coordinator, int(identifier.removeprefix("all/page/")), ct)
+            return self._browse_all_page(runtime, int(identifier.removeprefix("all/page/")), ct)
         return _folder("", "Suno", [])
 
-    async def _browse_root(self, entry: SunoConfigEntry, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    async def _browse_root(self, entry: SunoConfigEntry, runtime: HomeAssistantRuntime) -> BrowseMediaSource:
         """Build the root media browser view."""
         children: list[BrowseMediaSource] = []
-        data: SunoData = coordinator.data
+        data = runtime.suno_library
         if entry.options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED):
             children.append(_folder("liked", f"Liked Songs ({len(data.liked_clips)})"))
         if entry.options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS):
@@ -166,36 +144,36 @@ class SunoMediaSource(MediaSource):
         children.append(_folder("all", f"All Songs ({len(data.clips)})"))
         return _folder("", "Suno", children)
 
-    def _browse_liked(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    def _browse_liked(self, runtime: HomeAssistantRuntime, ct: str) -> BrowseMediaSource:
         """Show liked songs."""
-        liked = coordinator.data.liked_clips
+        liked = runtime.suno_library.liked_clips
         return _folder("liked", f"Liked Songs ({len(liked)})", [_clip_to_media(c, ct) for c in liked])
 
-    async def _browse_my_songs(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    async def _browse_my_songs(self, runtime: HomeAssistantRuntime, ct: str) -> BrowseMediaSource:
         """Show user's songs from the cached library, sorted by newest first."""
-        clips = sorted(coordinator.data.clips, key=lambda c: c.created_at or "", reverse=True)[:20]
+        clips = sorted(runtime.suno_library.clips, key=lambda c: c.created_at or "", reverse=True)[:20]
         children = [_clip_to_media(c, ct) for c in clips]
         return _folder("my_songs", f"My Songs ({len(children)})", children)
 
-    def _browse_playlists(self, coordinator: SunoCoordinator) -> BrowseMediaSource:
+    def _browse_playlists(self, runtime: HomeAssistantRuntime) -> BrowseMediaSource:
         """Show playlist folders."""
-        data = coordinator.data
+        data = runtime.suno_library
         return _folder(
             "playlists",
             f"Playlists ({len(data.playlists)})",
             [_folder(f"playlist/{pl.id}", f"{pl.name} ({pl.num_clips})") for pl in data.playlists],
         )
 
-    async def _browse_playlist(self, coordinator: SunoCoordinator, playlist_id: str, ct: str) -> BrowseMediaSource:
+    async def _browse_playlist(self, runtime: HomeAssistantRuntime, playlist_id: str, ct: str) -> BrowseMediaSource:
         """Show songs in a specific playlist."""
-        clips = coordinator.data.playlist_clips.get(playlist_id, [])
-        name = next((pl.name for pl in coordinator.data.playlists if pl.id == playlist_id), "Playlist")
+        clips = runtime.suno_library.playlist_clips.get(playlist_id, [])
+        name = next((pl.name for pl in runtime.suno_library.playlists if pl.id == playlist_id), "Playlist")
         children = [_clip_to_media(c, ct) for c in clips]
         return _folder(f"playlist/{playlist_id}", f"{name} ({len(children)})", children)
 
-    def _browse_all(self, coordinator: SunoCoordinator, ct: str) -> BrowseMediaSource:
+    def _browse_all(self, runtime: HomeAssistantRuntime, ct: str) -> BrowseMediaSource:
         """Show all songs, chunked into virtual folders if large."""
-        data, total = coordinator.data, len(coordinator.data.clips)
+        data, total = runtime.suno_library, len(runtime.suno_library.clips)
         if total <= _CHUNK_SIZE:
             return _folder("all", f"All Songs ({total})", [_clip_to_media(c, ct) for c in data.clips])
         folders = [
@@ -204,11 +182,11 @@ class SunoMediaSource(MediaSource):
         ]
         return _folder("all", f"All Songs ({total})", folders)
 
-    def _browse_all_page(self, coordinator: SunoCoordinator, page: int, ct: str) -> BrowseMediaSource:
+    def _browse_all_page(self, runtime: HomeAssistantRuntime, page: int, ct: str) -> BrowseMediaSource:
         """Show a chunk of all songs."""
-        start, end = page * _CHUNK_SIZE, min((page + 1) * _CHUNK_SIZE, len(coordinator.data.clips))
+        start, end = page * _CHUNK_SIZE, min((page + 1) * _CHUNK_SIZE, len(runtime.suno_library.clips))
         return _folder(
             f"all/page/{page}",
             f"Songs {start + 1}-{end}",
-            [_clip_to_media(c, ct) for c in coordinator.data.clips[start:end]],
+            [_clip_to_media(c, ct) for c in runtime.suno_library.clips[start:end]],
         )

@@ -13,23 +13,26 @@ from custom_components.suno.button import (
 )
 from custom_components.suno.const import CONF_DOWNLOAD_PATH
 from custom_components.suno.coordinator import SunoCoordinator, SunoData
+from custom_components.suno.runtime import HomeAssistantRuntime
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
 
 # ── Unit tests for button press handlers ──────────────────────────
 
 
-def _make_button(cls, *, cache=None, download_manager=None, options=None):
-    """Create a button with a mocked coordinator, bypassing __init__."""
+def _make_button(cls, *, options=None):
+    """Create a button with a mocked Home Assistant Runtime, bypassing __init__."""
     coordinator = MagicMock(spec=SunoCoordinator)
-    coordinator.cache = cache
-    coordinator.download_manager = download_manager
-    coordinator.client = MagicMock()
     coordinator.data = SunoData()
+    runtime = MagicMock(spec=HomeAssistantRuntime)
+    runtime.coordinator = coordinator
+    runtime.async_clear_cache = AsyncMock()
+    runtime.async_force_download = AsyncMock()
 
     entry = make_entry(options=options)
     button = cls.__new__(cls)
     button.coordinator = coordinator
+    button._runtime = runtime
     button._entry = entry
     return button
 
@@ -37,41 +40,37 @@ def _make_button(cls, *, cache=None, download_manager=None, options=None):
 @pytest.mark.asyncio
 async def test_clear_cache_press_calls_async_clear() -> None:
     """SunoClearCacheButton.async_press calls cache.async_clear()."""
-    mock_cache = MagicMock()
-    mock_cache.async_clear = AsyncMock()
-    button = _make_button(SunoClearCacheButton, cache=mock_cache)
+    button = _make_button(SunoClearCacheButton)
 
     await button.async_press()
 
-    mock_cache.async_clear.assert_awaited_once()
+    button._runtime.async_clear_cache.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_clear_cache_press_no_cache() -> None:
-    """async_press does nothing when coordinator.cache is None."""
-    button = _make_button(SunoClearCacheButton, cache=None)
-    await button.async_press()  # should not raise
+    """async_press delegates no-op handling to the runtime."""
+    button = _make_button(SunoClearCacheButton)
+    await button.async_press()
+    button._runtime.async_clear_cache.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_sync_library_press_calls_async_download() -> None:
     """SunoDownloadLibraryButton.async_press calls download_manager.async_download(force=True)."""
-    dm = MagicMock()
-    dm.async_download = AsyncMock()
-    button = _make_button(SunoDownloadLibraryButton, download_manager=dm)
+    button = _make_button(SunoDownloadLibraryButton)
 
     await button.async_press()
 
-    dm.async_download.assert_awaited_once()
-    call_kwargs = dm.async_download.call_args
-    assert call_kwargs.kwargs.get("force") is True or call_kwargs[1].get("force") is True
+    button._runtime.async_force_download.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_sync_library_press_no_dm() -> None:
-    """async_press does nothing when coordinator.download_manager is None."""
-    button = _make_button(SunoDownloadLibraryButton, download_manager=None)
-    await button.async_press()  # should not raise
+    """async_press delegates no-op handling to the runtime."""
+    button = _make_button(SunoDownloadLibraryButton)
+    await button.async_press()
+    button._runtime.async_force_download.assert_awaited_once()
 
 
 # ── Integration tests for platform setup ──────────────────────────
