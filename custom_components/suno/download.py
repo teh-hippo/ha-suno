@@ -375,13 +375,15 @@ def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | No
     derivatives (e.g. inpaint edits) keep their own title as the album so
     independent works don't get mis-grouped under an unrelated parent.
     """
+    if clip.album_title:
+        return clip.album_title
     if not clip.is_remix:
         return None
     root_id = clip.root_ancestor_id
     if not root_id or root_id == clip.id:
         return None
     if (root_clip := clip_index.get(root_id)) is None:
-        return None
+        return f"Remixes of {root_id[:8]}"
     return root_clip.title
 
 

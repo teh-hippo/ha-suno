@@ -120,6 +120,7 @@ def mock_suno_client() -> AsyncMock:
     client.get_playlists = AsyncMock(return_value=sample_playlists())
     client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
     client.get_credits = AsyncMock(return_value=sample_credits())
+    client.get_clip_parent_raw = AsyncMock(return_value=None)
     return client
 
 

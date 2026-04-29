@@ -55,6 +55,8 @@ class SunoClip:
     is_remix: bool = False
     history: list[dict[str, Any]] | None = None
     root_ancestor_id: str = ""
+    lineage_status: str = ""
+    album_title: str = ""
 
     @classmethod
     def from_api_response(cls, raw: dict[str, Any]) -> SunoClip:
@@ -105,7 +107,7 @@ class SunoClip:
         return TrackMetadata(
             title=t,
             artist=artist or self.display_name or "Suno",
-            album=album or t,
+            album=album or self.album_title or t,
             album_artist=self.display_name or "Suno",
             date=self.created_at[:10] if self.created_at else "",
             lyrics=self.prompt,
@@ -133,6 +135,10 @@ class SunoClip:
             parts.append(f"Remix of {self.edited_clip_id[:8]}")
         elif self.edited_clip_id:
             parts.append(f"Derived from {self.edited_clip_id[:8]}")
+        if self.lineage_status == "unavailable":
+            parts.append("Lineage unavailable")
+        elif self.root_ancestor_id and self.root_ancestor_id not in {self.id, self.edited_clip_id}:
+            parts.append(f"Root {self.root_ancestor_id[:8]}")
         if self.history:
             for entry in self.history:
                 parent = (entry.get("id") or "")[:8]
@@ -221,7 +227,10 @@ def clip_meta_hash(clip: SunoClip) -> str:
     cover art, lineage).
     """
     return hashlib.md5(  # noqa: S324
-        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.video_url}|{clip.root_ancestor_id}".encode()
+        (
+            f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.video_url}|"
+            f"{clip.root_ancestor_id}|{clip.lineage_status}|{clip.album_title}"
+        ).encode()
     ).hexdigest()[:12]
 
 

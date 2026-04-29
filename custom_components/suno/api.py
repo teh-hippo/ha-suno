@@ -182,9 +182,13 @@ class SunoClient:
         (no parent) or on any error.
         """
         try:
-            data = await self._api_get(f"/api/clips/parent?clip_id={clip_id}")
+            return await self.get_clip_parent_raw(clip_id)
         except Exception:
             return None
+
+    async def get_clip_parent_raw(self, clip_id: str) -> dict[str, Any] | None:
+        """Get the parent clip without swallowing transport or auth failures."""
+        data = await self._api_get(f"/api/clips/parent?clip_id={clip_id}")
         if isinstance(data, dict) and data.get("id"):
             return data
         return None

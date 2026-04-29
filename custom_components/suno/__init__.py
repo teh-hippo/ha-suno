@@ -36,7 +36,7 @@ from .const import (
     DOMAIN,
     DOWNLOAD_MODE_CACHE,
 )
-from .coordinator import SunoCoordinator
+from .coordinator import SunoCoordinator, SunoData
 from .exceptions import SunoAuthError, SunoConnectionError
 from .proxy import SunoMediaProxyView
 from .rate_limit import SunoRateLimiter
@@ -75,16 +75,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
     client = SunoClient(auth, rate_limiter=rate_limiter)
 
     coordinator = SunoCoordinator(hass, client, entry)
-    stored_data = await coordinator.async_load_stored_data()
+    try:
+        stored_data = await coordinator.async_load_stored_data()
+    except Exception:
+        _LOGGER.warning("Could not load stored Suno library", exc_info=True)
+        stored_data = None
 
     auth_ok = False
     try:
         await auth.authenticate()
         auth_ok = True
-    except SunoConnectionError as err:
-        if not stored_data:
-            raise ConfigEntryNotReady("Cannot reach Suno (no stored data)") from err
-        _LOGGER.warning("Cannot reach Suno, using stored library")
+    except SunoConnectionError:
+        message = "Cannot reach Suno, using stored library" if stored_data else "Cannot reach Suno, starting empty"
+        _LOGGER.warning(message)
     except SunoAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except Exception as err:
@@ -92,14 +95,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: SunoConfigEntry) -> bool
             raise ConfigEntryNotReady(f"Could not connect: {err}") from err
         _LOGGER.warning("Cannot reach Suno, using stored library")
 
-    if auth_ok:
-        try:
-            await coordinator.async_config_entry_first_refresh()
-        except ConfigEntryNotReady:
-            if not stored_data:
-                raise
-            _LOGGER.warning("First refresh failed, using stored library")
-            coordinator.last_update_success = False
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except ConfigEntryNotReady:
+        if not stored_data and auth_ok:
+            raise
+        message = (
+            "First refresh failed, using stored library" if stored_data else "First refresh failed, starting empty"
+        )
+        _LOGGER.warning(message)
+        coordinator.async_set_updated_data(stored_data or SunoData())
 
     entry.runtime_data = coordinator
 

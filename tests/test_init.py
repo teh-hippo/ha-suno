@@ -44,14 +44,16 @@ async def test_setup_entry_auth_failure(hass: HomeAssistant, mock_suno_client: A
     assert entry.state is ConfigEntryState.SETUP_ERROR
 
 
-async def test_setup_entry_api_failure(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Transient API failure on startup puts entry in SETUP_RETRY state."""
+async def test_setup_entry_api_failure_loads_partial_library(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """Transient section failure on startup loads a Partial Suno Library."""
     mock_suno_client.get_all_songs.side_effect = SunoApiError("Server error")
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.runtime_data.data.clips == []
+    assert "clips" in entry.runtime_data.data.stale_sections
 
 
 async def test_unload_entry(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
