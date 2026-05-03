@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v6.0.9 (2026-05-03)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`1e9a57d`](https://github.com/teh-hippo/ha-suno/commit/1e9a57da32ed7bcf0ac7b77467caf9e88161201d))
+
+### Chores
+
+- Address test warnings and dependency alerts
+  ([`22bba6b`](https://github.com/teh-hippo/ha-suno/commit/22bba6babcae80d7a90807f69d69d9196e109e8f))
+
+- Sync uv lock version
+  ([`e3e4fec`](https://github.com/teh-hippo/ha-suno/commit/e3e4fecd557f646ec17cff06f65bfe51dc2d0103))
+
+
 ## v6.0.8 (2026-04-29)
 
 ### Build System
