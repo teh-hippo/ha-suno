@@ -16,7 +16,6 @@ from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
-from pathvalidate import sanitize_filename
 
 from ..audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from ..const import (
@@ -63,6 +62,7 @@ from .contracts import (
     RenderedAudio,
     RetagResult,
 )
+from .paths import _clip_path, _safe_name, _video_clip_path
 
 if TYPE_CHECKING:
     from ..api import SunoClient
@@ -71,7 +71,6 @@ _LOGGER = logging.getLogger(__name__)
 
 STORE_VERSION = 1
 _MANIFEST_FILENAME = ".suno_download.json"
-_MAX_FILENAME_LEN = 200
 
 
 class HomeAssistantDownloadedLibraryStorage:
@@ -202,12 +201,6 @@ class HomeAssistantDownloadedLibraryAudio:
             _LOGGER.debug("Failed to download video from %s", video_url)
 
 
-def _safe_name(name: str) -> str:
-    """Sanitise a string for use as a file or directory name."""
-    safe = sanitize_filename(name, replacement_text="_")
-    return safe[:_MAX_FILENAME_LEN] if safe else "untitled"
-
-
 def _build_download_summary(
     downloaded: int, removed: int, meta_updates: int, renamed: int = 0, retagged: int = 0
 ) -> str:
@@ -290,23 +283,6 @@ def _write_m3u8_playlists(
     for existing in base.glob("*.m3u8"):
         if existing.name not in written:
             existing.unlink(missing_ok=True)
-
-
-def _clip_path(clip: SunoClip, quality: str) -> str:
-    """Build the relative audio file path for a clip."""
-    artist = _safe_name(clip.display_name or "Suno")
-    title = _safe_name(clip.title or "untitled")
-    clip_short = clip.id[:8]
-    ext = "flac" if quality == QUALITY_HIGH else "mp3"
-    return f"{artist}/{title}/{artist}-{title} [{clip_short}].{ext}"
-
-
-def _video_clip_path(clip: SunoClip) -> str:
-    """Build the relative music-video sidecar path for a clip."""
-    artist = _safe_name(clip.display_name or "Suno")
-    title = _safe_name(clip.title or "untitled")
-    clip_short = clip.id[:8]
-    return f"{artist}/{title}/{artist}-{title} [{clip_short}].mp4"
 
 
 def _add_clip(clip_map: dict[str, DownloadItem], clip: SunoClip, source: str, quality: str) -> None:
