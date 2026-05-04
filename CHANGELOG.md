@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v6.0.12 (2026-05-04)
+
+### Chores
+
+- Sync uv.lock after v6.0.11 release
+  ([`6d290c6`](https://github.com/teh-hippo/ha-suno/commit/6d290c6c694ca24458cdcf6fba0528caa23e6c01))
+
+### Refactoring
+
+- **downloaded_library**: Convert flat module to subpackage (slice 1/9)
+  ([`b1b193b`](https://github.com/teh-hippo/ha-suno/commit/b1b193b233b247b1f84dcd0990220b977edb13ba))
+
+- **downloaded_library**: Extract contracts.py (slice 2/9)
+  ([`1ca13f0`](https://github.com/teh-hippo/ha-suno/commit/1ca13f09ac50be051988648d52605094e008ac5b))
+
+- **downloaded_library**: Extract filesystem.py (slice 4/9)
+  ([`ee3a893`](https://github.com/teh-hippo/ha-suno/commit/ee3a893b1ec063611ed4a374c0bc12316f553f89))
+
+- **downloaded_library**: Extract m3u8.py and metadata.py (slice 6/9)
+  ([`d534eab`](https://github.com/teh-hippo/ha-suno/commit/d534eabfd9be0a1e0cd2809dd025c56dc2fc5689))
+
+- **downloaded_library**: Extract paths.py (slice 3/9)
+  ([`30b3cc2`](https://github.com/teh-hippo/ha-suno/commit/30b3cc27f4c1944829413f167c68b942e6b04716))
+
+- **downloaded_library**: Extract source_modes.py (slice 5/9)
+  ([`e830d95`](https://github.com/teh-hippo/ha-suno/commit/e830d95c8b262b175a47ff98b8920170cc21509b))
+
+- **downloaded_library**: Extract storage.py and cache_adapter.py (slice 7/7)
+  ([`fcf18a4`](https://github.com/teh-hippo/ha-suno/commit/fcf18a419249816bf333ca6120da942b23f21c0f))
+
+
 ## v6.0.11 (2026-05-04)
 
 ### Build System
