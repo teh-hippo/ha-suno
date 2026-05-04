@@ -6,17 +6,19 @@ import logging
 import shutil
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.start import async_at_started
 
 from .api import SunoClient
 from .audio import download_and_transcode_to_flac
 from .auth import ClerkAuth
+from .cache import SunoCache
 from .const import (
     CONF_CACHE_MAX_SIZE,
     CONF_COOKIE,
@@ -42,14 +44,11 @@ from .const import (
     QUALITY_STANDARD,
 )
 from .coordinator import SunoCoordinator, SunoData
+from .download import _SERVICE_DOWNLOAD, SunoDownloadManager
 from .downloaded_library import DownloadedLibraryStatus
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
-
-if TYPE_CHECKING:
-    from .cache import SunoCache
-    from .download import SunoDownloadManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,8 +132,6 @@ class HomeAssistantRuntime:
             )
             _LOGGER.warning(message)
             coordinator.async_set_updated_data(stored_data or SunoData())
-
-        from .cache import SunoCache  # noqa: PLC0415
 
         cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE))
         await cache.async_init()
@@ -321,8 +318,6 @@ class HomeAssistantRuntime:
     async def _async_setup_downloaded_library(self) -> None:
         previous_options = _pop_previous_options(self.hass, self.entry.entry_id)
         if downloaded_library_enabled(self.entry.options):
-            from .download import SunoDownloadManager  # noqa: PLC0415
-
             self._download_manager = await SunoDownloadManager.async_setup(
                 self.hass,
                 self.entry,
@@ -330,6 +325,7 @@ class HomeAssistantRuntime:
                 self._client,
                 self._cache,
             )
+            self._wire_downloaded_library_lifecycle(self._download_manager)
         elif (
             previous_options is not None
             and downloaded_library_enabled(previous_options)
@@ -339,13 +335,57 @@ class HomeAssistantRuntime:
         elif self.entry.options.get(CONF_DOWNLOAD_PATH):
             await self._async_cleanup_disabled_downloads(self.entry.options, None)
 
+    def _wire_downloaded_library_lifecycle(self, manager: SunoDownloadManager) -> None:
+        """Wire Home Assistant lifecycle hooks for an active download manager.
+
+        Lifted from ``SunoDownloadManager.async_setup`` during Phase 1.6 of the
+        download.py wrapper collapse: registration with the coordinator,
+        Home Assistant service registration, and the ``async_at_started``
+        initial-sync callback all live with the runtime that owns the entry,
+        not with the manager that does the work.
+        """
+        entry = self.entry
+        hass = self.hass
+        client = self._client
+        coordinator = self.coordinator
+
+        def _on_coordinator_update() -> None:
+            if not manager.is_running and not manager._updating_sensors:  # noqa: SLF001
+                hass.async_create_task(
+                    manager.async_download(dict(entry.options), client, coordinator_data=coordinator.data),
+                    f"suno_download_refresh_{entry.entry_id}",
+                )
+
+        entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
+
+        async def _handle_download_service(call: ServiceCall) -> None:
+            await manager.async_download(dict(entry.options), client, force=call.data.get("force", False))
+
+        if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
+            hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
+
+            def _maybe_remove_service() -> None:
+                remaining = [
+                    existing_entry
+                    for existing_entry in hass.config_entries.async_entries(DOMAIN)
+                    if existing_entry.entry_id != entry.entry_id
+                ]
+                if not remaining:
+                    hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+            entry.async_on_unload(_maybe_remove_service)
+
+        async def _on_ha_started(_event: Any) -> None:
+            _LOGGER.info("Home Assistant started - beginning initial sync")
+            await manager.async_download(dict(entry.options), client, initial=True)
+
+        async_at_started(hass, _on_ha_started)
+
     async def _async_cleanup_disabled_downloads(
         self,
         options: Mapping[str, Any],
         previous_options: Mapping[str, Any] | None,
     ) -> None:
-        from .download import SunoDownloadManager  # noqa: PLC0415
-
         manager = self._download_manager or SunoDownloadManager(self.hass, f"suno_sync_{self.entry.entry_id}")
         if manager is not self._download_manager:
             await manager.async_init()
