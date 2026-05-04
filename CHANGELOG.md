@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.14 (2026-05-04)
+
+### Build System
+
+- **renovate**: Align config with canonical baseline
+  ([`7f2da4b`](https://github.com/teh-hippo/ha-suno/commit/7f2da4b5ff41a40875a41ccb59eb9cc44016b85f))
+
+
 ## v6.0.13 (2026-05-04)
 
 ### Chores
