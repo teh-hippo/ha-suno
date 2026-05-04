@@ -17,6 +17,7 @@ from custom_components.suno.const import (
     CONF_DOWNLOAD_PATH,
     CONF_MY_SONGS_COUNT,
     CONF_MY_SONGS_DAYS,
+    CONF_MY_SONGS_MINIMUM,
     CONF_PLAYLISTS,
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
@@ -1040,6 +1041,311 @@ async def test_download_writes_through_cache(hass: HomeAssistant, tmp_path: Path
     assert args[0] == "clip-cache-0000-0000-0000-000000000000"
     assert args[1] == "flac"
     assert args[2] == b"fLaC" + b"\x00" * 50
+
+
+# ── Disk reconciliation ─────────────────────────────────────────
+
+
+async def test_reconcile_disk_removes_orphan_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Orphan .flac files not in clips_state are deleted."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    orphan = tmp_path / "2026-01-01" / "Orphan [deadbeef].flac"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"fake")
+
+    removed = await library._reconcile_disk(tmp_path, {})
+    assert removed == 1
+    assert not orphan.exists()
+
+
+async def test_reconcile_disk_keeps_tracked_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Files referenced in clips_state are not deleted."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    rel = "2026-01-01/Tracked [abcd1234].flac"
+    tracked = tmp_path / rel
+    tracked.parent.mkdir(parents=True)
+    tracked.write_bytes(b"real")
+
+    clips_state = {"clip-id": {"path": rel}}
+    removed = await library._reconcile_disk(tmp_path, clips_state)
+    assert removed == 0
+    assert tracked.exists()
+
+
+async def test_reconcile_disk_skips_non_audio(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Non-audio files (.json, .m3u8, .tmp) are left alone."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    for name in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"):
+        (tmp_path / name).write_text("x")
+
+    removed = await library._reconcile_disk(tmp_path, {})
+    assert removed == 0
+    assert all((tmp_path / n).exists() for n in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"))
+
+
+async def test_reconcile_disk_cleans_empty_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Empty parent directories are removed after orphan deletion."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    orphan = tmp_path / "2026-01-01" / "Gone [deadbeef].flac"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"bye")
+
+    removed = await library._reconcile_disk(tmp_path, {})
+    assert removed == 1
+    assert not orphan.parent.exists()
+
+
+async def test_reconcile_disk_keeps_mp4_sidecar_next_to_audio(hass: HomeAssistant, tmp_path: Path) -> None:
+    """mp4 sidecars sharing an audio file's basename are not treated as orphans."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    rel = "artist/Song/artist-Song [abcd1234].flac"
+    audio_path = tmp_path / rel
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
+    video = audio_path.with_suffix(".mp4")
+    video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    clips_state = {"abcd1234": {"path": rel}}
+    removed = await library._reconcile_disk(tmp_path, clips_state)
+    assert removed == 0
+    assert audio_path.exists()
+    assert video.exists()
+
+
+async def test_reconcile_disk_removes_orphan_mp4_in_legacy_music_videos(hass: HomeAssistant, tmp_path: Path) -> None:
+    """An orphan mp4 left behind in the legacy music-videos/ tree is cleaned up."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    legacy_video = tmp_path / "music-videos" / "artist" / "artist-Song [abcd1234].mp4"
+    legacy_video.parent.mkdir(parents=True)
+    legacy_video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    removed = await library._reconcile_disk(tmp_path, {})
+    assert removed == 1
+    assert not legacy_video.exists()
+
+
+# ── get_downloaded_path edge cases ──────────────────────────────
+
+
+async def test_get_downloaded_path_meta_hash_mismatch(hass: HomeAssistant, tmp_path: Path) -> None:
+    """meta_hash mismatch returns None to trigger re-download."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    synced_file = tmp_path / "2026-01-15" / "Song [abcd1234].flac"
+    synced_file.parent.mkdir(parents=True)
+    synced_file.write_bytes(b"fLaC")
+    library.download_path = str(tmp_path)
+    library.state = {
+        "clips": {
+            "abcd1234": {
+                "path": "2026-01-15/Song [abcd1234].flac",
+                "meta_hash": "old_hash_abc",
+            }
+        },
+    }
+    assert library.get_downloaded_path("abcd1234", meta_hash="new_hash_xyz") is None
+
+
+async def test_get_downloaded_path_matching_hash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Matching meta_hash returns the file path."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    synced_file = tmp_path / "2026-01-15" / "Song [abcd1234].flac"
+    synced_file.parent.mkdir(parents=True)
+    synced_file.write_bytes(b"fLaC")
+    library.download_path = str(tmp_path)
+    library.state = {
+        "clips": {
+            "abcd1234": {
+                "path": "2026-01-15/Song [abcd1234].flac",
+                "meta_hash": "same_hash",
+            }
+        },
+    }
+    result = library.get_downloaded_path("abcd1234", meta_hash="same_hash")
+    assert result is not None
+    assert result.name == "Song [abcd1234].flac"
+
+
+async def test_get_downloaded_path_no_download_path(hass: HomeAssistant) -> None:
+    """Returns None when download_path is empty."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.download_path = ""
+    assert library.get_downloaded_path("any-id") is None
+
+
+async def test_get_downloaded_path_clip_not_in_state(hass: HomeAssistant) -> None:
+    """Returns None when clip ID is not in state."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.download_path = "/some/path"
+    library.state = {"clips": {}}
+    assert library.get_downloaded_path("missing-id") is None
+
+
+# ── library_size_mb ─────────────────────────────────────────────
+
+
+async def test_library_size_mb_calculation(hass: HomeAssistant) -> None:
+    """library_size_mb sums file sizes and converts to MB."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.state = {
+        "clips": {
+            "c1": {"size": 1048576},  # 1 MB
+            "c2": {"size": 2097152},  # 2 MB
+            "c3": {"size": 524288},  # 0.5 MB
+        },
+    }
+    assert library.library_size_mb == 3.5
+
+
+async def test_library_size_mb_empty(hass: HomeAssistant) -> None:
+    """library_size_mb is 0.0 when no clips."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    assert library.library_size_mb == 0.0
+
+
+async def test_library_size_mb_missing_size(hass: HomeAssistant) -> None:
+    """Clips without 'size' key contribute 0."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.state = {
+        "clips": {
+            "c1": {"path": "song.flac"},  # no size key
+            "c2": {"size": 1048576},
+        },
+    }
+    assert library.library_size_mb == 1.0
+
+
+# ── source enable / path skip ───────────────────────────────────
+
+
+async def test_build_desired_skips_disabled_source(hass: HomeAssistant) -> None:
+    """show_liked=False excludes liked clips from desired set."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    clip = _clip("clip-liked-1", "Liked Song")
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    plan = library.build_desired(options, SunoData(liked_clips=[clip]))
+    assert len(plan.items) == 0
+
+
+async def test_async_reconcile_empty_path_skips_work(hass: HomeAssistant) -> None:
+    """download_path='' means no downloads happen."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip("clip-empty-1", "Liked Song")
+    await library.async_reconcile({CONF_DOWNLOAD_PATH: ""}, SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert library.total_files == 0
+
+
+# ── My songs minimum padding ────────────────────────────────────
+
+
+async def test_my_songs_minimum_pads_when_below_floor(hass: HomeAssistant) -> None:
+    """Minimum pads with most recent clips when intersection is below threshold."""
+    from datetime import timedelta
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    now = datetime.now(tz=UTC)
+    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [_make_dated_clip(f"clip-new-{i}", created=recent_ts) for i in range(3)] + [
+        _make_dated_clip(f"clip-old-{i}", created=old_ts) for i in range(7)
+    ]
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 7,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 7
+
+
+async def test_my_songs_minimum_disabled_when_zero(hass: HomeAssistant) -> None:
+    """Minimum=0 has no effect."""
+    from datetime import timedelta
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    now = datetime.now(tz=UTC)
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [_make_dated_clip(f"clip-{i}", created=old_ts) for i in range(5)]
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: 3,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 0,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 0
+
+
+async def test_my_songs_minimum_alone_triggers_my_songs(hass: HomeAssistant) -> None:
+    """Minimum works when count=None and days=None (both filters disabled)."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    clips = [_make_dated_clip(f"clip-{i}") for i in range(10)]
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+        CONF_MY_SONGS_MINIMUM: 5,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 5
+
+
+async def test_my_songs_minimum_capped_by_library_size(hass: HomeAssistant) -> None:
+    """Minimum can't exceed available clips."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    clips = [_make_dated_clip(f"clip-{i}") for i in range(3)]
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+        CONF_MY_SONGS_MINIMUM: 100,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 3
+
+
+async def test_my_songs_minimum_overrides_expired_days(hass: HomeAssistant) -> None:
+    """Minimum pads even when all clips are outside lookback period."""
+    from datetime import timedelta
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    now = datetime.now(tz=UTC)
+    old_ts = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [_make_dated_clip(f"clip-{i}", created=old_ts) for i in range(8)]
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: 7,
+        CONF_MY_SONGS_MINIMUM: 5,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 5
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
