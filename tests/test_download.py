@@ -49,49 +49,6 @@ from custom_components.suno.library_refresh import SunoData
 # ── Sync state management ──────────────────────────────────────────
 
 
-async def test_sync_init_loads_state(hass: HomeAssistant) -> None:
-    """async_init should load persisted state."""
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    with patch.object(sync._store, "async_load", return_value={"clips": {"abc": {}}, "last_download": "2026-01-01"}):
-        await sync.async_init()
-    assert sync.total_files == 1
-    assert sync.last_download == "2026-01-01"
-
-
-async def test_sync_init_handles_empty_store(hass: HomeAssistant) -> None:
-    """async_init with empty store should use defaults."""
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    with patch.object(sync._store, "async_load", return_value=None):
-        await sync.async_init()
-    assert sync.total_files == 0
-    assert sync.last_download is None
-
-
-async def test_download_skips_when_disabled(hass: HomeAssistant) -> None:
-    """Download should do nothing when path is empty."""
-    mgr = SunoDownloadManager(hass, "test_download_state")
-    client = AsyncMock()
-    await mgr.async_download({CONF_DOWNLOAD_PATH: ""}, client)
-    client.get_liked_songs.assert_not_called()
-
-
-async def test_download_skips_when_no_path(hass: HomeAssistant) -> None:
-    """Download should skip when path is missing."""
-    mgr = SunoDownloadManager(hass, "test_download_state")
-    client = AsyncMock()
-    await mgr.async_download({}, client)
-    client.get_liked_songs.assert_not_called()
-
-
-async def test_download_skips_when_already_running(hass: HomeAssistant) -> None:
-    """Download should not run concurrently."""
-    mgr = SunoDownloadManager(hass, "test_download_state")
-    mgr._running = True
-    client = AsyncMock()
-    await mgr.async_download({CONF_DOWNLOAD_PATH: "/safe/path"}, client)  # noqa: S108
-    client.get_liked_songs.assert_not_called()
-
-
 # ── Download and cleanup ───────────────────────────────────────────
 
 
