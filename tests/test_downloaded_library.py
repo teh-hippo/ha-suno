@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -523,6 +524,87 @@ async def test_write_file_failure_cleans_tmp(hass: HomeAssistant, tmp_path: Path
 
     assert not target.with_suffix(".tmp").exists()
     assert not target.exists()
+
+
+# ── Reconcile happy path / orphan / manifest ────────────────────
+
+
+async def test_async_reconcile_downloads_new_clips(hass: HomeAssistant, tmp_path: Path) -> None:
+    """async_reconcile downloads clips not yet in state."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    suno_data = SunoData(liked_clips=[_clip("clip-new-0000-0000-0000-000000000000", "Test Song")])
+    opts = {
+        CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+        CONF_SHOW_LIKED: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+    }
+    await library.async_reconcile(opts, suno_data)
+
+    assert library.total_files == 1
+    assert library.errors == 0
+
+
+async def test_async_reconcile_deletes_orphaned_clips(hass: HomeAssistant, tmp_path: Path) -> None:
+    """async_reconcile deletes files for clips no longer in desired set."""
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    orphan = sync_dir / "old-file.flac"
+    orphan.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                "orphan-id": {
+                    "path": "old-file.flac",
+                    "title": "Old Song",
+                    "created": "2026-01-01",
+                    "sources": ["liked"],
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+    assert library.total_files == 1
+
+    opts = {
+        CONF_DOWNLOAD_PATH: str(sync_dir),
+        CONF_SHOW_LIKED: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+    }
+    await library.async_reconcile(opts, SunoData())
+
+    assert library.total_files == 0
+    assert not orphan.exists()
+
+
+async def test_async_reconcile_writes_manifest(hass: HomeAssistant, tmp_path: Path) -> None:
+    """async_reconcile writes the .suno_download.json manifest into the download dir."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
+    await library.async_load()
+
+    sync_dir = tmp_path / "mirror"
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(),
+    )
+
+    manifest = sync_dir / ".suno_download.json"
+    assert manifest.exists()
+    data = json.loads(manifest.read_text())
+    assert "last_download" in data
+    assert "clips" in data
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
