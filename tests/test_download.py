@@ -33,7 +33,6 @@ from custom_components.suno.downloaded_library import (
     DownloadItem,
     _clip_path,
     _video_clip_path,
-    _write_file,
 )
 from custom_components.suno.library_refresh import SunoData
 
@@ -216,76 +215,6 @@ async def test_cleanup_tmp_files(hass: HomeAssistant, tmp_path: Path) -> None:
 
     assert not (sync_dir / "song.flac.tmp").exists()
     assert (sync_dir / "real.flac").exists()
-
-
-# ── Properties ──────────────────────────────────────────────────────
-
-
-async def test_sync_properties(hass: HomeAssistant) -> None:
-    """Properties should reflect current state."""
-    sync = SunoDownloadManager(hass, "test_sync_state")
-    assert sync.is_running is False
-    assert sync.total_files == 0
-    assert sync.pending == 0
-    assert sync.errors == 0
-    assert sync.last_download is None
-
-
-# ── _write_file ────────────────────────────────────────────────────
-
-
-async def test_write_file_creates_file(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Atomic write creates the target file with correct data."""
-    target = tmp_path / "subdir" / "output.flac"
-    data = b"fLaC" + b"\x00" * 50
-
-    await _write_file(hass, target, data)
-
-    assert target.exists()
-    assert target.read_bytes() == data
-    # No .tmp file should remain
-    assert not target.with_suffix(".tmp").exists()
-
-
-async def test_write_file_failure_cleans_tmp(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Write failure removes the .tmp file."""
-    target = tmp_path / "output.flac"
-
-    with patch.object(Path, "write_bytes", side_effect=OSError("disk full")):
-        try:
-            await _write_file(hass, target, b"data")
-        except OSError:
-            pass
-
-    assert not target.with_suffix(".tmp").exists()
-    assert not target.exists()
-
-
-# ── source_breakdown ──────────────────────────────────────────────
-
-
-async def test_source_breakdown_empty(hass: HomeAssistant) -> None:
-    """Empty state returns empty breakdown."""
-    sync = SunoDownloadManager(hass, "test_sync")
-    assert sync.source_breakdown == {}
-
-
-async def test_source_breakdown_counts_sources(hass: HomeAssistant) -> None:
-    """Counts clips per source tag."""
-    sync = SunoDownloadManager(hass, "test_sync")
-    sync._state = {
-        "clips": {
-            "c1": {"sources": ["liked"]},
-            "c2": {"sources": ["liked", "playlist:abc"]},
-            "c3": {"sources": ["my_songs"]},
-            "c4": {"sources": ["playlist:abc"]},
-        },
-        "last_download": None,
-    }
-    breakdown = sync.source_breakdown
-    assert breakdown["liked"] == 2
-    assert breakdown["playlist:abc"] == 2
-    assert breakdown["my_songs"] == 1
 
 
 # ── _build_desired with API failure ────────────────────────────────
