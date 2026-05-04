@@ -22,9 +22,6 @@ from ..const import (
     CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
     CONF_CREATE_PLAYLISTS,
-    CONF_DOWNLOAD_MODE_LIKED,
-    CONF_DOWNLOAD_MODE_MY_SONGS,
-    CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
     CONF_MY_SONGS_COUNT,
     CONF_MY_SONGS_DAYS,
@@ -37,7 +34,6 @@ from ..const import (
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
     DEFAULT_ALL_PLAYLISTS,
-    DEFAULT_DOWNLOAD_MODE,
     DEFAULT_MY_SONGS_COUNT,
     DEFAULT_MY_SONGS_DAYS,
     DEFAULT_MY_SONGS_MINIMUM,
@@ -46,7 +42,6 @@ from ..const import (
     DEFAULT_SHOW_PLAYLISTS,
     DOWNLOAD_MODE_ARCHIVE,
     DOWNLOAD_MODE_CACHE,
-    DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
@@ -70,6 +65,12 @@ from .filesystem import (
     _write_track_sidecar,
 )
 from .paths import _clip_path, _safe_name, _video_clip_path
+from .source_modes import (
+    _entry_source_modes,
+    _get_source_mode,
+    _source_modes_for,
+    _source_preserves_files,
+)
 
 if TYPE_CHECKING:
     from ..api import SunoClient
@@ -323,50 +324,6 @@ def _preserve_source(
                 clip_map[clip_id].sources.append(source)
         else:
             preserved.add(clip_id)
-
-
-_SOURCE_MODE_KEYS: dict[str, str] = {
-    "liked": CONF_DOWNLOAD_MODE_LIKED,
-    "my_songs": CONF_DOWNLOAD_MODE_MY_SONGS,
-}
-
-
-def _get_source_mode(source: str, options: Mapping[str, Any]) -> str:
-    """Return the configured download mode for a source tag."""
-    if source.startswith("playlist:"):
-        key: str | None = CONF_DOWNLOAD_MODE_PLAYLISTS
-    else:
-        key = _SOURCE_MODE_KEYS.get(source)
-    if key is None:
-        return DOWNLOAD_MODE_MIRROR
-    return str(options.get(key, DEFAULT_DOWNLOAD_MODE))
-
-
-def _source_preserves_files(source: str, options: Mapping[str, Any]) -> bool:
-    """Return True if the source mode keeps files permanently."""
-    return _get_source_mode(source, options) == DOWNLOAD_MODE_ARCHIVE
-
-
-def _source_modes_for(sources: list[str], options: Mapping[str, Any]) -> dict[str, str]:
-    """Return persisted source mode metadata for a stored clip record."""
-    return {source: _get_source_mode(source, options) for source in sources}
-
-
-def _entry_source_modes(
-    entry: Mapping[str, Any],
-    sources: list[str],
-    fallback_options: Mapping[str, Any] | None,
-) -> dict[str, str]:
-    """Return source mode metadata, inferring it from fallback options when absent."""
-    raw_modes = entry.get("source_modes")
-    if isinstance(raw_modes, dict):
-        modes = {str(source): str(mode) for source, mode in raw_modes.items()}
-    else:
-        modes = {}
-    if fallback_options is not None:
-        for source in sources:
-            modes.setdefault(source, _get_source_mode(source, fallback_options))
-    return modes
 
 
 def _clip_entry(item: DownloadItem, rel_path: str, file_size: int, options: Mapping[str, Any]) -> dict[str, Any]:
