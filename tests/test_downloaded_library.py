@@ -28,6 +28,7 @@ from custom_components.suno.const import (
     QUALITY_STANDARD,
 )
 from custom_components.suno.downloaded_library import (
+    DesiredDownloadPlan,
     DownloadedLibrary,
     DownloadItem,
     InMemoryDownloadedLibraryStorage,
@@ -79,6 +80,7 @@ class _FakeAudio:
     def __init__(self, data: bytes = b"fLaC" + b"\x00" * 50) -> None:
         self.data = data
         self.rendered: list[str] = []
+        self.render_qualities: list[str] = []
 
     async def fetch_image(self, _image_url: str) -> bytes | None:
         return None
@@ -91,7 +93,10 @@ class _FakeAudio:
         _image_url: str | None,
     ) -> RenderedAudio | None:
         self.rendered.append(clip.id)
-        return RenderedAudio(self.data, "flac" if quality == QUALITY_HIGH else "mp3")
+        self.render_qualities.append(quality)
+        if quality == QUALITY_HIGH:
+            return RenderedAudio(b"fLaC" + b"\x00" * 50, "flac")
+        return RenderedAudio(b"ID3" + b"\x00" * 50, "mp3")
 
     async def retag(self, _target: Path, _meta: TrackMetadata) -> bool:
         return True
@@ -745,6 +750,215 @@ async def test_build_desired_my_songs_disabled_when_both_zero(hass: HomeAssistan
     }
     plan = library.build_desired(options, SunoData(clips=[_make_dated_clip("clip-1")]))
     assert len(plan.items) == 0
+
+
+# ── Quality tracking ────────────────────────────────────────────
+
+
+def _clip_with_display(
+    clip_id: str,
+    title: str = "Song",
+    created: str = "2026-03-15T10:00:00Z",
+    display_name: str = "testuser",
+) -> SunoClip:
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at=created,
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        display_name=display_name,
+    )
+
+
+async def test_quality_change_deletes_old_and_redownloads(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A change from high → standard removes the old FLAC and writes a new MP3."""
+    clip_id = "clip0001-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    old_file = sync_dir / "2026-03-15" / "Song [clip0001].flac"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": "2026-03-15/Song [clip0001].flac",
+                    "title": "Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "abc",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clip = _clip(clip_id, "Song")
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_STANDARD)],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+        desired_plan=plan,
+    )
+
+    assert audio.render_qualities == [QUALITY_STANDARD]
+    assert not old_file.exists()
+    entry = library.state["clips"][clip_id]
+    assert entry["quality"] == QUALITY_STANDARD
+    assert entry["path"].endswith(".mp3")
+
+
+async def test_quality_match_skips_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """The same quality on the desired plan does not trigger a redownload."""
+    clip_id = "clip0002-0000-0000-0000-000000000000"
+    target = tmp_path / "mirror" / "2026-03-15" / "Song [clip0002].flac"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": "2026-03-15/Song [clip0002].flac",
+                    "title": "Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "9ad1d8ab369d",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clip = _clip(clip_id, "Song")
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert audio.rendered == []
+
+
+async def test_quality_stored_in_state_after_download(hass: HomeAssistant, tmp_path: Path) -> None:
+    """After a high-quality download, quality is recorded in state."""
+    clip_id = "clip0003-0000-0000-0000-000000000000"
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip(clip_id, "Song")
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    entry = library.state["clips"][clip_id]
+    assert entry["quality"] == QUALITY_HIGH
+
+
+async def test_quality_downgrade_on_source_removal(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Removing the high-quality source downgrades FLAC → MP3 end-to-end."""
+    clip_id = "downgrde-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _clip_with_display(clip_id, "Downgrader", display_name="testuser")
+
+    flac_rel = _clip_path(clip, QUALITY_HIGH)
+    flac_path = sync_dir / flac_rel
+    flac_path.parent.mkdir(parents=True)
+    flac_path.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": flac_rel,
+                    "title": "Downgrader",
+                    "created": "2026-03-15",
+                    "sources": ["liked", "my_songs"],
+                    "size": 54,
+                    "meta_hash": "deadbeef0000",
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["my_songs"], quality=QUALITY_STANDARD)],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(clips=[clip]),
+        desired_plan=plan,
+    )
+
+    assert audio.render_qualities == [QUALITY_STANDARD]
+    assert not flac_path.exists()
+    mp3_rel = _clip_path(clip, QUALITY_STANDARD)
+    mp3_path = sync_dir / mp3_rel
+    assert mp3_path.exists()
+
+    entry = library.state["clips"][clip_id]
+    assert entry["quality"] == QUALITY_STANDARD
+    assert entry["path"] == mp3_rel
+    assert entry["sources"] == ["my_songs"]
+
+    audio_files = [p for p in sync_dir.rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3")]
+    assert len(audio_files) == 1, f"expected one audio file, got: {audio_files}"
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
