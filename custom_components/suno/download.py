@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_ALL_PLAYLISTS,
@@ -26,7 +26,6 @@ from .const import (
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
-    DOMAIN,
     DOWNLOAD_MODE_CACHE,
 )
 from .downloaded_library import (
@@ -99,7 +98,13 @@ class SunoDownloadManager:
         client: SunoClient,
         cache: SunoCache | None = None,
     ) -> SunoDownloadManager:
-        """Create, initialise, and wire up the Home Assistant adapter."""
+        """Construct, wire adapters, and initialise persisted state.
+
+        Home Assistant lifecycle wiring (coordinator listener, service
+        registration, ``async_at_started`` initial-sync callback) lives with
+        the runtime that owns the entry; see
+        ``HomeAssistantRuntime._wire_downloaded_library_lifecycle``.
+        """
         mgr = cls(hass, f"suno_sync_{entry.entry_id}")
         mgr._coordinator = coordinator
         mgr._client = client
@@ -110,40 +115,6 @@ class SunoDownloadManager:
         await mgr.async_init()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await mgr.cleanup_tmp_files(download_path)
-
-        def _on_coordinator_update() -> None:
-            if not mgr.is_running and not mgr._updating_sensors:
-                hass.async_create_task(
-                    mgr.async_download(dict(entry.options), client, coordinator_data=coordinator.data),
-                    f"suno_download_refresh_{entry.entry_id}",
-                )
-
-        entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
-
-        async def _handle_download_service(call: ServiceCall) -> None:
-            await mgr.async_download(dict(entry.options), client, force=call.data.get("force", False))
-
-        if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
-            hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
-
-            def _maybe_remove_service() -> None:
-                remaining = [
-                    existing_entry
-                    for existing_entry in hass.config_entries.async_entries(DOMAIN)
-                    if existing_entry.entry_id != entry.entry_id
-                ]
-                if not remaining:
-                    hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
-
-            entry.async_on_unload(_maybe_remove_service)
-
-        async def _on_ha_started(_event: Any) -> None:
-            _LOGGER.info("Home Assistant started - beginning initial sync")
-            await mgr.async_download(dict(entry.options), client, initial=True)
-
-        from homeassistant.helpers.start import async_at_started  # noqa: PLC0415
-
-        async_at_started(hass, _on_ha_started)
         return mgr
 
     @property
