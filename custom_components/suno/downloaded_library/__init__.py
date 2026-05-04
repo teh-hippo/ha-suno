@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.storage import Store
 
 from ..audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
 from ..const import (
@@ -47,6 +46,7 @@ from ..const import (
 )
 from ..library_refresh import SunoData
 from ..models import SunoClip, TrackMetadata, clip_meta_hash
+from .cache_adapter import NullDownloadedLibraryCache, SunoCacheDownloadedLibraryAdapter
 from .contracts import (
     DesiredDownloadPlan,
     DownloadedLibraryAudio,
@@ -73,69 +73,14 @@ from .source_modes import (
     _source_modes_for,
     _source_preserves_files,
 )
+from .storage import HomeAssistantDownloadedLibraryStorage, InMemoryDownloadedLibraryStorage
 
 if TYPE_CHECKING:
     from ..api import SunoClient
 
 _LOGGER = logging.getLogger(__name__)
 
-STORE_VERSION = 1
 _MANIFEST_FILENAME = ".suno_download.json"
-
-
-class HomeAssistantDownloadedLibraryStorage:
-    """Downloaded Library storage backed by Home Assistant Store."""
-
-    def __init__(self, hass: HomeAssistant, store_key: str) -> None:
-        self.store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, store_key)
-
-    async def async_load(self) -> dict[str, Any] | None:
-        data = await self.store.async_load()
-        return data if isinstance(data, dict) else None
-
-    async def async_save(self, state: dict[str, Any]) -> None:
-        await self.store.async_save(state)
-
-
-class InMemoryDownloadedLibraryStorage:
-    """In-memory Downloaded Library storage for tests."""
-
-    def __init__(self, state: dict[str, Any] | None = None) -> None:
-        self.state = state
-
-    async def async_load(self) -> dict[str, Any] | None:
-        return self.state
-
-    async def async_save(self, state: dict[str, Any]) -> None:
-        self.state = state
-
-
-class NullDownloadedLibraryCache:
-    """No-op audio cache adapter."""
-
-    async def async_get(self, _clip_id: str, _fmt: str, _meta_hash: str) -> Path | None:
-        return None
-
-    async def async_put(self, _clip_id: str, _fmt: str, _data: bytes, meta_hash: str) -> None:
-        return
-
-
-class SunoCacheDownloadedLibraryAdapter:
-    """Adapter from the playback audio cache to Downloaded Library cache operations."""
-
-    def __init__(self, cache: Any) -> None:
-        self._cache = cache
-
-    async def async_get(self, clip_id: str, fmt: str, meta_hash: str) -> Path | None:
-        if not hasattr(self._cache, "async_get"):
-            return None
-        result = await self._cache.async_get(clip_id, fmt, meta_hash=meta_hash)
-        return result if isinstance(result, Path) and result.is_file() else None
-
-    async def async_put(self, clip_id: str, fmt: str, data: bytes, meta_hash: str) -> None:
-        if not hasattr(self._cache, "async_put"):
-            return
-        await self._cache.async_put(clip_id, fmt, data, meta_hash=meta_hash)
 
 
 class HomeAssistantDownloadedLibraryAudio:
