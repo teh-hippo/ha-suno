@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 
@@ -959,6 +959,87 @@ async def test_quality_downgrade_on_source_removal(hass: HomeAssistant, tmp_path
 
     audio_files = [p for p in sync_dir.rglob("*") if p.is_file() and p.suffix.lower() in (".flac", ".mp3")]
     assert len(audio_files) == 1, f"expected one audio file, got: {audio_files}"
+
+
+# ── Download clip rendering branch ──────────────────────────────
+
+
+async def test_download_clip_uses_flac_for_high_quality(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A high-quality plan renders flac via the audio adapter."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip("clip-flac-0000-0000-0000-000000000000", "FLAC Song")
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert audio.render_qualities == [QUALITY_HIGH]
+    assert library.total_files == 1
+    assert library.errors == 0
+
+
+async def test_download_clip_uses_mp3_for_standard_quality(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A standard-quality plan renders mp3 via the audio adapter."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip("clip-mp3-00000-0000-0000-000000000000", "MP3 Song")
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_STANDARD)],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+        desired_plan=plan,
+    )
+
+    assert audio.render_qualities == [QUALITY_STANDARD]
+    entry = library.state["clips"]["clip-mp3-00000-0000-0000-000000000000"]
+    assert entry["quality"] == QUALITY_STANDARD
+    assert entry["path"].endswith(".mp3")
+
+
+async def test_download_writes_through_cache(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A successful download writes the rendered bytes through the audio cache."""
+    audio = _FakeAudio()
+    cache = AsyncMock()
+    cache.async_get = AsyncMock(return_value=None)
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio, cache=cache)
+    await library.async_load()
+
+    clip = _clip("clip-cache-0000-0000-0000-000000000000", "Cached Song")
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    cache.async_put.assert_awaited_once()
+    args = cache.async_put.await_args.args
+    assert args[0] == "clip-cache-0000-0000-0000-000000000000"
+    assert args[1] == "flac"
+    assert args[2] == b"fLaC" + b"\x00" * 50
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
