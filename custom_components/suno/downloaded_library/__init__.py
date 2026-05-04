@@ -8,11 +8,9 @@ import json
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.core import HomeAssistant
@@ -55,6 +53,16 @@ from ..const import (
 )
 from ..library_refresh import SunoData
 from ..models import SunoClip, TrackMetadata, clip_meta_hash
+from .contracts import (
+    DesiredDownloadPlan,
+    DownloadedLibraryAudio,
+    DownloadedLibraryCache,
+    DownloadedLibraryStatus,
+    DownloadedLibraryStorage,
+    DownloadItem,
+    RenderedAudio,
+    RetagResult,
+)
 
 if TYPE_CHECKING:
     from ..api import SunoClient
@@ -64,76 +72,6 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 _MANIFEST_FILENAME = ".suno_download.json"
 _MAX_FILENAME_LEN = 200
-
-
-class RetagResult(Enum):
-    """Outcome of attempting to re-tag an existing audio file on disk."""
-
-    OK = "ok"
-    MISSING = "missing"
-    FAILED = "failed"
-
-
-@dataclass
-class DownloadItem:
-    """A clip selected for the Downloaded Library."""
-
-    clip: SunoClip
-    sources: list[str]
-    quality: str
-
-
-@dataclass(frozen=True, slots=True)
-class DownloadedLibraryStatus:
-    """Published Downloaded Library status for Home Assistant consumers."""
-
-    running: bool = False
-    pending: int = 0
-    errors: int = 0
-    last_result: str = ""
-    last_download: str | None = None
-    file_count: int = 0
-    size_mb: float = 0.0
-    source_breakdown: dict[str, int] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class DesiredDownloadPlan:
-    """Desired Downloaded Library records and safety metadata."""
-
-    items: list[DownloadItem]
-    preserved_ids: set[str]
-    source_to_name: dict[str, str]
-    playlist_order: dict[str, list[str]]
-
-    def as_legacy_tuple(self) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
-        """Return the tuple shape used by the legacy download manager tests."""
-        return self.items, self.preserved_ids, self.source_to_name, self.playlist_order
-
-    @classmethod
-    def from_legacy_tuple(
-        cls,
-        value: tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]],
-    ) -> DesiredDownloadPlan:
-        """Build a plan from the legacy tuple shape."""
-        items, preserved_ids, source_to_name, playlist_order = value
-        return cls(items, preserved_ids, source_to_name, playlist_order)
-
-
-@dataclass(frozen=True, slots=True)
-class RenderedAudio:
-    """Rendered audio bytes and file format."""
-
-    data: bytes
-    fmt: str
-
-
-class DownloadedLibraryStorage(Protocol):
-    """Persistence adapter for Downloaded Library state."""
-
-    async def async_load(self) -> dict[str, Any] | None: ...
-
-    async def async_save(self, state: dict[str, Any]) -> None: ...
 
 
 class HomeAssistantDownloadedLibraryStorage:
@@ -163,14 +101,6 @@ class InMemoryDownloadedLibraryStorage:
         self.state = state
 
 
-class DownloadedLibraryCache(Protocol):
-    """Audio cache adapter used by the Downloaded Library."""
-
-    async def async_get(self, clip_id: str, fmt: str, meta_hash: str) -> Path | None: ...
-
-    async def async_put(self, clip_id: str, fmt: str, data: bytes, meta_hash: str) -> None: ...
-
-
 class NullDownloadedLibraryCache:
     """No-op audio cache adapter."""
 
@@ -197,24 +127,6 @@ class SunoCacheDownloadedLibraryAdapter:
         if not hasattr(self._cache, "async_put"):
             return
         await self._cache.async_put(clip_id, fmt, data, meta_hash=meta_hash)
-
-
-class DownloadedLibraryAudio(Protocol):
-    """Audio rendering adapter for Downloaded Library files."""
-
-    async def fetch_image(self, image_url: str) -> bytes | None: ...
-
-    async def render(
-        self,
-        clip: SunoClip,
-        quality: str,
-        meta: TrackMetadata,
-        image_url: str | None,
-    ) -> RenderedAudio | None: ...
-
-    async def retag(self, target: Path, meta: TrackMetadata) -> bool: ...
-
-    async def download_video(self, video_url: str, target: Path) -> None: ...
 
 
 class HomeAssistantDownloadedLibraryAudio:
