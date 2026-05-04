@@ -62,6 +62,13 @@ from .contracts import (
     RenderedAudio,
     RetagResult,
 )
+from .filesystem import (
+    _cleanup_empty_dirs,
+    _delete_file,
+    _link_or_copy_sync,
+    _write_file,
+    _write_track_sidecar,
+)
 from .paths import _clip_path, _safe_name, _video_clip_path
 
 if TYPE_CHECKING:
@@ -318,48 +325,6 @@ def _preserve_source(
             preserved.add(clip_id)
 
 
-def _cleanup_empty_dirs(base: Path, target: Path) -> None:
-    parent = target.parent
-    while parent != base:
-        try:
-            parent.rmdir()
-            parent = parent.parent
-        except OSError:
-            break
-
-
-async def _write_file(hass: HomeAssistant, target: Path, data: bytes) -> None:
-    """Atomically write bytes to a file."""
-
-    def _write(t: Path, d: bytes) -> None:
-        t.parent.mkdir(parents=True, exist_ok=True)
-        tmp = t.with_suffix(".tmp")
-        try:
-            tmp.write_bytes(d)
-            os.replace(str(tmp), str(t))
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-
-    await hass.async_add_executor_job(_write, target, data)
-
-
-async def _delete_file(hass: HomeAssistant, base: Path, rel_path: str) -> None:
-    """Delete a file relative to the Downloaded Library base path."""
-
-    def _delete(b: Path, r: str) -> None:
-        target = b / r
-        try:
-            if target.exists():
-                target.unlink()
-                _LOGGER.info("Removed: %s", r)
-                _cleanup_empty_dirs(b, target)
-        except OSError:
-            _LOGGER.warning("Failed to delete: %s", r)
-
-    await hass.async_add_executor_job(_delete, base, rel_path)
-
-
 _SOURCE_MODE_KEYS: dict[str, str] = {
     "liked": CONF_DOWNLOAD_MODE_LIKED,
     "my_songs": CONF_DOWNLOAD_MODE_MY_SONGS,
@@ -449,30 +414,6 @@ async def _update_cover_art(
             await _write_track_sidecar(hass, cover_path, track_sidecar)
         return True
     return False
-
-
-def _link_or_copy_sync(src: Path, dst: Path) -> None:
-    """Hardlink ``src`` to ``dst``, falling back to copy if linking fails."""
-    import shutil  # noqa: PLC0415
-
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
-        try:
-            dst.unlink()
-        except OSError:
-            return
-    try:
-        os.link(src, dst)
-    except OSError:
-        try:
-            shutil.copyfile(src, dst)
-        except OSError:
-            pass
-
-
-async def _write_track_sidecar(hass: HomeAssistant, cover_path: Path, sidecar_path: Path) -> None:
-    """Write a per-track JPG sidecar, preferring a hardlink."""
-    await hass.async_add_executor_job(_link_or_copy_sync, cover_path, sidecar_path)
 
 
 def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | None:
