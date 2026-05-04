@@ -28,9 +28,9 @@ from custom_components.suno.const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from custom_components.suno.download import (
+from custom_components.suno.download import SunoDownloadManager
+from custom_components.suno.downloaded_library import (
     DownloadItem,
-    SunoDownloadManager,
     _add_clip,
     _build_download_summary,
     _clip_path,
@@ -2699,7 +2699,7 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 
     # Create the zero-size file at the expected path on disk
     sync_dir = tmp_path / "mirror"
-    from custom_components.suno.download import _clip_path
+    from custom_components.suno.downloaded_library import _clip_path
 
     rel_path = _clip_path(clip, QUALITY_HIGH)
     target = sync_dir / rel_path
@@ -3742,7 +3742,7 @@ async def test_present_file_does_not_redownload(hass: HomeAssistant, tmp_path: P
 
 async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, tmp_path: Path) -> None:
     """_retag_clip pre-checks for missing files and signals MISSING."""
-    from custom_components.suno.download import RetagResult
+    from custom_components.suno.downloaded_library import RetagResult
 
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -3760,7 +3760,7 @@ async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, 
 
 async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tmp_path: Path) -> None:
     """_retag_clip treats zero-byte files as MISSING."""
-    from custom_components.suno.download import RetagResult
+    from custom_components.suno.downloaded_library import RetagResult
 
     sync = SunoDownloadManager(hass, "test_sync_state")
     with patch.object(sync._store, "async_load", return_value=None):
@@ -3782,7 +3782,7 @@ async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tm
 
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
-    from custom_components.suno.download import _update_cover_art
+    from custom_components.suno.downloaded_library import _update_cover_art
 
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
@@ -3808,7 +3808,7 @@ async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssist
     """Hash-match path still backfills track sidecar if it's missing."""
     import hashlib
 
-    from custom_components.suno.download import _update_cover_art
+    from custom_components.suno.downloaded_library import _update_cover_art
 
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
@@ -3834,7 +3834,7 @@ async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssist
 
 def test_album_for_clip_returns_none_for_non_remix() -> None:
     """Non-remix derivatives keep their own title as the album."""
-    from custom_components.suno.download import _album_for_clip
+    from custom_components.suno.downloaded_library import _album_for_clip
     from custom_components.suno.models import SunoClip
 
     parent = SunoClip(
@@ -3874,7 +3874,7 @@ def test_album_for_clip_returns_none_for_non_remix() -> None:
 
 def test_album_for_clip_inherits_root_for_remix() -> None:
     """Remix variants inherit the root ancestor's title as album."""
-    from custom_components.suno.download import _album_for_clip
+    from custom_components.suno.downloaded_library import _album_for_clip
     from custom_components.suno.models import SunoClip
 
     parent = SunoClip(
