@@ -20,8 +20,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 from pathvalidate import sanitize_filename
 
-from .audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
-from .const import (
+from ..audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
+from ..const import (
     CDN_BASE_URL,
     CONF_ALL_PLAYLISTS,
     CONF_CREATE_PLAYLISTS,
@@ -53,11 +53,11 @@ from .const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from .library_refresh import SunoData
-from .models import SunoClip, TrackMetadata, clip_meta_hash
+from ..library_refresh import SunoData
+from ..models import SunoClip, TrackMetadata, clip_meta_hash
 
 if TYPE_CHECKING:
-    from .api import SunoClient
+    from ..api import SunoClient
 
 _LOGGER = logging.getLogger(__name__)
 
