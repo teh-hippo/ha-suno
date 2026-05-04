@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -605,6 +606,145 @@ async def test_async_reconcile_writes_manifest(hass: HomeAssistant, tmp_path: Pa
     data = json.loads(manifest.read_text())
     assert "last_download" in data
     assert "clips" in data
+
+
+# ── build_desired API failure / my_songs filtering ──────────────
+
+
+def _make_dated_clip(clip_id: str, title: str = "Song", created: str = "2026-03-15T10:00:00Z") -> SunoClip:
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=False,
+        status="complete",
+        created_at=created,
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+
+
+async def test_build_desired_preserves_clips_when_section_is_stale(hass: HomeAssistant) -> None:
+    """Stale liked section preserves liked clips already on disk."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.state = {
+        "clips": {
+            "clip-liked": {"path": "liked.flac", "sources": ["liked"]},
+            "clip-my-songs": {"path": "my_songs.flac", "sources": ["my_songs"]},
+        },
+        "last_download": None,
+    }
+
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    suno_data = SunoData(stale_sections=("liked_clips",))
+    plan = library.build_desired(options, suno_data)
+
+    assert "clip-liked" in plan.preserved_ids
+
+
+async def test_build_desired_my_songs_count_only(hass: HomeAssistant) -> None:
+    """count=N, days=None returns top-N clips."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    clips = [_make_dated_clip(f"clip-{i}", created="2026-03-15T10:00:00Z") for i in range(10)]
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    assert len(plan.items) == 5
+    ids = {item.clip.id for item in plan.items}
+    assert ids == {f"clip-{i}" for i in range(5)}
+
+
+async def test_build_desired_my_songs_days_only(hass: HomeAssistant) -> None:
+    """count=None, days=N returns clips within N days."""
+    from datetime import timedelta
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    now = datetime.now(tz=UTC)
+    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [
+        _make_dated_clip("clip-new-1", created=recent_ts),
+        _make_dated_clip("clip-new-2", created=recent_ts),
+        _make_dated_clip("clip-old", created=old_ts),
+    ]
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: 7,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    ids = {item.clip.id for item in plan.items}
+    assert "clip-new-1" in ids
+    assert "clip-new-2" in ids
+    assert "clip-old" not in ids
+
+
+async def test_build_desired_my_songs_count_and_days_intersect(hass: HomeAssistant) -> None:
+    """count=N AND days=M returns at most N clips within M days (intersection)."""
+    from datetime import timedelta
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    now = datetime.now(tz=UTC)
+    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    clips = [
+        _make_dated_clip("clip-r0", created=recent_ts),
+        _make_dated_clip("clip-r1", created=recent_ts),
+        _make_dated_clip("clip-r2", created=recent_ts),
+        _make_dated_clip("clip-r3", created=recent_ts),
+        _make_dated_clip("clip-r4", created=recent_ts),
+        _make_dated_clip("clip-old-0", created=old_ts),
+        _make_dated_clip("clip-old-1", created=old_ts),
+    ]
+
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: 3,
+        CONF_MY_SONGS_DAYS: 7,
+    }
+    plan = library.build_desired(options, SunoData(clips=clips))
+    ids = {item.clip.id for item in plan.items}
+    assert len(ids) == 3
+    assert ids == {"clip-r0", "clip-r1", "clip-r2"}
+
+
+async def test_build_desired_my_songs_disabled_when_both_zero(hass: HomeAssistant) -> None:
+    """count=None/0 and days=None/0 means my_songs is disabled."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    options = {
+        CONF_SHOW_LIKED: False,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_SHOW_MY_SONGS: True,
+        CONF_MY_SONGS_COUNT: None,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    plan = library.build_desired(options, SunoData(clips=[_make_dated_clip("clip-1")]))
+    assert len(plan.items) == 0
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
