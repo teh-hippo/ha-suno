@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v6.0.13 (2026-05-04)
+
+### Chores
+
+- Sync uv.lock after v6.0.12 release
+  ([`bcef88e`](https://github.com/teh-hippo/ha-suno/commit/bcef88efca1c77390f6847bcdb098b08cb04c35d))
+
+### Refactoring
+
+- **runtime**: Lift HA lifecycle wiring out of SunoDownloadManager.async_setup
+  ([`9d89c5e`](https://github.com/teh-hippo/ha-suno/commit/9d89c5e3c1e47197c69ebd6be6c24b136c646b02))
+
+### Testing
+
+- **download**: Import helpers from downloaded_library directly (1.6 slice 1)
+  ([`e0f5c1e`](https://github.com/teh-hippo/ha-suno/commit/e0f5c1eb4319e6ea5ca6adb3c3712aef4659df85))
+
+- **downloaded_library**: Relocate 9 pure-helper test classes (1.6 slice 2)
+  ([`dbbe90e`](https://github.com/teh-hippo/ha-suno/commit/dbbe90e1b318e3ae36ac9766dd9074ad9ad914f7))
+
+
 ## v6.0.12 (2026-05-04)
 
 ### Chores
