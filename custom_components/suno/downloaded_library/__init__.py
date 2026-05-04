@@ -64,6 +64,8 @@ from .filesystem import (
     _write_file,
     _write_track_sidecar,
 )
+from .m3u8 import _write_m3u8_playlists
+from .metadata import _album_for_clip, _with_image
 from .paths import _clip_path, _safe_name, _video_clip_path
 from .source_modes import (
     _entry_source_modes,
@@ -227,72 +229,6 @@ def _build_download_summary(
     return ", ".join(parts) if parts else "No change"
 
 
-def _write_m3u8_playlists(
-    base: Path,
-    clips_state: dict[str, Any],
-    desired: list[DownloadItem],
-    source_to_name: dict[str, str] | None = None,
-    playlist_order: dict[str, list[str]] | None = None,
-) -> None:
-    """Write M3U8 playlist files for media library compatibility."""
-    if source_to_name is None:
-        source_to_name = {}
-    if playlist_order is None:
-        playlist_order = {}
-
-    track_info: dict[str, tuple[str, str, int]] = {}
-    for item in desired:
-        entry = clips_state.get(item.clip.id)
-        if not entry or not entry.get("path"):
-            continue
-        abs_path = str(base / entry["path"])
-        title = entry.get("title") or item.clip.title or "Untitled"
-        title = title.replace("\n", " ").replace("\r", "")
-        duration = int(item.clip.duration) if item.clip.duration else -1
-        track_info[item.clip.id] = (abs_path, title, duration)
-
-    playlists: dict[str, list[tuple[str, str, int]]] = {}
-    seen_in_playlist: dict[str, set[str]] = {}
-    for item in desired:
-        if item.clip.id not in track_info:
-            continue
-        for source in item.sources:
-            if source == "liked":
-                name = "Liked Songs"
-            elif source.startswith("playlist:"):
-                name = source_to_name.get(source, source)
-            else:
-                continue
-            if name not in playlists:
-                order = playlist_order.get(source)
-                if order:
-                    playlists[name] = [track_info[cid] for cid in order if cid in track_info]
-                    seen_in_playlist[name] = {cid for cid in order if cid in track_info}
-                else:
-                    playlists[name] = []
-                    seen_in_playlist[name] = set()
-            if not playlist_order.get(source) and item.clip.id not in seen_in_playlist.get(name, set()):
-                playlists[name].append(track_info[item.clip.id])
-                seen_in_playlist.setdefault(name, set()).add(item.clip.id)
-
-    written: set[str] = set()
-    for name, tracks in playlists.items():
-        safe_name = name.replace("\n", " ").replace("\r", "")
-        filename = f"{_safe_name(safe_name)}.m3u8"
-        lines = [f"#EXTM3U\n#PLAYLIST:{safe_name}"]
-        for abs_path, title, duration in tracks:
-            lines.append(f"#EXTINF:{duration},{title}\n{abs_path}")
-        try:
-            (base / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
-            written.add(filename)
-        except OSError:
-            _LOGGER.warning("Failed to write playlist file: %s", filename)
-
-    for existing in base.glob("*.m3u8"):
-        if existing.name not in written:
-            existing.unlink(missing_ok=True)
-
-
 def _add_clip(clip_map: dict[str, DownloadItem], clip: SunoClip, source: str, quality: str) -> None:
     """Add or update a desired clip, with high quality winning over standard."""
     if clip.id in clip_map:
@@ -371,40 +307,6 @@ async def _update_cover_art(
             await _write_track_sidecar(hass, cover_path, track_sidecar)
         return True
     return False
-
-
-def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | None:
-    """Resolve the album title for a clip."""
-    if clip.album_title:
-        return clip.album_title
-    if not clip.is_remix:
-        return None
-    root_id = clip.root_ancestor_id
-    if not root_id or root_id == clip.id:
-        return None
-    if (root_clip := clip_index.get(root_id)) is None:
-        return f"Remixes of {root_id[:8]}"
-    return root_clip.title
-
-
-def _with_image(meta: TrackMetadata, image_data: bytes | None) -> TrackMetadata:
-    """Return metadata with image data attached."""
-    return TrackMetadata(
-        title=meta.title,
-        artist=meta.artist,
-        album=meta.album,
-        album_artist=meta.album_artist,
-        date=meta.date,
-        lyrics=meta.lyrics,
-        comment=meta.comment,
-        image_data=image_data,
-        suno_style=meta.suno_style,
-        suno_style_summary=meta.suno_style_summary,
-        suno_model=meta.suno_model,
-        suno_handle=meta.suno_handle,
-        suno_parent=meta.suno_parent,
-        suno_lineage=meta.suno_lineage,
-    )
 
 
 def _is_empty_suno_library(data: SunoData) -> bool:
@@ -1239,6 +1141,7 @@ __all__ = [
     "RetagResult",
     "SunoCacheDownloadedLibraryAdapter",
     "_add_clip",
+    "_album_for_clip",
     "_build_download_summary",
     "_clip_path",
     "_get_source_mode",
