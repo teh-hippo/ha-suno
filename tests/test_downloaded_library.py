@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from homeassistant.core import HomeAssistant
 
@@ -37,6 +37,7 @@ from custom_components.suno.downloaded_library import (
     _safe_name,
     _source_preserves_files,
     _video_clip_path,
+    _write_file,
     _write_m3u8_playlists,
 )
 from custom_components.suno.library_refresh import SunoData
@@ -439,6 +440,89 @@ async def test_async_reconcile_skips_when_already_running(hass: HomeAssistant) -
     assert library.running is True
     assert library.last_result == ""
     assert audio.rendered == []
+
+
+# ── Properties / source_breakdown ───────────────────────────────
+
+
+async def test_default_engine_properties(hass: HomeAssistant) -> None:
+    """A fresh DownloadedLibrary has zeroed counters and no last_download."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    assert library.running is False
+    assert library.total_files == 0
+    assert library.pending == 0
+    assert library.errors == 0
+    assert library.last_download is None
+
+
+async def test_source_breakdown_empty_state(hass: HomeAssistant) -> None:
+    """Empty state returns empty source breakdown."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    assert library.source_breakdown == {}
+
+
+async def test_source_breakdown_counts_per_source(hass: HomeAssistant) -> None:
+    """source_breakdown counts clips per source tag."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    library.state = {
+        "clips": {
+            "c1": {"sources": ["liked"]},
+            "c2": {"sources": ["liked", "playlist:abc"]},
+            "c3": {"sources": ["my_songs"]},
+            "c4": {"sources": ["playlist:abc"]},
+        },
+        "last_download": None,
+    }
+    breakdown = library.source_breakdown
+    assert breakdown["liked"] == 2
+    assert breakdown["playlist:abc"] == 2
+    assert breakdown["my_songs"] == 1
+
+
+# ── cleanup_tmp_files ───────────────────────────────────────────
+
+
+async def test_cleanup_tmp_files_removes_only_tmp(hass: HomeAssistant, tmp_path: Path) -> None:
+    """cleanup_tmp_files removes .tmp files but preserves real audio files."""
+    download_dir = tmp_path / "mirror"
+    download_dir.mkdir()
+    (download_dir / "song.flac.tmp").write_bytes(b"partial")
+    (download_dir / "real.flac").write_bytes(b"fLaC")
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    await library.cleanup_tmp_files(str(download_dir))
+
+    assert not (download_dir / "song.flac.tmp").exists()
+    assert (download_dir / "real.flac").exists()
+
+
+# ── _write_file (filesystem helper) ─────────────────────────────
+
+
+async def test_write_file_creates_file(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_write_file performs an atomic write and leaves no .tmp behind."""
+    target = tmp_path / "subdir" / "output.flac"
+    data = b"fLaC" + b"\x00" * 50
+
+    await _write_file(hass, target, data)
+
+    assert target.exists()
+    assert target.read_bytes() == data
+    assert not target.with_suffix(".tmp").exists()
+
+
+async def test_write_file_failure_cleans_tmp(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_write_file removes the .tmp file when write fails."""
+    target = tmp_path / "output.flac"
+
+    with patch.object(Path, "write_bytes", side_effect=OSError("disk full")):
+        try:
+            await _write_file(hass, target, b"data")
+        except OSError:
+            pass
+
+    assert not target.with_suffix(".tmp").exists()
+    assert not target.exists()
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
