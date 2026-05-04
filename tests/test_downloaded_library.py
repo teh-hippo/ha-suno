@@ -390,6 +390,57 @@ async def test_disabled_download_cleanup_preserves_unknown_legacy_state(hass: Ho
     assert clip.id in library.state["clips"]
 
 
+# ── async_load / reconcile guards ───────────────────────────────
+
+
+async def test_async_load_loads_persisted_state(hass: HomeAssistant) -> None:
+    """async_load should load persisted state from storage."""
+    storage = InMemoryDownloadedLibraryStorage({"clips": {"abc": {}}, "last_download": "2026-01-01"})
+    library = DownloadedLibrary(hass, storage)
+    await library.async_load()
+    assert library.total_files == 1
+    assert library.last_download == "2026-01-01"
+
+
+async def test_async_load_handles_empty_storage(hass: HomeAssistant) -> None:
+    """async_load with empty storage should keep defaults."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    await library.async_load()
+    assert library.total_files == 0
+    assert library.last_download is None
+
+
+async def test_async_reconcile_skips_when_path_empty(hass: HomeAssistant) -> None:
+    """async_reconcile should do nothing when download_path option is empty."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_reconcile({CONF_DOWNLOAD_PATH: ""}, SunoData())
+    assert library.running is False
+    assert library.last_result == ""
+    assert audio.rendered == []
+
+
+async def test_async_reconcile_skips_when_no_path_option(hass: HomeAssistant) -> None:
+    """async_reconcile should do nothing when download_path key is missing."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_reconcile({}, SunoData())
+    assert library.running is False
+    assert library.last_result == ""
+    assert audio.rendered == []
+
+
+async def test_async_reconcile_skips_when_already_running(hass: HomeAssistant) -> None:
+    """async_reconcile should not run concurrently."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    library.running = True
+    await library.async_reconcile({CONF_DOWNLOAD_PATH: "/safe/path"}, SunoData())  # noqa: S108
+    assert library.running is True
+    assert library.last_result == ""
+    assert audio.rendered == []
+
+
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
 
 
