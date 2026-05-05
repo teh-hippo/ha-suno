@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v6.0.22 (2026-05-05)
+
+### Chores
+
+- **deps**: Sync uv.lock after v6.0.20 release
+  ([`b04e14f`](https://github.com/teh-hippo/ha-suno/commit/b04e14f4952282372a73584d9e11694aaf0df26e))
+
+### Refactoring
+
+- **runtime**: Remove __getattr__ shim and dead property setters
+  ([`63ea92f`](https://github.com/teh-hippo/ha-suno/commit/63ea92ffea273e7cd4816d2cabf53e12648224c1))
+
+### Testing
+
+- **coordinator**: Access SunoCoordinator via entry.runtime_data.coordinator
+  ([`303b9f8`](https://github.com/teh-hippo/ha-suno/commit/303b9f8f49f47687ecff87ea3bc05c6108ea54c5))
+
+
 ## v6.0.21 (2026-05-05)
 
 ### Refactoring
