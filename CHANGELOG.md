@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.0.19 (2026-05-05)
+
+### Chores
+
+- **deps**: Sync uv.lock after v6.0.17 release
+  ([`5c565d2`](https://github.com/teh-hippo/ha-suno/commit/5c565d2f68c44f03978159234038078b567840d3))
+
+### Refactoring
+
+- **downloaded_library**: Extract planning to submodule
+  ([`59e543b`](https://github.com/teh-hippo/ha-suno/commit/59e543b3d2121cf8e9b0a58b83c6f4012244147b))
+
+
 ## v6.0.18 (2026-05-05)
 
 ### Chores
