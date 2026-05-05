@@ -32,7 +32,6 @@ from .const import (
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
-    DATA_VIEW_REGISTERED,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_DOWNLOAD_MODE_MY_SONGS,
@@ -151,7 +150,6 @@ class HomeAssistantRuntime:
 
         runtime = cls(hass, entry, coordinator, client, cache, rate_limiter)
         entry.runtime_data = runtime
-        runtime._register_proxy_view()
         await runtime._async_setup_downloaded_library()
         return runtime
 
@@ -478,14 +476,6 @@ class HomeAssistantRuntime:
             dict(options),
             dict(previous_options) if previous_options else None,
         )
-
-    def _register_proxy_view(self) -> None:
-        if self.hass.data.get(DATA_VIEW_REGISTERED):
-            return
-        from .proxy import SunoMediaProxyView  # noqa: PLC0415
-
-        self.hass.http.register_view(SunoMediaProxyView(self.hass))
-        self.hass.data[DATA_VIEW_REGISTERED] = True
 
     @property
     def cache(self) -> SunoCache:
