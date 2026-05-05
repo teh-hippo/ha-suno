@@ -54,19 +54,6 @@ class DesiredDownloadPlan:
     source_to_name: dict[str, str]
     playlist_order: dict[str, list[str]]
 
-    def as_legacy_tuple(self) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
-        """Return the tuple shape used by the legacy download manager tests."""
-        return self.items, self.preserved_ids, self.source_to_name, self.playlist_order
-
-    @classmethod
-    def from_legacy_tuple(
-        cls,
-        value: tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]],
-    ) -> DesiredDownloadPlan:
-        """Build a plan from the legacy tuple shape."""
-        items, preserved_ids, source_to_name, playlist_order = value
-        return cls(items, preserved_ids, source_to_name, playlist_order)
-
 
 @dataclass(frozen=True, slots=True)
 class RenderedAudio:
