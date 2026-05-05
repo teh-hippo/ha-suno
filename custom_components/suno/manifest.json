@@ -9,5 +9,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/teh-hippo/ha-suno/issues",
   "quality_scale": "gold",
-  "version": "6.0.17"
+  "version": "6.0.18"
 }

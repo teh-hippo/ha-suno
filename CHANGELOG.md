@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v6.0.18 (2026-05-05)
+
+### Chores
+
+- **deps**: Sync uv.lock after v6.0.16 release
+  ([`9b738a4`](https://github.com/teh-hippo/ha-suno/commit/9b738a47312c825e2c65fd7166ed5c046e8a1299))
+
+### Refactoring
+
+- **downloaded_library**: Extract _update_cover_art to submodule
+  ([`eb4143a`](https://github.com/teh-hippo/ha-suno/commit/eb4143a9b9a684ee1fad4a9b8956b3ae721f7091))
+
+- **downloaded_library**: Extract HomeAssistantDownloadedLibraryAudio to submodule
+  ([`821a32a`](https://github.com/teh-hippo/ha-suno/commit/821a32a20429449cb73d7cfb09c286e1cb3dfeaf))
+
+
 ## v6.0.17 (2026-05-05)
 
 ### Chores
