@@ -1624,7 +1624,7 @@ async def test_cover_jpg_written_on_download(hass: HomeAssistant, tmp_path: Path
     with (
         patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.downloaded_library.fetch_album_art",
+            "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
             new_callable=AsyncMock,
             return_value=fake_image,
         ),
@@ -1664,7 +1664,7 @@ async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path:
     with (
         patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.downloaded_library.fetch_album_art",
+            "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
             new_callable=AsyncMock,
             return_value=fake_image,
         ),
@@ -1735,7 +1735,7 @@ async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path:
     with (
         patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.downloaded_library.fetch_album_art",
+            "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
             new_callable=AsyncMock,
             return_value=new_image_data,
         ) as mock_fetch,
@@ -1807,7 +1807,7 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
     with (
         patch("custom_components.suno.downloaded_library.async_get_clientsession"),
         patch(
-            "custom_components.suno.downloaded_library.fetch_album_art",
+            "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
             new_callable=AsyncMock,
             return_value=b"should_not_be_used",
         ) as mock_fetch,
@@ -2166,7 +2166,7 @@ async def test_manifest_write_oserror_is_swallowed(hass: HomeAssistant, tmp_path
 
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
-    from custom_components.suno.downloaded_library import _update_cover_art
+    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
@@ -2175,7 +2175,7 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
 
     session = AsyncMock()
     with patch(
-        "custom_components.suno.downloaded_library.fetch_album_art",
+        "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
         new_callable=AsyncMock,
         return_value=b"\xff\xd8\xff" + b"\x00" * 100,
     ):
@@ -2192,7 +2192,7 @@ async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssist
     """Hash-match path still backfills track sidecar if it's missing."""
     import hashlib
 
-    from custom_components.suno.downloaded_library import _update_cover_art
+    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
