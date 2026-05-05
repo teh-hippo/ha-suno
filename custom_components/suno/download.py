@@ -13,25 +13,11 @@ from .const import (
     CONF_DOWNLOAD_VIDEOS,
 )
 from .downloaded_library import (
-    DesiredDownloadPlan,
     DownloadedLibrary,
     DownloadedLibraryStatus,
-    DownloadItem,
     HomeAssistantDownloadedLibraryAudio,
     HomeAssistantDownloadedLibraryStorage,
-    RetagResult,
     SunoCacheDownloadedLibraryAdapter,
-    _add_clip,
-    _album_for_clip,
-    _build_download_summary,
-    _clip_path,
-    _get_source_mode,
-    _safe_name,
-    _source_preserves_files,
-    _update_cover_art,
-    _video_clip_path,
-    _write_file,
-    _write_m3u8_playlists,
 )
 from .library_refresh import SunoData
 
@@ -93,9 +79,11 @@ class SunoDownloadManager:
         mgr._coordinator = coordinator
         mgr._client = client
         mgr._downloaded_library.audio = HomeAssistantDownloadedLibraryAudio(hass, client)
-        mgr._cache = cache if cache is not None else coordinator.cache
-        mgr._download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
-        mgr._download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
+        raw_cache = cache if cache is not None else coordinator.cache
+        mgr._raw_cache = raw_cache
+        mgr._downloaded_library.cache = SunoCacheDownloadedLibraryAdapter(raw_cache) if raw_cache is not None else None
+        mgr._downloaded_library.download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
+        mgr._downloaded_library.download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
         await mgr.async_init()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await mgr.cleanup_tmp_files(download_path)
@@ -150,7 +138,7 @@ class SunoDownloadManager:
         initial: bool = False,
     ) -> None:
         """Run a Downloaded Library reconciliation cycle."""
-        if not (options.get(CONF_DOWNLOAD_PATH) or self._download_path):
+        if not (options.get(CONF_DOWNLOAD_PATH) or self._downloaded_library.download_path):
             _LOGGER.warning("No download_path configured")
             return
         if self.is_running:
@@ -159,8 +147,7 @@ class SunoDownloadManager:
         self._ensure_audio_adapter(client)
         suno_library = await self._library_for_run(coordinator_data, force=force)
         allow_destructive = self._allow_destructive_reconciliation(suno_library)
-        desired_tuple = await self._build_desired(options, suno_library)
-        desired_plan = DesiredDownloadPlan.from_legacy_tuple(desired_tuple)
+        desired_plan = self._downloaded_library.build_desired(options, suno_library)
         await self._downloaded_library.async_reconcile(
             options,
             suno_library,
@@ -202,13 +189,6 @@ class SunoDownloadManager:
         refresh_task: asyncio.Task[None] | None = getattr(self._coordinator, "_refresh_task", None)
         return not (self._coordinator.data_version <= 1 and refresh_task is not None and not refresh_task.done())
 
-    async def _build_desired(
-        self,
-        options: dict[str, Any],
-        data: SunoData,
-    ) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
-        return self._downloaded_library.build_desired(options, data).as_legacy_tuple()
-
     def _handle_status_update(self, _status: DownloadedLibraryStatus) -> None:
         self._notify_coordinator()
 
@@ -233,113 +213,8 @@ class SunoDownloadManager:
         """Remove Mirror-managed downloads when local downloads are disabled."""
         await self._downloaded_library.async_cleanup_disabled_downloads(options, previous_options)
 
-    async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
-        return await self._downloaded_library._reconcile_disk(base, clips_state)
-
-    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
-        return await self._downloaded_library._reconcile_manifest(base, clips_state)
-
-    async def _retag_clip(self, item: DownloadItem, target: Path) -> RetagResult:
-        return await self._downloaded_library._retag_clip(item, target)
-
-    async def _download_clip(self, _client: Any, item: DownloadItem, base: Path, rel_path: str) -> int | None:
-        return await self._downloaded_library._download_clip(item, base, rel_path)
-
-    async def _save_state(self, base: Path) -> None:
-        await self._downloaded_library._save_state(base)
-
-    @property
-    def _store(self) -> Any:
-        return self._storage.store
-
-    @property
-    def _state(self) -> dict[str, Any]:
-        return self._downloaded_library.state
-
-    @_state.setter
-    def _state(self, value: dict[str, Any]) -> None:
-        self._downloaded_library.state = value
-
-    @property
-    def _cache(self) -> Any:
-        return self._raw_cache
-
-    @_cache.setter
-    def _cache(self, value: Any) -> None:
-        self._raw_cache = value
-        self._downloaded_library.cache = SunoCacheDownloadedLibraryAdapter(value) if value is not None else None
-
-    @property
-    def _download_path(self) -> str:
-        return self._downloaded_library.download_path
-
-    @_download_path.setter
-    def _download_path(self, value: str) -> None:
-        self._downloaded_library.download_path = value
-
-    @property
-    def _download_videos(self) -> bool:
-        return self._downloaded_library.download_videos
-
-    @_download_videos.setter
-    def _download_videos(self, value: bool) -> None:
-        self._downloaded_library.download_videos = value
-
-    @property
-    def _running(self) -> bool:
-        return self._downloaded_library.running
-
-    @_running.setter
-    def _running(self, value: bool) -> None:
-        self._downloaded_library.running = value
-
-    @property
-    def _errors(self) -> int:
-        return self._downloaded_library.errors
-
-    @_errors.setter
-    def _errors(self, value: int) -> None:
-        self._downloaded_library.errors = value
-
-    @property
-    def _pending(self) -> int:
-        return self._downloaded_library.pending
-
-    @_pending.setter
-    def _pending(self, value: int) -> None:
-        self._downloaded_library.pending = value
-
-    @property
-    def _last_result(self) -> str:
-        return self._downloaded_library.last_result
-
-    @_last_result.setter
-    def _last_result(self, value: str) -> None:
-        self._downloaded_library.last_result = value
-
-    @property
-    def _clip_index(self) -> dict[str, Any]:
-        return self._downloaded_library.clip_index
-
-    @_clip_index.setter
-    def _clip_index(self, value: dict[str, Any]) -> None:
-        self._downloaded_library.clip_index = value
-
 
 __all__ = [
-    "DownloadItem",
-    "RetagResult",
     "STORE_VERSION",
     "SunoDownloadManager",
-    "_add_clip",
-    "_album_for_clip",
-    "_build_download_summary",
-    "_clip_path",
-    "_get_source_mode",
-    "_safe_name",
-    "_source_preserves_files",
-    "_video_clip_path",
-    "_update_cover_art",
-    "_write_file",
-    "_write_m3u8_playlists",
 ]
