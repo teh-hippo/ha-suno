@@ -43,7 +43,7 @@ from .const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from .coordinator import SunoCoordinator, SunoData
+from .coordinator import SunoCoordinator
 from .downloaded_library import (
     DownloadedLibrary,
     DownloadedLibraryStatus,
@@ -52,7 +52,7 @@ from .downloaded_library import (
     SunoCacheDownloadedLibraryAdapter,
 )
 from .exceptions import SunoAuthError, SunoConnectionError
-from .models import SunoClip, SunoUser, TrackMetadata
+from .models import SunoClip, SunoData, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
 
 _LOGGER = logging.getLogger(__name__)

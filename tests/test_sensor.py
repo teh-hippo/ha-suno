@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.core import HomeAssistant
 
-from custom_components.suno.coordinator import SunoCoordinator, SunoData
+from custom_components.suno.coordinator import SunoCoordinator
 from custom_components.suno.downloaded_library import DownloadedLibraryStatus
-from custom_components.suno.models import SunoCredits
+from custom_components.suno.models import SunoCredits, SunoData
 from custom_components.suno.runtime import HomeAssistantRuntime
 from custom_components.suno.sensor import (
     _SYNC_SENSORS,

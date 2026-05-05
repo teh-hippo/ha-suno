@@ -339,8 +339,7 @@ async def test_force_download_refreshes_library_before_reconcile(
         DownloadedLibrary,
         InMemoryDownloadedLibraryStorage,
     )
-    from custom_components.suno.library_refresh import SunoData
-    from custom_components.suno.models import SunoClip
+    from custom_components.suno.models import SunoClip, SunoData
 
     clip = SunoClip(
         id="clip-force-0000-0000-0000-000000000000",

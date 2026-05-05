@@ -23,10 +23,9 @@ from .library_refresh import (
     LibrarySnapshot,
     ParentLookup,
     SunoClientLibraryAdapter,
-    SunoData,
     _build_clip_index,
 )
-from .models import SunoUser
+from .models import SunoData, SunoUser
 
 if TYPE_CHECKING:
     import asyncio
@@ -184,4 +183,4 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             self.hass.config_entries.async_update_entry(self.config_entry, title=self.user.display_name)
 
 
-__all__ = ["SunoCoordinator", "SunoData", "_MAX_PARENT_LOOKUPS_PER_CYCLE"]
+__all__ = ["SunoCoordinator", "_MAX_PARENT_LOOKUPS_PER_CYCLE"]

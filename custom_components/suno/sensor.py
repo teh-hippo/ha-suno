@@ -23,7 +23,8 @@ from .const import (
     DEFAULT_DOWNLOAD_MODE_MY_SONGS,
     DOWNLOAD_MODE_CACHE,
 )
-from .coordinator import SunoCoordinator, SunoData
+from .coordinator import SunoCoordinator
+from .models import SunoData
 from .runtime import HomeAssistantRuntime
 
 PARALLEL_UPDATES = 0
