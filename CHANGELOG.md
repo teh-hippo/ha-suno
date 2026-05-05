@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.16 (2026-05-05)
+
+### Refactoring
+
+- **runtime**: Lift async_download orchestration onto runtime
+  ([`8a1f928`](https://github.com/teh-hippo/ha-suno/commit/8a1f928ed02b606ced5cf60cd45cc2786b060fb0))
+
+
 ## v6.0.15 (2026-05-05)
 
 ### Chores
