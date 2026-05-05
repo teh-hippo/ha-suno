@@ -9,24 +9,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_ALL_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
     CONF_DOWNLOAD_VIDEOS,
-    CONF_MY_SONGS_COUNT,
-    CONF_MY_SONGS_DAYS,
-    CONF_MY_SONGS_MINIMUM,
-    CONF_PLAYLISTS,
-    CONF_SHOW_LIKED,
-    CONF_SHOW_MY_SONGS,
-    CONF_SHOW_PLAYLISTS,
-    DEFAULT_ALL_PLAYLISTS,
-    DEFAULT_MY_SONGS_COUNT,
-    DEFAULT_MY_SONGS_DAYS,
-    DEFAULT_MY_SONGS_MINIMUM,
-    DEFAULT_SHOW_LIKED,
-    DEFAULT_SHOW_MY_SONGS,
-    DEFAULT_SHOW_PLAYLISTS,
-    DOWNLOAD_MODE_CACHE,
 )
 from .downloaded_library import (
     DesiredDownloadPlan,
@@ -173,9 +157,9 @@ class SunoDownloadManager:
             _LOGGER.debug("Downloaded Library reconciliation already running, skipping")
             return
         self._ensure_audio_adapter(client)
-        suno_library = await self._library_for_run(options, client, coordinator_data, force=force)
+        suno_library = await self._library_for_run(coordinator_data, force=force)
         allow_destructive = self._allow_destructive_reconciliation(suno_library)
-        desired_tuple = await self._build_desired(options, client, suno_library)
+        desired_tuple = await self._build_desired(options, suno_library)
         desired_plan = DesiredDownloadPlan.from_legacy_tuple(desired_tuple)
         await self._downloaded_library.async_reconcile(
             options,
@@ -194,8 +178,6 @@ class SunoDownloadManager:
 
     async def _library_for_run(
         self,
-        options: dict[str, Any],
-        client: Any,
         coordinator_data: SunoData | None,
         *,
         force: bool,
@@ -212,7 +194,7 @@ class SunoDownloadManager:
             return coordinator_data
         if self._coordinator is not None and self._coordinator.data is not None:
             return self._coordinator.data
-        return await self._legacy_fetch_suno_library(options, client)
+        return SunoData()
 
     def _allow_destructive_reconciliation(self, data: SunoData) -> bool:
         if self._coordinator is None or not _is_empty_suno_library(data):
@@ -220,82 +202,11 @@ class SunoDownloadManager:
         refresh_task: asyncio.Task[None] | None = getattr(self._coordinator, "_refresh_task", None)
         return not (self._coordinator.data_version <= 1 and refresh_task is not None and not refresh_task.done())
 
-    async def _legacy_fetch_suno_library(self, options: dict[str, Any], client: Any) -> SunoData:
-        """Build a Suno Library from legacy private helper callers.
-
-        Production runs use the coordinator's current Suno Library. This fallback
-        preserves old private test entry points while the real download seam no
-        longer fetches Suno transport directly.
-        """
-        stale_sections: set[str] = set()
-        clips = []
-        liked_clips = []
-        playlists = []
-        playlist_clips = {}
-
-        if (
-            options.get(CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED)
-            and _get_source_mode("liked", options) != DOWNLOAD_MODE_CACHE
-        ):
-            try:
-                liked_clips = await client.get_liked_songs()
-            except Exception:
-                _LOGGER.warning("Failed to fetch liked songs for legacy sync planning")
-                stale_sections.add("liked_clips")
-
-        sync_all = options.get(CONF_ALL_PLAYLISTS, DEFAULT_ALL_PLAYLISTS)
-        selected_ids = options.get(CONF_PLAYLISTS, []) or []
-        if (
-            options.get(CONF_SHOW_PLAYLISTS, DEFAULT_SHOW_PLAYLISTS)
-            and _get_source_mode("playlist:", options) != DOWNLOAD_MODE_CACHE
-            and (sync_all or selected_ids)
-        ):
-            try:
-                playlists = await client.get_playlists()
-            except Exception:
-                _LOGGER.warning("Failed to fetch playlists for legacy sync planning")
-                stale_sections.update(("playlists", "playlist_clips"))
-            else:
-                for playlist in playlists:
-                    if not sync_all and playlist.id not in selected_ids:
-                        continue
-                    try:
-                        playlist_clips[playlist.id] = await client.get_playlist_clips(playlist.id)
-                    except Exception:
-                        _LOGGER.warning("Failed to fetch clips for playlist %s", playlist.name)
-                        stale_sections.add(f"playlist_clips:{playlist.id}")
-
-        if (
-            options.get(CONF_SHOW_MY_SONGS, DEFAULT_SHOW_MY_SONGS)
-            and _get_source_mode("my_songs", options) != DOWNLOAD_MODE_CACHE
-        ):
-            my_songs_count = options.get(CONF_MY_SONGS_COUNT, DEFAULT_MY_SONGS_COUNT)
-            my_songs_days = options.get(CONF_MY_SONGS_DAYS, DEFAULT_MY_SONGS_DAYS)
-            minimum = int(options.get(CONF_MY_SONGS_MINIMUM, DEFAULT_MY_SONGS_MINIMUM))
-            if my_songs_count or my_songs_days or minimum:
-                try:
-                    clips = await client.get_all_songs()
-                except Exception:
-                    _LOGGER.warning("Failed to fetch my songs for legacy sync planning")
-                    stale_sections.add("clips")
-
-        return SunoData(
-            clips=clips,
-            liked_clips=liked_clips,
-            playlists=playlists,
-            playlist_clips=playlist_clips,
-            stale_sections=tuple(sorted(stale_sections)),
-        )
-
     async def _build_desired(
         self,
         options: dict[str, Any],
-        client: Any,
-        coordinator_data: SunoData | None = None,
+        data: SunoData,
     ) -> tuple[list[DownloadItem], set[str], dict[str, str], dict[str, list[str]]]:
-        data = (
-            coordinator_data if coordinator_data is not None else await self._legacy_fetch_suno_library(options, client)
-        )
         return self._downloaded_library.build_desired(options, data).as_legacy_tuple()
 
     def _handle_status_update(self, _status: DownloadedLibraryStatus) -> None:
