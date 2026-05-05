@@ -2152,6 +2152,229 @@ async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp
     assert audio.video_calls == []
 
 
+# ── Reconcile manifest / present-file / missing-file ────────────
+
+
+async def test_reconcile_manifest_marks_missing_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manifest entries whose files are gone get path/meta_hash cleared."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    base = tmp_path / "mirror"
+    base.mkdir()
+    (base / "present.flac").write_bytes(b"fLaC" + b"\x00" * 50)
+    clips_state: dict[str, dict[str, object]] = {
+        "present-id": {"path": "present.flac", "meta_hash": "abc"},
+        "missing-id": {"path": "gone.flac", "meta_hash": "def"},
+    }
+
+    count = await library._reconcile_manifest(base, clips_state)
+
+    assert count == 1
+    assert clips_state["present-id"]["path"] == "present.flac"
+    assert clips_state["present-id"]["meta_hash"] == "abc"
+    assert clips_state["missing-id"]["path"] == ""
+    assert "meta_hash" not in clips_state["missing-id"]
+
+
+async def test_reconcile_manifest_treats_zero_byte_as_missing(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Zero-byte files are reconciled the same as fully missing files."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    base = tmp_path / "mirror"
+    base.mkdir()
+    (base / "empty.flac").write_bytes(b"")
+    clips_state: dict[str, dict[str, object]] = {
+        "empty-id": {"path": "empty.flac", "meta_hash": "abc"},
+    }
+
+    count = await library._reconcile_manifest(base, clips_state)
+
+    assert count == 1
+    assert clips_state["empty-id"]["path"] == ""
+
+
+async def test_reconcile_manifest_idempotent_when_clean(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manifest with all files present: no mutation, returns 0."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    base = tmp_path / "mirror"
+    base.mkdir()
+    (base / "a.flac").write_bytes(b"fLaC" + b"\x00" * 10)
+    (base / "b.flac").write_bytes(b"fLaC" + b"\x00" * 10)
+    clips_state: dict[str, dict[str, object]] = {
+        "a-id": {"path": "a.flac", "meta_hash": "h1"},
+        "b-id": {"path": "b.flac", "meta_hash": "h2"},
+    }
+    snapshot = json.dumps(clips_state, sort_keys=True)
+
+    count = await library._reconcile_manifest(base, clips_state)
+
+    assert count == 0
+    assert json.dumps(clips_state, sort_keys=True) == snapshot
+
+
+async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """End-to-end: manifest entry whose file is gone → re-download queued."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _clip("clip0001-0000-0000-0000-000000000000", "Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": clip.title,
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert audio.rendered == [clip.id]
+    assert (sync_dir / rel_path).is_file()
+    assert library.state["clips"][clip.id]["path"] == rel_path
+
+
+async def test_present_file_does_not_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Negative control: file present + hash match → no re-download work."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+
+    clip = _clip("clipxxxx-0000-0000-0000-000000000000", "Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": clip.title,
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert audio.rendered == []
+
+
+async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A zero-size file on disk for a new clip should be re-downloaded."""
+    sync_dir = tmp_path / "mirror"
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip("clip-zero", "Zero Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"")
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert library.errors == 0
+    assert library.total_files == 1
+    assert target.stat().st_size > 0
+
+
+async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Reconciliation is skipped when no downloads, deletions, or migrations occurred."""
+    from custom_components.suno.models import clip_meta_hash
+
+    clip_id = "clip0099-0000-0000-0000-000000000000"
+    clip = _clip(clip_id, "Song")
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": rel_path,
+                    "title": clip.title,
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    dest = tmp_path / "mirror" / rel_path
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    with patch.object(library, "_reconcile_disk", new_callable=AsyncMock, return_value=0) as mock_reconcile:
+        await library.async_reconcile(
+            {
+                CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+                CONF_SHOW_LIKED: True,
+                CONF_ALL_PLAYLISTS: False,
+                CONF_PLAYLISTS: [],
+            },
+            SunoData(liked_clips=[clip]),
+        )
+
+    mock_reconcile.assert_not_called()
+
+
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
 
 
