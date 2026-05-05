@@ -82,12 +82,15 @@ class _FakeAudio:
         self,
         data: bytes = b"fLaC" + b"\x00" * 50,
         video_data: bytes | None = b"\x00\x00\x00\x1cftypisom",
+        retag_result: bool = True,
     ) -> None:
         self.data = data
         self.video_data = video_data
+        self.retag_result = retag_result
         self.rendered: list[str] = []
         self.render_qualities: list[str] = []
         self.render_metas: list[TrackMetadata] = []
+        self.retag_calls: list[tuple[Path, TrackMetadata]] = []
         self.video_calls: list[tuple[str, Path]] = []
 
     async def fetch_image(self, _image_url: str) -> bytes | None:
@@ -107,8 +110,9 @@ class _FakeAudio:
             return RenderedAudio(b"fLaC" + b"\x00" * 50, "flac")
         return RenderedAudio(b"ID3" + b"\x00" * 50, "mp3")
 
-    async def retag(self, _target: Path, _meta: TrackMetadata) -> bool:
-        return True
+    async def retag(self, target: Path, meta: TrackMetadata) -> bool:
+        self.retag_calls.append((target, meta))
+        return self.retag_result
 
     async def download_video(self, video_url: str, target: Path) -> None:
         self.video_calls.append((video_url, target))
@@ -1859,6 +1863,91 @@ async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tm
     result = await library._retag_clip(item, target)
 
     assert result is RetagResult.MISSING
+
+
+# ── Retag-driven reconcile (relocated from test_download.py) ─────
+
+
+async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changed meta hash should re-tag the file in place, not re-download."""
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _clip("clip-meta-0000-0000-0000-000000000000", "Meta Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    old_hash = "old_hash_1234"
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Meta Song OLD",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": old_hash,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 1
+    assert target.exists()
+    new_hash = clip_meta_hash(clip)
+    assert new_hash != old_hash
+    assert library.state["clips"][clip.id]["meta_hash"] == new_hash
+    assert library.errors == 0
+
+
+async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When re-tag fails, meta_hash is NOT updated so next sync retries."""
+    clip = _clip("clip-fail-0000-0000-0000-000000000000", "Fail Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    old_hash = "old_hash_fail"
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Fail Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": old_hash,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio(retag_result=False)
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 1
+    assert target.exists()
+    assert library.state["clips"][clip.id]["meta_hash"] == old_hash
+    assert library.errors == 1
 
 
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
