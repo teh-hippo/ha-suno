@@ -11,7 +11,8 @@ from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from ..audio import download_and_transcode_to_flac, download_as_mp3, fetch_album_art, retag_flac, retag_mp3
+from ..audio_retag import retag_flac, retag_mp3
+from ..audio_stream import download_and_transcode_to_flac, download_as_mp3, fetch_album_art
 from ..const import CDN_BASE_URL, QUALITY_HIGH
 from ..models import SunoClip, TrackMetadata
 from .contracts import RenderedAudio

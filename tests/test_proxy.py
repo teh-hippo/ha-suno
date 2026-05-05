@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.suno.audio import (
-    _build_id3_header,
-    _extract_apic,
-    _skip_existing_id3,
+from custom_components.suno.audio_metadata import (
+    build_id3_header,
+    extract_apic,
+    skip_existing_id3,
 )
 from custom_components.suno.models import TrackMetadata
 from custom_components.suno.proxy import (
@@ -27,26 +27,26 @@ class TestBuildId3Header:
     """Tests for the minimal ID3v2.4 header builder."""
 
     def test_header_starts_with_id3_magic(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         assert result[:3] == b"ID3"
 
     def test_header_version_is_2_3(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         assert result[3:5] == b"\x03\x00"
 
     def test_contains_tit2_frame(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
+        result = build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
         assert b"TIT2" in result
         assert b"My Song" in result
 
     def test_contains_tpe1_frame(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="Title", artist="Suno"))
+        result = build_id3_header(TrackMetadata(title="Title", artist="Suno"))
         assert b"TPE1" in result
         assert b"Suno" in result
 
     def test_utf8_encoding_byte(self) -> None:
         """Each text frame should use UTF-8 encoding (0x03)."""
-        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         # After TIT2 frame header (4 id + 4 size + 2 flags = 10 bytes)
         tit2_pos = result.index(b"TIT2")
         encoding_byte = result[tit2_pos + 10]
@@ -54,26 +54,26 @@ class TestBuildId3Header:
 
     def test_syncsafe_size(self) -> None:
         """The header size field should be a valid syncsafe integer."""
-        result = _build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
         raw = result[6:10]
         # Each byte must have bit 7 clear (syncsafe)
         for byte in raw:
             assert byte & 0x80 == 0
 
     def test_unicode_title(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="日本語タイトル", artist="アーティスト"))
+        result = build_id3_header(TrackMetadata(title="日本語タイトル", artist="アーティスト"))
         assert "日本語タイトル".encode() in result
         assert "アーティスト".encode() in result
 
     def test_empty_strings(self) -> None:
-        result = _build_id3_header(TrackMetadata(title="", artist=""))
+        result = build_id3_header(TrackMetadata(title="", artist=""))
         assert result[:3] == b"ID3"
         assert b"TIT2" in result
         assert b"TPE1" in result
 
     def test_round_trip_size(self) -> None:
         """The size in the header should match the actual frame data size."""
-        result = _build_id3_header(TrackMetadata(title="Test Title", artist="Test Artist"))
+        result = build_id3_header(TrackMetadata(title="Test Title", artist="Test Artist"))
         raw = result[6:10]
         decoded_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
         # Total bytes = 10 (header) + frames
@@ -89,7 +89,7 @@ class TestSkipExistingId3:
     def test_no_id3_tag_passthrough(self) -> None:
         """Non-ID3 data should pass through unchanged."""
         data = b"\xff\xfb\x90\x00" + b"\x00" * 100
-        assert _skip_existing_id3(data) == data
+        assert skip_existing_id3(data) == data
 
     def test_strips_id3_tag(self) -> None:
         """An ID3v2 header followed by audio data should have the tag stripped."""
@@ -105,13 +105,13 @@ class TestSkipExistingId3:
         tag_body = b"\x00" * tag_size
         audio_data = b"\xff\xfb\x90\x00audio_payload"
         chunk = id3_header + tag_body + audio_data
-        result = _skip_existing_id3(chunk)
+        result = skip_existing_id3(chunk)
         assert result == audio_data
 
     def test_chunk_too_short(self) -> None:
         """Chunks shorter than 10 bytes pass through even if they start with ID3."""
         data = b"ID3\x04\x00"
-        assert _skip_existing_id3(data) == data
+        assert skip_existing_id3(data) == data
 
     def test_entire_chunk_is_id3_tag(self) -> None:
         """If the whole chunk is ID3 tag data, result should be empty."""
@@ -119,7 +119,7 @@ class TestSkipExistingId3:
         syncsafe = (0, 0, 0, tag_size)
         id3_header = b"ID3\x04\x00\x00" + bytes(syncsafe)
         chunk = id3_header + b"\x00" * tag_size
-        result = _skip_existing_id3(chunk)
+        result = skip_existing_id3(chunk)
         assert result == b""
 
 
@@ -1208,7 +1208,7 @@ async def test_mp3_stream_includes_album_art(hass: HomeAssistant, mock_suno_clie
     body = await resp.read()
     assert body[:3] == b"ID3"
     # Verify the APIC frame is present and contains the album art
-    extracted = _extract_apic(body)
+    extracted = extract_apic(body)
     assert extracted == fake_art
     mock_fetch.assert_awaited_once()
 
@@ -1239,4 +1239,4 @@ async def test_mp3_stream_graceful_when_art_unavailable(
     body = await resp.read()
     assert body[:3] == b"ID3"
     # No APIC frame should be present
-    assert _extract_apic(body) is None
+    assert extract_apic(body) is None
