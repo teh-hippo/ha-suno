@@ -26,6 +26,7 @@ from .const import (
     CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
+    CONF_DOWNLOAD_VIDEOS,
     CONF_QUALITY_LIKED,
     CONF_QUALITY_PLAYLISTS,
     CONF_SHOW_LIKED,
@@ -44,13 +45,20 @@ from .const import (
     QUALITY_STANDARD,
 )
 from .coordinator import SunoCoordinator, SunoData
-from .download import _SERVICE_DOWNLOAD, SunoDownloadManager
-from .downloaded_library import DownloadedLibraryStatus, HomeAssistantDownloadedLibraryAudio
+from .downloaded_library import (
+    DownloadedLibrary,
+    DownloadedLibraryStatus,
+    HomeAssistantDownloadedLibraryAudio,
+    HomeAssistantDownloadedLibraryStorage,
+    SunoCacheDownloadedLibraryAdapter,
+)
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
 
 _LOGGER = logging.getLogger(__name__)
+
+_SERVICE_DOWNLOAD = "download_library"
 
 
 _DOWNLOAD_SECTIONS = (
@@ -90,16 +98,17 @@ class HomeAssistantRuntime:
         cache: SunoCache,
         rate_limiter: SunoRateLimiter,
         *,
-        download_manager: SunoDownloadManager | None = None,
+        downloaded_library: DownloadedLibrary | None = None,
     ) -> None:
         self.hass = hass
         self.entry = entry
         self.coordinator = coordinator
         self._client = client
         self._cache = cache
-        self._download_manager = download_manager
+        self._downloaded_library = downloaded_library
         self._rate_limiter = rate_limiter
         self._loaded_options = dict(entry.options)
+        self._updating_sensors = False
 
     @classmethod
     async def async_setup(cls, hass: HomeAssistant, entry: ConfigEntry[Any]) -> HomeAssistantRuntime:
@@ -186,9 +195,9 @@ class HomeAssistantRuntime:
     @property
     def download_status(self) -> DownloadedLibraryStatus:
         """Return the current Downloaded Library status."""
-        if self._download_manager is None:
+        if self._downloaded_library is None:
             return DownloadedLibraryStatus()
-        return self._download_manager.status
+        return self._downloaded_library.status
 
     @property
     def download_path(self) -> str:
@@ -198,7 +207,7 @@ class HomeAssistantRuntime:
     @property
     def downloads_enabled(self) -> bool:
         """Return True when the Downloaded Library is active for this entry."""
-        return self._download_manager is not None
+        return self._downloaded_library is not None
 
     @property
     def cache_file_count(self) -> int:
@@ -215,7 +224,7 @@ class HomeAssistantRuntime:
 
     async def async_force_download(self) -> None:
         """Force a Downloaded Library reconciliation if it is enabled."""
-        if self._download_manager is None:
+        if self._downloaded_library is None:
             return
         await self._run_reconcile(force=True)
 
@@ -227,9 +236,9 @@ class HomeAssistantRuntime:
         initial: bool = False,
     ) -> None:
         """Drive a Downloaded Library reconciliation cycle."""
-        if self._download_manager is None:
+        engine = self._downloaded_library
+        if engine is None:
             return
-        engine = self._download_manager._downloaded_library  # noqa: SLF001
         options = dict(self.entry.options)
         if not (options.get(CONF_DOWNLOAD_PATH) or engine.download_path):
             _LOGGER.warning("No download_path configured")
@@ -252,9 +261,9 @@ class HomeAssistantRuntime:
 
     def _ensure_audio_adapter(self) -> None:
         """Bind the engine's audio adapter to the current client if it changed."""
-        if self._download_manager is None:
+        engine = self._downloaded_library
+        if engine is None:
             return
-        engine = self._download_manager._downloaded_library  # noqa: SLF001
         if engine.audio is None:
             engine.audio = HomeAssistantDownloadedLibraryAudio(self.hass, self._client)
 
@@ -286,9 +295,9 @@ class HomeAssistantRuntime:
 
     def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return a fresh downloaded file path for a clip if one exists."""
-        if self._download_manager is None:
+        if self._downloaded_library is None:
             return None
-        return self._download_manager.get_downloaded_path(clip_id, meta_hash)
+        return self._downloaded_library.get_downloaded_path(clip_id, meta_hash)
 
     async def async_get_cached_audio(self, clip_id: str, fmt: str, meta_hash: str = "") -> Path | None:
         """Return a cached audio file path if it exists and is fresh."""
@@ -387,14 +396,8 @@ class HomeAssistantRuntime:
     async def _async_setup_downloaded_library(self) -> None:
         previous_options = _pop_previous_options(self.hass, self.entry.entry_id)
         if downloaded_library_enabled(self.entry.options):
-            self._download_manager = await SunoDownloadManager.async_setup(
-                self.hass,
-                self.entry,
-                self.coordinator,
-                self._client,
-                self._cache,
-            )
-            self._wire_downloaded_library_lifecycle(self._download_manager)
+            self._downloaded_library = await self._build_downloaded_library_engine()
+            self._wire_downloaded_library_lifecycle()
         elif (
             previous_options is not None
             and downloaded_library_enabled(previous_options)
@@ -404,25 +407,49 @@ class HomeAssistantRuntime:
         elif self.entry.options.get(CONF_DOWNLOAD_PATH):
             await self._async_cleanup_disabled_downloads(self.entry.options, None)
 
-    def _wire_downloaded_library_lifecycle(self, manager: SunoDownloadManager) -> None:
-        """Wire Home Assistant lifecycle hooks for an active download manager.
+    async def _build_downloaded_library_engine(self) -> DownloadedLibrary:
+        """Construct, wire, and load a Downloaded Library engine for this entry."""
+        entry = self.entry
+        storage = HomeAssistantDownloadedLibraryStorage(self.hass, f"suno_sync_{entry.entry_id}")
+        engine = DownloadedLibrary(
+            self.hass,
+            storage,
+            status_callback=self._handle_engine_status_update,
+        )
+        engine.audio = HomeAssistantDownloadedLibraryAudio(self.hass, self._client)
+        engine.cache = SunoCacheDownloadedLibraryAdapter(self._cache)
+        engine.download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
+        engine.download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
+        await engine.async_load()
+        if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
+            await engine.cleanup_tmp_files(download_path)
+        return engine
 
-        Lifted from ``SunoDownloadManager.async_setup`` during Phase 1.6 of the
-        download.py wrapper collapse: registration with the coordinator,
-        Home Assistant service registration, and the ``async_at_started``
-        initial-sync callback all live with the runtime that owns the entry,
-        not with the manager that does the work.
-        """
+    def _handle_engine_status_update(self, _status: DownloadedLibraryStatus) -> None:
+        """Push sensor updates via the coordinator without re-triggering sync."""
+        coordinator = self.coordinator
+        if not coordinator.data:
+            return
+        self._updating_sensors = True
+        try:
+            coordinator.async_set_updated_data(coordinator.data)
+        finally:
+            self._updating_sensors = False
+
+    def _wire_downloaded_library_lifecycle(self) -> None:
+        """Wire Home Assistant lifecycle hooks for the active Downloaded Library."""
         entry = self.entry
         hass = self.hass
         coordinator = self.coordinator
 
         def _on_coordinator_update() -> None:
-            if not manager.is_running and not manager._updating_sensors:  # noqa: SLF001
-                hass.async_create_task(
-                    self._run_reconcile(coordinator_data=coordinator.data),
-                    f"suno_download_refresh_{entry.entry_id}",
-                )
+            engine = self._downloaded_library
+            if engine is None or engine.running or self._updating_sensors:
+                return
+            hass.async_create_task(
+                self._run_reconcile(coordinator_data=coordinator.data),
+                f"suno_download_refresh_{entry.entry_id}",
+            )
 
         entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
@@ -454,10 +481,12 @@ class HomeAssistantRuntime:
         options: Mapping[str, Any],
         previous_options: Mapping[str, Any] | None,
     ) -> None:
-        manager = self._download_manager or SunoDownloadManager(self.hass, f"suno_sync_{self.entry.entry_id}")
-        if manager is not self._download_manager:
-            await manager.async_init()
-        await manager.async_cleanup_disabled_downloads(
+        engine = self._downloaded_library
+        if engine is None:
+            storage = HomeAssistantDownloadedLibraryStorage(self.hass, f"suno_sync_{self.entry.entry_id}")
+            engine = DownloadedLibrary(self.hass, storage)
+            await engine.async_load()
+        await engine.async_cleanup_disabled_downloads(
             dict(options),
             dict(previous_options) if previous_options else None,
         )
@@ -480,13 +509,13 @@ class HomeAssistantRuntime:
         self._cache = value
 
     @property
-    def download_manager(self) -> SunoDownloadManager | None:
+    def downloaded_library(self) -> DownloadedLibrary | None:
         """Compatibility access for older tests and private callers."""
-        return self._download_manager
+        return self._downloaded_library
 
-    @download_manager.setter
-    def download_manager(self, value: SunoDownloadManager | None) -> None:
-        self._download_manager = value
+    @downloaded_library.setter
+    def downloaded_library(self, value: DownloadedLibrary | None) -> None:
+        self._downloaded_library = value
 
     @property
     def client(self) -> SunoClient:

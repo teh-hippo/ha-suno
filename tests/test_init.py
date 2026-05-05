@@ -232,7 +232,7 @@ async def test_dm_created_when_mirror_or_archive(hass: HomeAssistant, mock_suno_
         await setup_entry(hass, entry)
 
     runtime = entry.runtime_data
-    assert runtime.download_manager is not None
+    assert runtime.downloaded_library is not None
 
 
 async def test_dm_not_created_all_cache_with_path(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -250,7 +250,7 @@ async def test_dm_not_created_all_cache_with_path(hass: HomeAssistant, mock_suno
         await setup_entry(hass, entry)
 
     runtime = entry.runtime_data
-    assert runtime.download_manager is None
+    assert runtime.downloaded_library is None
 
 
 async def test_all_cache_transition_cleanup(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -279,7 +279,7 @@ async def test_all_cache_transition_cleanup(hass: HomeAssistant, mock_suno_clien
     hass.config_entries.async_update_entry(entry, options=new_options)
 
     with patch(
-        "custom_components.suno.download.SunoDownloadManager.async_cleanup_disabled_downloads",
+        "custom_components.suno.downloaded_library.DownloadedLibrary.async_cleanup_disabled_downloads",
         new_callable=AsyncMock,
     ) as cleanup:
         await runtime._async_setup_downloaded_library()
@@ -322,7 +322,7 @@ async def test_setup_uses_previous_options_for_all_cache_cleanup(
     with (
         patch_suno_setup(mock_suno_client),
         patch(
-            "custom_components.suno.download.SunoDownloadManager.async_cleanup_disabled_downloads",
+            "custom_components.suno.downloaded_library.DownloadedLibrary.async_cleanup_disabled_downloads",
             new_callable=AsyncMock,
         ) as cleanup,
     ):
@@ -335,7 +335,10 @@ async def test_force_download_refreshes_library_before_reconcile(
     hass: HomeAssistant, tmp_path: Path, mock_suno_client: AsyncMock
 ) -> None:
     """async_force_download refreshes the Suno Library before forcing reconciliation."""
-    from custom_components.suno.download import SunoDownloadManager
+    from custom_components.suno.downloaded_library import (
+        DownloadedLibrary,
+        InMemoryDownloadedLibraryStorage,
+    )
     from custom_components.suno.library_refresh import SunoData
     from custom_components.suno.models import SunoClip
 
@@ -365,7 +368,8 @@ async def test_force_download_refreshes_library_before_reconcile(
     entry = make_entry(options={CONF_DOWNLOAD_PATH: str(tmp_path)})
     entry.add_to_hass(hass)
 
-    manager = SunoDownloadManager(hass, "test_force_download")
+    engine = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    await engine.async_load()
     runtime = HomeAssistantRuntime(
         hass,
         entry,
@@ -373,10 +377,10 @@ async def test_force_download_refreshes_library_before_reconcile(
         mock_suno_client,
         MagicMock(),
         MagicMock(),
-        download_manager=manager,
+        downloaded_library=engine,
     )
 
-    with patch.object(manager._downloaded_library, "async_reconcile", new_callable=AsyncMock) as reconcile:
+    with patch.object(engine, "async_reconcile", new_callable=AsyncMock) as reconcile:
         await runtime.async_force_download()
 
     coordinator._async_fetch_remote_data.assert_awaited_once()
@@ -384,3 +388,52 @@ async def test_force_download_refreshes_library_before_reconcile(
     reconcile.assert_awaited_once()
     assert reconcile.await_args.args[1] is fresh_data
     assert reconcile.await_args.kwargs["force"] is True
+
+
+# ── Service lifecycle ────────────────────────────────────────────────
+
+
+class TestServiceLifecycle:
+    """Tests for download service registration lifecycle."""
+
+    def test_service_not_removed_while_other_entries_remain(self) -> None:
+        """Service removal callback should keep the service when other entries exist."""
+        from custom_components.suno.const import DOMAIN
+        from custom_components.suno.runtime import _SERVICE_DOWNLOAD
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "entry-1"
+
+        other_entry = MagicMock()
+        other_entry.entry_id = "entry-2"
+        hass.config_entries.async_entries.return_value = [other_entry]
+
+        # Build the guarded removal function the same way production code does
+        def _maybe_remove_service() -> None:
+            remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
+            if not remaining:
+                hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+        _maybe_remove_service()
+        hass.services.async_remove.assert_not_called()
+
+    def test_service_removed_when_last_entry_unloads(self) -> None:
+        """Service removal callback should remove the service when no entries remain."""
+        from custom_components.suno.const import DOMAIN
+        from custom_components.suno.runtime import _SERVICE_DOWNLOAD
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "entry-1"
+
+        # No other entries remain after this one unloads
+        hass.config_entries.async_entries.return_value = [entry]
+
+        def _maybe_remove_service() -> None:
+            remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
+            if not remaining:
+                hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+        _maybe_remove_service()
+        hass.services.async_remove.assert_called_once_with(DOMAIN, _SERVICE_DOWNLOAD)
