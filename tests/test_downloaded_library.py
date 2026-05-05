@@ -1811,6 +1811,213 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
     assert cover_path.read_bytes() == existing_image
 
 
+# ── Engine-direct helper tests (relocated from test_download.py) ─
+
+
+async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_retag_clip pre-checks for missing files and signals MISSING."""
+    from custom_components.suno.downloaded_library import RetagResult
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
+    await library.async_load()
+
+    clip = _clip("clipA-0000-0000-0000-000000000000", "Song")
+    item = DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)
+    library.clip_index = {clip.id: clip}
+    target = tmp_path / "ghost.flac"
+
+    result = await library._retag_clip(item, target)
+
+    assert result is RetagResult.MISSING
+
+
+async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tmp_path: Path) -> None:
+    """_retag_clip treats zero-byte files as MISSING."""
+    from custom_components.suno.downloaded_library import RetagResult
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
+    await library.async_load()
+
+    clip = _clip("clipB-0000-0000-0000-000000000000", "Song")
+    item = DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)
+    library.clip_index = {clip.id: clip}
+    target = tmp_path / "empty.flac"
+    target.write_bytes(b"")
+
+    result = await library._retag_clip(item, target)
+
+    assert result is RetagResult.MISSING
+
+
+async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When track_path is given, _update_cover_art writes <basename>.jpg too."""
+    from custom_components.suno.downloaded_library import _update_cover_art
+
+    track = tmp_path / "Foo.flac"
+    track.write_bytes(b"fLaC")
+    cover = tmp_path / "cover.jpg"
+    hash_path = tmp_path / ".cover_hash"
+
+    session = AsyncMock()
+    with patch(
+        "custom_components.suno.downloaded_library.fetch_album_art",
+        new_callable=AsyncMock,
+        return_value=b"\xff\xd8\xff" + b"\x00" * 100,
+    ):
+        result = await _update_cover_art(hass, session, "https://x/y.jpg", cover, hash_path, track_path=track)
+
+    assert result is True
+    assert cover.exists()
+    track_jpg = track.with_suffix(".jpg")
+    assert track_jpg.exists()
+    assert track_jpg.read_bytes() == cover.read_bytes()
+
+
+async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Hash-match path still backfills track sidecar if it's missing."""
+    import hashlib
+
+    from custom_components.suno.downloaded_library import _update_cover_art
+
+    track = tmp_path / "Foo.flac"
+    track.write_bytes(b"fLaC")
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+    hash_path = tmp_path / ".cover_hash"
+    image_url = "https://x/y.jpg"
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    hash_path.write_text(url_hash)
+    track_jpg = track.with_suffix(".jpg")
+    assert not track_jpg.exists()
+
+    session = AsyncMock()
+    result = await _update_cover_art(hass, session, image_url, cover, hash_path, track_path=track)
+
+    assert result is False
+    assert track_jpg.exists()
+
+
+def test_album_for_clip_returns_none_for_non_remix() -> None:
+    """Non-remix derivatives keep their own title as the album."""
+    from custom_components.suno.downloaded_library import _album_for_clip
+
+    parent = SunoClip(
+        id="parent",
+        title="Parent Album",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    derived = SunoClip(
+        id="child",
+        title="Derived",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-02T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="parent",
+        root_ancestor_id="parent",
+        is_remix=False,
+    )
+    index = {"parent": parent, "child": derived}
+    assert _album_for_clip(derived, index) is None
+
+
+def test_album_for_clip_inherits_root_for_remix() -> None:
+    """Remix variants inherit the root ancestor's title as album."""
+    from custom_components.suno.downloaded_library import _album_for_clip
+
+    parent = SunoClip(
+        id="parent",
+        title="Original Track",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-01T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    remix = SunoClip(
+        id="remix",
+        title="Original Track (Disco Mix)",
+        audio_url="x",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="2026-01-02T00:00:00Z",
+        tags="",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="parent",
+        root_ancestor_id="parent",
+        is_remix=True,
+    )
+    index = {"parent": parent, "remix": remix}
+    assert _album_for_clip(remix, index) == "Original Track"
+
+
+# ── build_desired source-mode toggles ───────────────────────────
+
+
+async def test_build_desired_skips_cache_only_sources(hass: HomeAssistant) -> None:
+    """build_desired excludes cache-mode sections from the items list."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_MY_SONGS: True,
+        CONF_SHOW_PLAYLISTS: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
+        CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
+        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    suno_data = SunoData(
+        liked_clips=[_clip("c1")],
+        clips=[_clip("c2")],
+    )
+    plan = library.build_desired(options, suno_data)
+    assert len(plan.items) == 0
+
+
+async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
+    """show_playlists=False excludes playlists from desired set."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_PLAYLISTS: False,
+        CONF_SHOW_MY_SONGS: False,
+        CONF_ALL_PLAYLISTS: True,
+        CONF_PLAYLISTS: [],
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    plan = library.build_desired(options, SunoData(liked_clips=[_clip("c1")]))
+    ids = {item.clip.id for item in plan.items}
+    assert "c1" in ids
+
+
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
 
 
