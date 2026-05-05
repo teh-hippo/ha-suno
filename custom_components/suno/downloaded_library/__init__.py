@@ -309,20 +309,91 @@ class DownloadedLibrary:
 
         self._state.pop("trash", None)
         plan = desired_plan or self.build_desired(options, suno_library)
-        desired = plan.items
-        preserved_ids = plan.preserved_ids
-        source_to_name = plan.source_to_name
-        playlist_order = plan.playlist_order
-        self._clip_index = {item.clip.id: item.clip for item in desired}
+        self._clip_index = {item.clip.id: item.clip for item in plan.items}
         clips_state = dict(self._state.get("clips", {}))
-        to_download: list[DownloadItem] = []
-        to_retag: list[DownloadItem] = []
-        old_paths_after_download: dict[str, str] = {}
 
         missing_on_disk = await self._reconcile_manifest(base, clips_state)
         if missing_on_disk:
             _LOGGER.info("Manifest reconciliation: %d files missing on disk", missing_on_disk)
 
+        to_retag: list[DownloadItem] = []
+        migrated = await self._migrate_renamed_paths(base, plan.items, clips_state, to_retag)
+        if migrated:
+            _LOGGER.info("Renamed %d files", migrated)
+            self._state["clips"] = clips_state
+            await self._save_state(base)
+
+        to_download, old_paths_after_download, to_delete, seen_ids = self._plan_actions(
+            options,
+            plan,
+            clips_state,
+            to_retag,
+            force=force,
+            allow_destructive=allow_destructive,
+        )
+
+        self._pending = len(to_download)
+        self._publish_status()
+        _LOGGER.info(
+            "Sync: %d to download, %d to re-tag, %d to remove, %d current",
+            len(to_download),
+            len(to_retag),
+            len(to_delete),
+            len(seen_ids),
+        )
+        try:
+            await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
+        except OSError:
+            _LOGGER.error("Cannot create download directory: %s", download_path)
+            self._errors += 1
+            self._pending = 0
+            return
+
+        label = "Initial sync" if initial else "Syncing"
+        if initial:
+            _LOGGER.info("Initial sync: %d files to download", len(to_download))
+
+        retagged = await self._run_retags(base, to_retag, clips_state, to_download)
+
+        downloaded, reconciled = await self._run_downloads(
+            options, base, to_download, clips_state, old_paths_after_download, force=force, label=label
+        )
+
+        await self._sync_cover_art(base, plan.items, clips_state)
+
+        await self._prune_removed_entries(base, to_delete, clips_state)
+
+        await self._finalize_state(
+            base,
+            clips_state,
+            plan,
+            options,
+            downloaded=downloaded,
+            reconciled=reconciled,
+            removed=len(to_delete),
+            migrated=migrated,
+            retagged=retagged,
+            to_download_count=len(to_download),
+        )
+
+        if allow_destructive and (downloaded or to_delete or migrated or force):
+            orphans = await self._reconcile_disk(base, clips_state)
+            if orphans:
+                _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
+
+    async def _migrate_renamed_paths(
+        self,
+        base: Path,
+        desired: list[DownloadItem],
+        clips_state: dict[str, Any],
+        to_retag: list[DownloadItem],
+    ) -> int:
+        """Rename existing files whose target path changed (e.g. retitled clips).
+
+        Mutates ``clips_state`` and ``to_retag`` in-place. Returns the number of
+        successfully renamed files. Failures clear the entry's ``path`` and
+        ``meta_hash`` so the file is re-downloaded on the download pass.
+        """
         migrated = 0
         for item in desired:
             if item.clip.id not in clips_state:
@@ -347,64 +418,76 @@ class DownloadedLibrary:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
                     existing["path"] = ""
                     existing.pop("meta_hash", None)
-        if migrated:
-            _LOGGER.info("Renamed %d files", migrated)
-            self._state["clips"] = clips_state
-            await self._save_state(base)
+        return migrated
 
+    def _plan_actions(
+        self,
+        options: Mapping[str, Any],
+        plan: DesiredDownloadPlan,
+        clips_state: dict[str, Any],
+        to_retag: list[DownloadItem],
+        *,
+        force: bool,
+        allow_destructive: bool,
+    ) -> tuple[list[DownloadItem], dict[str, str], list[str], set[str]]:
+        """Classify desired clips into download/retag/unchanged + compute deletions.
+
+        Mutates ``clips_state`` for unchanged entries (sources/source_modes refresh)
+        and appends to ``to_retag`` for metadata-only changes. Returns the
+        download list, old-paths bookkeeping for quality migrations, the deletion
+        list, and the set of clip IDs seen in the desired plan.
+        """
+        to_download: list[DownloadItem] = []
+        old_paths_after_download: dict[str, str] = {}
         seen_ids: set[str] = set()
-        for item in desired:
+
+        for item in plan.items:
             seen_ids.add(item.clip.id)
             existing = clips_state.get(item.clip.id)
             if item.clip.id not in clips_state or force or not (existing and existing.get("path")):
                 to_download.append(item)
+                continue
+            existing = clips_state[item.clip.id]
+            existing_quality = existing.get("quality", QUALITY_HIGH)
+            if existing_quality != item.quality:
+                if old_path := existing.get("path"):
+                    old_paths_after_download[item.clip.id] = str(old_path)
+                to_download.append(item)
             else:
-                existing = clips_state[item.clip.id]
-                existing_quality = existing.get("quality", QUALITY_HIGH)
-                if existing_quality != item.quality:
-                    old_path = existing.get("path")
-                    if old_path:
-                        old_paths_after_download[item.clip.id] = str(old_path)
-                    to_download.append(item)
-                else:
-                    existing["sources"] = item.sources
-                    existing["source_modes"] = _source_modes_for(item.sources, options)
-                    old_hash = existing.get("meta_hash", "")
-                    new_hash = clip_meta_hash(item.clip)
-                    if old_hash and new_hash != old_hash:
-                        to_retag.append(item)
+                existing["sources"] = item.sources
+                existing["source_modes"] = _source_modes_for(item.sources, options)
+                old_hash = existing.get("meta_hash", "")
+                new_hash = clip_meta_hash(item.clip)
+                if old_hash and new_hash != old_hash:
+                    to_retag.append(item)
 
         to_delete: list[str] = []
         if allow_destructive:
             for cid in clips_state:
-                if cid in seen_ids or cid in preserved_ids:
+                if cid in seen_ids or cid in plan.preserved_ids:
                     continue
                 entry = clips_state[cid]
                 sources = entry.get("sources", [])
                 if all(not _source_preserves_files(src, options) for src in sources):
                     to_delete.append(cid)
 
-        self._pending = len(to_download)
-        self._publish_status()
-        _LOGGER.info(
-            "Sync: %d to download, %d to re-tag, %d to remove, %d current",
-            len(to_download),
-            len(to_retag),
-            len(to_delete),
-            len(seen_ids),
-        )
-        try:
-            await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
-        except OSError:
-            _LOGGER.error("Cannot create download directory: %s", download_path)
-            self._errors += 1
-            self._pending = 0
-            return
+        return to_download, old_paths_after_download, to_delete, seen_ids
 
-        label = "Initial sync" if initial else "Syncing"
-        if initial:
-            _LOGGER.info("Initial sync: %d files to download", len(to_download))
+    async def _run_retags(
+        self,
+        base: Path,
+        to_retag: list[DownloadItem],
+        clips_state: dict[str, Any],
+        to_download: list[DownloadItem],
+    ) -> int:
+        """Re-tag existing files; queue missing/failed targets for re-download.
 
+        Mutates ``clips_state`` (refreshing ``meta_hash`` on success or clearing
+        ``path``/``meta_hash`` when the target is missing) and appends to
+        ``to_download`` when a target needs to be re-fetched. Increments
+        ``self._errors`` for retag failures other than missing targets.
+        Returns the number of successfully retagged files.
+        """
         retagged = 0
         retag_missing = 0
         for item in to_retag:
@@ -429,7 +512,20 @@ class DownloadedLibrary:
             _LOGGER.info("Re-tagged %d files", retagged)
         if retag_missing:
             _LOGGER.info("Queued %d missing files for re-download", retag_missing)
+        return retagged
 
+    async def _run_downloads(
+        self,
+        options: Mapping[str, Any],
+        base: Path,
+        to_download: list[DownloadItem],
+        clips_state: dict[str, Any],
+        old_paths_after_download: dict[str, str],
+        *,
+        force: bool,
+        label: str,
+    ) -> tuple[int, int]:
+        """Execute the per-clip download/promote loop and publish progress."""
         downloaded = 0
         reconciled = 0
         for item in to_download:
@@ -455,7 +551,10 @@ class DownloadedLibrary:
             self._publish_status()
         if reconciled:
             _LOGGER.info("Reconciled %d files already on disk", reconciled)
+        return downloaded, reconciled
 
+    async def _sync_cover_art(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, Any]) -> int:
+        """Refresh cover.jpg + .cover_hash for every desired clip already on disk."""
         session = async_get_clientsession(self.hass)
         covers_fixed = 0
         for item in desired:
@@ -477,31 +576,44 @@ class DownloadedLibrary:
                 covers_fixed += 1
         if covers_fixed:
             _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
+        return covers_fixed
 
+    async def _prune_removed_entries(self, base: Path, to_delete: list[str], clips_state: dict[str, Any]) -> None:
+        """Drop deleted entries from manifest and clean their files + sidecars."""
         for clip_id in to_delete:
             if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
                 await _delete_file(self.hass, base, entry["path"])
                 await self._delete_sidecars(base, str(entry["path"]))
 
+    async def _finalize_state(
+        self,
+        base: Path,
+        clips_state: dict[str, Any],
+        plan: DesiredDownloadPlan,
+        options: Mapping[str, Any],
+        *,
+        downloaded: int,
+        reconciled: int,
+        removed: int,
+        migrated: int,
+        retagged: int,
+        to_download_count: int,
+    ) -> None:
+        """Commit manifest, last_result, and timestamp; write m3u8 playlists."""
         self._state["clips"] = clips_state
         self._state["last_download"] = datetime.now(tz=UTC).isoformat()
-        self._pending = max(0, len(to_download) - downloaded - reconciled)
+        self._pending = max(0, to_download_count - downloaded - reconciled)
         if self._pending > 0:
             self._last_result = f"Syncing ({self._pending} remaining)"
         else:
-            self._last_result = _build_download_summary(downloaded, len(to_delete), 0, migrated, retagged)
+            self._last_result = _build_download_summary(downloaded, removed, 0, migrated, retagged)
         self._state["last_result"] = self._last_result
         await self._save_state(base)
 
         if options.get(CONF_CREATE_PLAYLISTS):
             await self.hass.async_add_executor_job(
-                _write_m3u8_playlists, base, clips_state, desired, source_to_name, playlist_order
+                _write_m3u8_playlists, base, clips_state, plan.items, plan.source_to_name, plan.playlist_order
             )
-
-        if allow_destructive and (downloaded or to_delete or migrated or force):
-            orphans = await self._reconcile_disk(base, clips_state)
-            if orphans:
-                _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
 
     async def _move_sidecars(self, base: Path, clip: SunoClip, old_file: Path, new_file: Path) -> None:
         old_video = old_file.with_suffix(".mp4")
