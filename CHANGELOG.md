@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.26 (2026-05-05)
+
+### Refactoring
+
+- **audio**: Split audio.py into three peer modules
+  ([`ed03fae`](https://github.com/teh-hippo/ha-suno/commit/ed03fae0788ae696cf4d7320a1cbc4eeedeb4d48))
+
+
 ## v6.0.25 (2026-05-05)
 
 ### Refactoring
