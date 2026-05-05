@@ -87,6 +87,7 @@ class _FakeAudio:
         self.video_data = video_data
         self.rendered: list[str] = []
         self.render_qualities: list[str] = []
+        self.render_metas: list[TrackMetadata] = []
         self.video_calls: list[tuple[str, Path]] = []
 
     async def fetch_image(self, _image_url: str) -> bytes | None:
@@ -96,11 +97,12 @@ class _FakeAudio:
         self,
         clip: SunoClip,
         quality: str,
-        _meta: TrackMetadata,
+        meta: TrackMetadata,
         _image_url: str | None,
     ) -> RenderedAudio | None:
         self.rendered.append(clip.id)
         self.render_qualities.append(quality)
+        self.render_metas.append(meta)
         if quality == QUALITY_HIGH:
             return RenderedAudio(b"fLaC" + b"\x00" * 50, "flac")
         return RenderedAudio(b"ID3" + b"\x00" * 50, "mp3")
@@ -2373,6 +2375,222 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
         )
 
     mock_reconcile.assert_not_called()
+
+
+# ── Cache mode and Mirror/Archive coexistence ───────────────────
+
+
+async def test_cache_mode_excludes_from_download_set(hass: HomeAssistant) -> None:
+    """Cache-only sources produce no DownloadItems in build_desired."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    options = {
+        CONF_SHOW_LIKED: True,
+        CONF_SHOW_MY_SONGS: True,
+        CONF_ALL_PLAYLISTS: False,
+        CONF_PLAYLISTS: [],
+        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
+        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+        CONF_MY_SONGS_COUNT: 5,
+        CONF_MY_SONGS_DAYS: None,
+    }
+    suno_data = SunoData(liked_clips=[_clip("clip-liked-1")], clips=[_clip("clip-ms-1")])
+    plan = library.build_desired(options, suno_data)
+    ids = {item.clip.id for item in plan.items}
+    assert "clip-liked-1" in ids
+    assert "clip-ms-1" not in ids
+
+
+async def test_cache_mode_cleans_up_existing_files(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Previously downloaded files are deleted when source switches to cache."""
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    orphan = sync_dir / "old-my-songs.flac"
+    orphan.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                "old-clip": {
+                    "path": "old-my-songs.flac",
+                    "title": "Old Song",
+                    "created": "2026-01-01",
+                    "sources": ["my_songs"],
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+    assert library.total_files == 1
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: False,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+            CONF_MY_SONGS_COUNT: 5,
+            CONF_MY_SONGS_DAYS: None,
+        },
+        SunoData(),
+    )
+
+    assert library.total_files == 0
+    assert not orphan.exists()
+
+
+async def test_all_three_modes_coexist(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Mirror + Archive + Cache on different sections simultaneously."""
+    from custom_components.suno.models import SunoPlaylist
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                "old-pl": {
+                    "path": "old-playlist.flac",
+                    "title": "Old Playlist Song",
+                    "created": "2026-01-01",
+                    "sources": ["playlist:pl-1"],
+                },
+                "old-liked": {
+                    "path": "old-liked.flac",
+                    "title": "Old Liked Song",
+                    "created": "2026-01-01",
+                    "sources": ["liked"],
+                },
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    sync_dir = tmp_path / "mirror"
+    sync_dir.mkdir()
+    (sync_dir / "old-playlist.flac").write_bytes(b"fLaC")
+    (sync_dir / "old-liked.flac").write_bytes(b"fLaC")
+
+    suno_data = SunoData(
+        playlists=[SunoPlaylist(id="pl-1", name="Test", image_url=None, num_clips=0)],
+        playlist_clips={"pl-1": []},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE,
+            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
+            CONF_MY_SONGS_COUNT: 5,
+            CONF_MY_SONGS_DAYS: None,
+        },
+        suno_data,
+    )
+
+    clips = library.state.get("clips", {})
+    assert "old-pl" not in clips  # mirror: deleted
+    assert "old-liked" in clips  # archive: kept
+
+
+# ── Album from root ancestor ────────────────────────────────────
+
+
+async def test_album_set_from_root_ancestor(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A remix clip inherits the root ancestor's title as the album."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    root_clip = SunoClip(
+        id="root-song",
+        title="Original Song",
+        audio_url="https://cdn1.suno.ai/root-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    child_clip = SunoClip(
+        id="child-song",
+        title="Remix Version",
+        audio_url="https://cdn1.suno.ai/child-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-16T10:00:00Z",
+        tags="pop",
+        duration=130.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="root-song",
+        root_ancestor_id="root-song",
+        is_remix=True,
+    )
+
+    sync_dir = tmp_path / "mirror"
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[child_clip, root_clip]),
+    )
+
+    child_meta = next(
+        meta for clip_id, meta in zip(audio.rendered, audio.render_metas, strict=True) if clip_id == "child-song"
+    )
+    assert child_meta.album == "Original Song"
+
+
+async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Download falls back to clip's own title as album when no root resolved."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = SunoClip(
+        id="solo-song",
+        title="Standalone Track",
+        audio_url="https://cdn1.suno.ai/solo-song.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        root_ancestor_id="",
+    )
+
+    sync_dir = tmp_path / "mirror"
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert audio.render_metas[0].album == "Standalone Track"
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
