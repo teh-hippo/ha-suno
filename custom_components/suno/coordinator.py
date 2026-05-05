@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     import asyncio
 
     from .cache import SunoCache
-    from .download import SunoDownloadManager
     from .models import SunoClip
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +52,6 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
         )
         self.client = client
         self.cache: SunoCache | None = None
-        self.download_manager: SunoDownloadManager | None = None
         self._stored_library = HomeAssistantStoredLibrary(hass, entry.entry_id)
         self._store = self._stored_library.store
         self.library_refresh = LibraryRefresh(

@@ -834,7 +834,7 @@ async def test_serves_synced_mp3_with_correct_mime(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.download_manager = mock_dm
+    entry.runtime_data.downloaded_library = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -858,7 +858,7 @@ async def test_skips_synced_flac_when_mp3_requested(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.download_manager = mock_dm
+    entry.runtime_data.downloaded_library = mock_dm
 
     # Falls through to CDN; with no CDN mock it will 502
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -885,7 +885,7 @@ async def test_serves_synced_flac_with_correct_mime(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.download_manager = mock_dm
+    entry.runtime_data.downloaded_library = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.flac")
@@ -911,7 +911,7 @@ async def test_skips_synced_mp3_when_flac_requested(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.download_manager = mock_dm
+    entry.runtime_data.downloaded_library = mock_dm
 
     # Falls through to HQ pipeline; without mocks it will fail
     client = await hass_client()
@@ -1153,7 +1153,7 @@ async def test_downloaded_file_vanishes_falls_through(
 
     dm = MagicMock()
     dm.get_downloaded_path = MagicMock(return_value=RealPath("/nonexistent/clip.mp3"))
-    entry.runtime_data.download_manager = dm
+    entry.runtime_data.downloaded_library = dm
 
     # Mock cache to return None so it falls through to streaming
     mock_cache = AsyncMock()
