@@ -262,7 +262,7 @@ async def test_view_cache_hit_serves_file(
 
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=cache_file)
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -350,7 +350,7 @@ async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock()
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
@@ -443,7 +443,7 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock()
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     wav_data = _make_test_wav()
     mock_response = AsyncMock()
@@ -597,7 +597,7 @@ async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_cl
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 100
     mock_response = AsyncMock()
@@ -633,7 +633,7 @@ async def test_save_to_cache_bytes_failure_is_silent(
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     wav_data = _make_test_wav()
     mock_response = AsyncMock()
@@ -834,7 +834,7 @@ async def test_serves_synced_mp3_with_correct_mime(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.downloaded_library = mock_dm
+    entry.runtime_data._downloaded_library = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
@@ -858,7 +858,7 @@ async def test_skips_synced_flac_when_mp3_requested(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.downloaded_library = mock_dm
+    entry.runtime_data._downloaded_library = mock_dm
 
     # Falls through to CDN; with no CDN mock it will 502
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
@@ -885,7 +885,7 @@ async def test_serves_synced_flac_with_correct_mime(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=Path(synced_file))
-    entry.runtime_data.downloaded_library = mock_dm
+    entry.runtime_data._downloaded_library = mock_dm
 
     client = await hass_client()
     resp = await client.get("/api/suno/media/clip-aaa-111.flac")
@@ -911,7 +911,7 @@ async def test_skips_synced_mp3_when_flac_requested(
 
     mock_dm = MagicMock()
     mock_dm.get_downloaded_path = MagicMock(return_value=synced_file)
-    entry.runtime_data.downloaded_library = mock_dm
+    entry.runtime_data._downloaded_library = mock_dm
 
     # Falls through to HQ pipeline; without mocks it will fail
     client = await hass_client()
@@ -1096,7 +1096,7 @@ async def test_connection_reset_clears_collected(hass: HomeAssistant, mock_suno_
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
     mock_cache.async_put = AsyncMock()
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
 
@@ -1153,12 +1153,12 @@ async def test_downloaded_file_vanishes_falls_through(
 
     dm = MagicMock()
     dm.get_downloaded_path = MagicMock(return_value=RealPath("/nonexistent/clip.mp3"))
-    entry.runtime_data.downloaded_library = dm
+    entry.runtime_data._downloaded_library = dm
 
     # Mock cache to return None so it falls through to streaming
     mock_cache = AsyncMock()
     mock_cache.async_get = AsyncMock(return_value=None)
-    entry.runtime_data.cache = mock_cache
+    entry.runtime_data._cache = mock_cache
 
     # Make FileResponse raise FileNotFoundError at construction time
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200

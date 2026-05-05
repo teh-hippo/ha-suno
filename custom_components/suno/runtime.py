@@ -489,25 +489,17 @@ class HomeAssistantRuntime:
 
     @property
     def cache(self) -> SunoCache:
-        """Compatibility access for older tests and private callers."""
+        """Return the audio cache backing the proxy and downloaded library."""
         return self._cache
-
-    @cache.setter
-    def cache(self, value: SunoCache) -> None:
-        self._cache = value
 
     @property
     def downloaded_library(self) -> DownloadedLibrary | None:
-        """Compatibility access for older tests and private callers."""
+        """Return the active Downloaded Library engine, or None when disabled."""
         return self._downloaded_library
-
-    @downloaded_library.setter
-    def downloaded_library(self, value: DownloadedLibrary | None) -> None:
-        self._downloaded_library = value
 
     @property
     def client(self) -> SunoClient:
-        """Compatibility access for older tests and private callers."""
+        """Return the Suno API client used by this entry."""
         return self._client
 
 
