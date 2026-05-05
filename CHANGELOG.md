@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.24 (2026-05-05)
+
+### Refactoring
+
+- **runtime**: Break runtime ↔ proxy cycle by moving view registration
+  ([`5e79ed7`](https://github.com/teh-hippo/ha-suno/commit/5e79ed7f6916761b56a1d4713ef71d176ec7ccd8))
+
+
 ## v6.0.23 (2026-05-05)
 
 ### Refactoring

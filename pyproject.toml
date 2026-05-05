@@ -1,6 +1,6 @@
 [project]
 name = "ha-suno"
-version = "6.0.23"
+version = "6.0.24"
 description = "Suno.ai integration for Home Assistant"
 readme = "README.md"
 license = "MIT"
