@@ -2102,6 +2102,68 @@ async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: P
     assert all(p in new_paths for p in paths)
 
 
+async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Old-format hash (included display_name) triggers retag on first sync with new code."""
+    import hashlib
+
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _clip_with_display("clip-mig-0000-0000-0000-000000000000", "Migration Song", display_name="alice")
+    # Old hash formula included display_name.
+    old_hash = hashlib.md5(  # noqa: S324
+        f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.display_name}|{clip.video_url}|{clip.root_ancestor_id}".encode()
+    ).hexdigest()[:12]
+    new_hash = clip_meta_hash(clip)
+    assert old_hash != new_hash, "Hash formulas must differ for migration to trigger"
+
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Migration Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": old_hash,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 1
+    assert target.exists()
+    assert library.state["clips"][clip.id]["meta_hash"] == new_hash
+    assert library.errors == 0
+
+
+async def test_manifest_write_oserror_is_swallowed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """OSError writing manifest file is logged as warning, not raised."""
+    storage = InMemoryDownloadedLibraryStorage()
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    sync_dir = tmp_path / "mirror"
+    with patch.object(Path, "write_text", side_effect=OSError("disk full")):
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[]))
+
+    assert library.errors == 0
+
+
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
     from custom_components.suno.downloaded_library import _update_cover_art
