@@ -45,7 +45,7 @@ from .const import (
 )
 from .coordinator import SunoCoordinator, SunoData
 from .download import _SERVICE_DOWNLOAD, SunoDownloadManager
-from .downloaded_library import DownloadedLibraryStatus
+from .downloaded_library import DownloadedLibraryStatus, HomeAssistantDownloadedLibraryAudio
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
@@ -72,6 +72,10 @@ def any_section_downloads(options: Mapping[str, Any]) -> bool:
 def downloaded_library_enabled(options: Mapping[str, Any]) -> bool:
     """Return True when the Downloaded Library should be managed."""
     return bool(options.get(CONF_DOWNLOAD_PATH)) and any_section_downloads(options)
+
+
+def _is_empty_suno_library(data: SunoData) -> bool:
+    return not data.clips and not data.liked_clips and not data.playlists and not data.playlist_clips
 
 
 class HomeAssistantRuntime:
@@ -213,7 +217,72 @@ class HomeAssistantRuntime:
         """Force a Downloaded Library reconciliation if it is enabled."""
         if self._download_manager is None:
             return
-        await self._download_manager.async_download(dict(self.entry.options), self._client, force=True)
+        await self._run_reconcile(force=True)
+
+    async def _run_reconcile(
+        self,
+        *,
+        force: bool = False,
+        coordinator_data: SunoData | None = None,
+        initial: bool = False,
+    ) -> None:
+        """Drive a Downloaded Library reconciliation cycle."""
+        if self._download_manager is None:
+            return
+        engine = self._download_manager._downloaded_library  # noqa: SLF001
+        options = dict(self.entry.options)
+        if not (options.get(CONF_DOWNLOAD_PATH) or engine.download_path):
+            _LOGGER.warning("No download_path configured")
+            return
+        if engine.running:
+            _LOGGER.debug("Downloaded Library reconciliation already running, skipping")
+            return
+        self._ensure_audio_adapter()
+        suno_library = await self._library_for_run(coordinator_data, force=force)
+        allow_destructive = self._allow_destructive_reconciliation(suno_library)
+        desired_plan = engine.build_desired(options, suno_library)
+        await engine.async_reconcile(
+            options,
+            suno_library,
+            force=force,
+            initial=initial,
+            allow_destructive=allow_destructive,
+            desired_plan=desired_plan,
+        )
+
+    def _ensure_audio_adapter(self) -> None:
+        """Bind the engine's audio adapter to the current client if it changed."""
+        if self._download_manager is None:
+            return
+        engine = self._download_manager._downloaded_library  # noqa: SLF001
+        if engine.audio is None:
+            engine.audio = HomeAssistantDownloadedLibraryAudio(self.hass, self._client)
+
+    async def _library_for_run(
+        self,
+        coordinator_data: SunoData | None,
+        *,
+        force: bool,
+    ) -> SunoData:
+        coordinator = self.coordinator
+        if force:
+            try:
+                data = await coordinator._async_fetch_remote_data()  # noqa: SLF001
+            except Exception:
+                _LOGGER.warning("Library Refresh before forced download failed", exc_info=True)
+            else:
+                coordinator.async_set_updated_data(data)
+                return data
+        if coordinator_data is not None:
+            return coordinator_data
+        return coordinator.data
+
+    def _allow_destructive_reconciliation(self, data: SunoData) -> bool:
+        if not _is_empty_suno_library(data):
+            return True
+        coordinator = self.coordinator
+        refresh_task = getattr(coordinator, "_refresh_task", None)
+        return not (coordinator.data_version <= 1 and refresh_task is not None and not refresh_task.done())
 
     def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return a fresh downloaded file path for a clip if one exists."""
@@ -346,20 +415,19 @@ class HomeAssistantRuntime:
         """
         entry = self.entry
         hass = self.hass
-        client = self._client
         coordinator = self.coordinator
 
         def _on_coordinator_update() -> None:
             if not manager.is_running and not manager._updating_sensors:  # noqa: SLF001
                 hass.async_create_task(
-                    manager.async_download(dict(entry.options), client, coordinator_data=coordinator.data),
+                    self._run_reconcile(coordinator_data=coordinator.data),
                     f"suno_download_refresh_{entry.entry_id}",
                 )
 
         entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
         async def _handle_download_service(call: ServiceCall) -> None:
-            await manager.async_download(dict(entry.options), client, force=call.data.get("force", False))
+            await self._run_reconcile(force=call.data.get("force", False))
 
         if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
             hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
@@ -377,7 +445,7 @@ class HomeAssistantRuntime:
 
         async def _on_ha_started(_event: Any) -> None:
             _LOGGER.info("Home Assistant started - beginning initial sync")
-            await manager.async_download(dict(entry.options), client, initial=True)
+            await self._run_reconcile(initial=True)
 
         async_at_started(hass, _on_ha_started)
 

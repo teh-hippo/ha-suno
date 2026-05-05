@@ -329,3 +329,58 @@ async def test_setup_uses_previous_options_for_all_cache_cleanup(
         await runtime._async_setup_downloaded_library()
 
     cleanup.assert_awaited_once_with(new_options, old_options)
+
+
+async def test_force_download_refreshes_library_before_reconcile(
+    hass: HomeAssistant, tmp_path: Path, mock_suno_client: AsyncMock
+) -> None:
+    """async_force_download refreshes the Suno Library before forcing reconciliation."""
+    from custom_components.suno.download import SunoDownloadManager
+    from custom_components.suno.library_refresh import SunoData
+    from custom_components.suno.models import SunoClip
+
+    clip = SunoClip(
+        id="clip-force-0000-0000-0000-000000000000",
+        title="Song",
+        audio_url="https://cdn1.suno.ai/clip-force.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+    )
+    fresh_data = SunoData(liked_clips=[clip])
+
+    coordinator = MagicMock()
+    coordinator.data = SunoData()
+    coordinator.data_version = 2
+    coordinator._refresh_task = None
+    coordinator._async_fetch_remote_data = AsyncMock(return_value=fresh_data)
+    coordinator.async_set_updated_data = MagicMock()
+
+    entry = make_entry(options={CONF_DOWNLOAD_PATH: str(tmp_path)})
+    entry.add_to_hass(hass)
+
+    manager = SunoDownloadManager(hass, "test_force_download")
+    runtime = HomeAssistantRuntime(
+        hass,
+        entry,
+        coordinator,
+        mock_suno_client,
+        MagicMock(),
+        MagicMock(),
+        download_manager=manager,
+    )
+
+    with patch.object(manager._downloaded_library, "async_reconcile", new_callable=AsyncMock) as reconcile:
+        await runtime.async_force_download()
+
+    coordinator._async_fetch_remote_data.assert_awaited_once()
+    coordinator.async_set_updated_data.assert_called_once_with(fresh_data)
+    reconcile.assert_awaited_once()
+    assert reconcile.await_args.args[1] is fresh_data
+    assert reconcile.await_args.kwargs["force"] is True
