@@ -1419,6 +1419,172 @@ async def test_async_reconcile_initial_sync_label(hass: HomeAssistant, tmp_path:
     assert any("Initial sync" in r for r in results_during)
 
 
+# ── Path migration (rename instead of redownload) ───────────────
+
+
+async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When _clip_path returns a different path, the file is renamed."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": old_rel,
+                    "title": "Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "9ad1d8ab369d",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clip = _clip_with_display(clip_id, "Song", display_name="newartist")
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality="high")],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+        desired_plan=plan,
+    )
+
+    assert not old_file.exists()
+    new_rel = _clip_path(clip, "high")
+    new_file = sync_dir / new_rel
+    assert new_file.exists()
+    assert library.state["clips"][clip_id]["path"] == new_rel
+
+
+async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video .mp4 sidecar follows its audio file when the clip is renamed."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+    old_video = old_file.with_suffix(".mp4")
+    old_video.write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": old_rel,
+                    "title": "Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "9ad1d8ab369d",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clip = _clip_with_display(clip_id, "Song", display_name="newartist")
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality="high")],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+        desired_plan=plan,
+    )
+
+    new_video = sync_dir / _video_clip_path(clip)
+    assert new_video.exists()
+    assert new_video.read_bytes() == b"\x00\x00\x00\x1cftypisom"
+    assert not old_video.exists()
+    assert "music-videos" not in str(new_video.relative_to(sync_dir))
+    new_audio = sync_dir / _clip_path(clip, "high")
+    assert new_video.parent == new_audio.parent
+
+
+async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Empty parent directories are cleaned up after migration."""
+    clip_id = "abcd1234-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    old_rel = "old_artist/OldTitle/old_artist-OldTitle [abcd1234].flac"
+    old_file = sync_dir / old_rel
+    old_file.parent.mkdir(parents=True)
+    old_file.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": old_rel,
+                    "title": "OldTitle",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "8692c463e866",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clip = _clip_with_display(clip_id, "NewTitle", display_name="newartist")
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality="high")],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+        desired_plan=plan,
+    )
+
+    assert not (sync_dir / "old_artist" / "OldTitle").exists()
+    assert not (sync_dir / "old_artist").exists()
+
+
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
 
 
