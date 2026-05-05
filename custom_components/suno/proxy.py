@@ -12,7 +12,8 @@ from homeassistant.components.http import HomeAssistantView  # type: ignore[attr
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .audio import _build_id3_header, _skip_existing_id3, fetch_album_art
+from .audio_metadata import build_id3_header, skip_existing_id3
+from .audio_stream import fetch_album_art
 from .const import CDN_BASE_URL
 from .models import SunoClip, TrackMetadata, clip_meta_hash
 from .runtime import HomeAssistantRuntime, iter_entry_runtimes
@@ -132,7 +133,7 @@ class SunoMediaProxyView(HomeAssistantView):
                         suno_parent=meta.suno_parent,
                         suno_lineage=meta.suno_lineage,
                     )
-        id3_header = _build_id3_header(meta)
+        id3_header = build_id3_header(meta)
         cache_buf = bytearray(id3_header) if runtime is not None else None
         response = web.StreamResponse(
             status=200,
@@ -145,7 +146,7 @@ class SunoMediaProxyView(HomeAssistantView):
             async for chunk in upstream.content.iter_chunked(64 * 1024):
                 if first_chunk:
                     first_chunk = False
-                    chunk = _skip_existing_id3(chunk)
+                    chunk = skip_existing_id3(chunk)
                     if not chunk:
                         continue
                 await response.write(chunk)

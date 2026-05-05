@@ -8,7 +8,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from ..audio import fetch_album_art
+from ..audio_stream import fetch_album_art
 from .filesystem import _write_file, _write_track_sidecar
 
 

@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from custom_components.suno.audio import (
-    _build_id3_header,
-    _extract_apic,
-    _fix_flac_cover_type,
-    _skip_existing_id3,
+from custom_components.suno.audio_metadata import (
+    build_id3_header,
+    extract_apic,
+    fix_flac_cover_type,
+    skip_existing_id3,
+)
+from custom_components.suno.audio_retag import retag_flac, retag_mp3
+from custom_components.suno.audio_stream import (
     download_as_mp3,
     ensure_wav_url,
     fetch_album_art,
-    retag_flac,
-    retag_mp3,
     wav_to_flac,
 )
 from custom_components.suno.models import SunoClip, TrackMetadata, clip_meta_hash
@@ -154,10 +155,10 @@ async def test_wav_to_flac_with_album_art_fixes_picture_type() -> None:
     assert pic_type == 3
 
 
-# ── _fix_flac_cover_type ────────────────────────────────────────────
+# ── fix_flac_cover_type ────────────────────────────────────────────
 
 
-def test_fix_flac_cover_type_patches_type_zero() -> None:
+def testfix_flac_cover_type_patches_type_zero() -> None:
     """PICTURE block type 0 is changed to 3 (Front Cover)."""
     import struct
 
@@ -175,7 +176,7 @@ def test_fix_flac_cover_type_patches_type_zero() -> None:
     picture = b"\x86" + len(pic_payload).to_bytes(3, "big") + pic_payload
     data = b"fLaC" + streaminfo + picture
 
-    result = _fix_flac_cover_type(data)
+    result = fix_flac_cover_type(data)
 
     # Parse the picture type from result
     pic_offset = 4 + 4 + 34
@@ -183,23 +184,23 @@ def test_fix_flac_cover_type_patches_type_zero() -> None:
     assert pic_type == 3
 
 
-def test_fix_flac_cover_type_no_picture_block() -> None:
+def testfix_flac_cover_type_no_picture_block() -> None:
     """Data without a PICTURE block is returned unchanged."""
     streaminfo = b"\x80" + (34).to_bytes(3, "big") + b"\x00" * 34  # is_last=True
     data = b"fLaC" + streaminfo
-    assert _fix_flac_cover_type(data) == data
+    assert fix_flac_cover_type(data) == data
 
 
-def test_fix_flac_cover_type_not_flac() -> None:
+def testfix_flac_cover_type_not_flac() -> None:
     """Non-FLAC data is returned unchanged."""
     data = b"RIFF" + b"\x00" * 20
-    assert _fix_flac_cover_type(data) == data
+    assert fix_flac_cover_type(data) == data
 
 
-def test_fix_flac_cover_type_too_short() -> None:
+def testfix_flac_cover_type_too_short() -> None:
     """Data shorter than 8 bytes is returned unchanged."""
-    assert _fix_flac_cover_type(b"fLaC") == b"fLaC"
-    assert _fix_flac_cover_type(b"") == b""
+    assert fix_flac_cover_type(b"fLaC") == b"fLaC"
+    assert fix_flac_cover_type(b"") == b""
 
 
 # ── ensure_wav_url ──────────────────────────────────────────────────
@@ -222,7 +223,7 @@ async def test_ensure_wav_url_after_polling() -> None:
     client.get_wav_url = AsyncMock(side_effect=[None, None, "https://cdn.suno.ai/clip.wav"])
     client.request_wav = AsyncMock()
 
-    with patch("custom_components.suno.audio.asyncio.sleep", new_callable=AsyncMock):
+    with patch("custom_components.suno.audio_stream.asyncio.sleep", new_callable=AsyncMock):
         result = await ensure_wav_url(client, "clip-1", polls=5, interval=0.0)
 
     assert result == "https://cdn.suno.ai/clip.wav"
@@ -235,7 +236,7 @@ async def test_ensure_wav_url_never_available() -> None:
     client.get_wav_url = AsyncMock(return_value=None)
     client.request_wav = AsyncMock()
 
-    with patch("custom_components.suno.audio.asyncio.sleep", new_callable=AsyncMock):
+    with patch("custom_components.suno.audio_stream.asyncio.sleep", new_callable=AsyncMock):
         result = await ensure_wav_url(client, "clip-1", polls=3, interval=0.0)
 
     assert result is None
@@ -275,12 +276,12 @@ async def test_fetch_album_art_network_error() -> None:
     assert result is None
 
 
-# ── _build_id3_header ───────────────────────────────────────────────
+# ── build_id3_header ───────────────────────────────────────────────
 
 
-def test_build_id3_header_valid() -> None:
+def testbuild_id3_header_valid() -> None:
     """Produces bytes starting with ID3 magic."""
-    header = _build_id3_header(TrackMetadata(title="My Song", artist="My Artist"))
+    header = build_id3_header(TrackMetadata(title="My Song", artist="My Artist"))
 
     assert header[:3] == b"ID3"
     assert header[3] == 0x03  # Version 2.3
@@ -293,10 +294,10 @@ def test_build_id3_header_valid() -> None:
     assert b"TPE1" in header
 
 
-# ── _skip_existing_id3 ─────────────────────────────────────────────
+# ── skip_existing_id3 ─────────────────────────────────────────────
 
 
-def test_skip_existing_id3_strips_tag() -> None:
+def testskip_existing_id3_strips_tag() -> None:
     """Correctly skips an ID3v2 header."""
     # Build a fake ID3 header with syncsafe size
     tag_body = b"\x00" * 20
@@ -313,19 +314,19 @@ def test_skip_existing_id3_strips_tag() -> None:
     audio_data = b"\xff\xfb\x90\x00" * 10  # Fake MP3 frames
 
     chunk = id3_header + audio_data
-    result = _skip_existing_id3(chunk)
+    result = skip_existing_id3(chunk)
 
     assert result == audio_data
 
 
-def test_skip_existing_id3_no_tag() -> None:
+def testskip_existing_id3_no_tag() -> None:
     """Returns the chunk unchanged when no ID3 tag is present."""
     audio_data = b"\xff\xfb\x90\x00" * 10
-    result = _skip_existing_id3(audio_data)
+    result = skip_existing_id3(audio_data)
     assert result == audio_data
 
 
-def test_skip_existing_id3_large_tag() -> None:
+def testskip_existing_id3_large_tag() -> None:
     """Correctly strips an ID3 tag when the syncsafe size has overlapping bits."""
     # Tag body of 248 bytes: syncsafe = [0, 0, 1, 120]
     # This exercises the operator precedence fix: + 10 must apply after |
@@ -335,7 +336,7 @@ def test_skip_existing_id3_large_tag() -> None:
     audio_data = b"\xff\xfb\x90\x00" * 10
 
     chunk = id3_header + audio_data
-    result = _skip_existing_id3(chunk)
+    result = skip_existing_id3(chunk)
 
     assert result == audio_data
 
@@ -455,12 +456,12 @@ def test_clip_meta_hash_deterministic() -> None:
     assert isinstance(hash1, str)
 
 
-# ── _fix_flac_total_samples ────────────────────────────────────────
+# ── fix_flac_total_samples ────────────────────────────────────────
 
 
-def test_fix_flac_total_samples_patches_streaminfo() -> None:
+def testfix_flac_total_samples_patches_streaminfo() -> None:
     """Correctly patches total_samples into STREAMINFO block."""
-    from custom_components.suno.audio import _fix_flac_total_samples
+    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     # Build a minimal valid FLAC header with STREAMINFO
     # STREAMINFO: 34 bytes
@@ -478,45 +479,45 @@ def test_fix_flac_total_samples_patches_streaminfo() -> None:
     block_length = len(streaminfo).to_bytes(3, "big")
     data = b"fLaC" + block_header + block_length + bytes(streaminfo)
 
-    result = _fix_flac_total_samples(data, 120.0)
+    result = fix_flac_total_samples(data, 120.0)
     # Should have patched total_samples = 120 * 48000 = 5760000
     buf = bytearray(result)
     total_samples = ((buf[21] & 0x0F) << 32) | int.from_bytes(buf[22:26], "big")
     assert total_samples == 5760000
 
 
-def test_fix_flac_total_samples_zero_duration() -> None:
+def testfix_flac_total_samples_zero_duration() -> None:
     """Duration 0 leaves data unchanged."""
-    from custom_components.suno.audio import _fix_flac_total_samples
+    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     data = b"fLaC" + b"\x00" * 40
-    assert _fix_flac_total_samples(data, 0.0) is data
+    assert fix_flac_total_samples(data, 0.0) is data
 
 
-def test_fix_flac_total_samples_not_flac() -> None:
+def testfix_flac_total_samples_not_flac() -> None:
     """Non-FLAC data is returned unchanged."""
-    from custom_components.suno.audio import _fix_flac_total_samples
+    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     data = b"NOT_FLAC" + b"\x00" * 40
-    assert _fix_flac_total_samples(data, 120.0) is data
+    assert fix_flac_total_samples(data, 120.0) is data
 
 
 # ── APIC frame in ID3 ──────────────────────────────────────────────
 
 
-def test_build_id3_header_with_apic() -> None:
+def testbuild_id3_header_with_apic() -> None:
     """APIC frame is included when image_data is provided."""
     image = b"\xff\xd8\xff\xe0" + b"\x00" * 100  # Fake JPEG
-    header = _build_id3_header(TrackMetadata(title="Song", artist="Artist", image_data=image))
+    header = build_id3_header(TrackMetadata(title="Song", artist="Artist", image_data=image))
 
     assert b"APIC" in header
     assert b"image/jpeg" in header
     assert image in header
 
 
-def test_build_id3_header_txxx_frames() -> None:
+def testbuild_id3_header_txxx_frames() -> None:
     """TXXX frames are included for Suno custom metadata."""
-    header = _build_id3_header(
+    header = build_id3_header(
         TrackMetadata(
             title="Song",
             artist="Artist",
@@ -532,15 +533,15 @@ def test_build_id3_header_txxx_frames() -> None:
     assert b"Hardstyle" in header
 
 
-def test_build_id3_header_no_genre() -> None:
+def testbuild_id3_header_no_genre() -> None:
     """Genre (TCON) frame is never written."""
-    header = _build_id3_header(TrackMetadata(title="Song", artist="Artist"))
+    header = build_id3_header(TrackMetadata(title="Song", artist="Artist"))
     assert b"TCON" not in header
 
 
-def test_build_id3_header_all_custom_fields() -> None:
+def testbuild_id3_header_all_custom_fields() -> None:
     """All Suno custom metadata fields produce TXXX frames."""
-    header = _build_id3_header(
+    header = build_id3_header(
         TrackMetadata(
             title="Song",
             artist="Artist",
@@ -922,7 +923,7 @@ def test_retag_mp3_updates_metadata(tmp_path) -> None:
     """retag_mp3 strips old ID3 and writes new metadata."""
     # Build an MP3 with old metadata
     old_meta = TrackMetadata(title="Old Title", artist="Old Artist", album="Old Album")
-    old_header = _build_id3_header(old_meta)
+    old_header = build_id3_header(old_meta)
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 100  # Fake MP3 frame
     mp3_path = tmp_path / "test.mp3"
     mp3_path.write_bytes(old_header + audio_data)
@@ -942,7 +943,7 @@ def test_retag_mp3_preserves_existing_album_art(tmp_path) -> None:
     """retag_mp3 preserves album art from the existing ID3 APIC frame."""
     image_data = b"\xff\xd8\xff\xe0" + b"\x42" * 50  # Fake JPEG
     old_meta = TrackMetadata(title="Song", artist="Old", album="Album", image_data=image_data)
-    old_header = _build_id3_header(old_meta)
+    old_header = build_id3_header(old_meta)
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 100
     mp3_path = tmp_path / "test.mp3"
     mp3_path.write_bytes(old_header + audio_data)
@@ -953,7 +954,7 @@ def test_retag_mp3_preserves_existing_album_art(tmp_path) -> None:
 
     # The re-tagged file should still contain the APIC frame
     result = mp3_path.read_bytes()
-    extracted = _extract_apic(result)
+    extracted = extract_apic(result)
     assert extracted is not None
     assert extracted == image_data
 
@@ -962,7 +963,7 @@ def test_retag_mp3_falls_back_to_cover_jpg(tmp_path) -> None:
     """retag_mp3 reads cover.jpg as fallback when no APIC frame exists."""
     # MP3 with no album art
     old_meta = TrackMetadata(title="Song", artist="Old")
-    old_header = _build_id3_header(old_meta)
+    old_header = build_id3_header(old_meta)
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 100
     mp3_dir = tmp_path / "artist" / "album"
     mp3_dir.mkdir(parents=True)
@@ -978,7 +979,7 @@ def test_retag_mp3_falls_back_to_cover_jpg(tmp_path) -> None:
 
     # Should have embedded the cover.jpg data
     result = mp3_path.read_bytes()
-    extracted = _extract_apic(result)
+    extracted = extract_apic(result)
     assert extracted == cover_data
 
 
@@ -993,7 +994,7 @@ def test_retag_mp3_atomic_write(tmp_path) -> None:
     old_meta = TrackMetadata(title="Old", artist="Old")
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 50
     mp3_path = tmp_path / "test.mp3"
-    mp3_path.write_bytes(_build_id3_header(old_meta) + audio_data)
+    mp3_path.write_bytes(build_id3_header(old_meta) + audio_data)
 
     new_meta = TrackMetadata(title="New", artist="New")
     retag_mp3(mp3_path, new_meta)
@@ -1002,28 +1003,28 @@ def test_retag_mp3_atomic_write(tmp_path) -> None:
     assert mp3_path.exists()
 
 
-# ── _extract_apic ──────────────────────────────────────────────────
+# ── extract_apic ──────────────────────────────────────────────────
 
 
-def test_extract_apic_from_valid_id3() -> None:
+def testextract_apic_from_valid_id3() -> None:
     """Extracts image data from a valid APIC frame."""
     image_data = b"\xff\xd8\xff\xe0TESTIMAGE"
     meta = TrackMetadata(title="T", artist="A", image_data=image_data)
-    header = _build_id3_header(meta)
-    result = _extract_apic(header + b"\xff\xfb\x90\x00")
+    header = build_id3_header(meta)
+    result = extract_apic(header + b"\xff\xfb\x90\x00")
     assert result == image_data
 
 
-def test_extract_apic_no_id3() -> None:
+def testextract_apic_no_id3() -> None:
     """Returns None for data without ID3 header."""
-    assert _extract_apic(b"\xff\xfb\x90\x00" + b"\x00" * 100) is None
+    assert extract_apic(b"\xff\xfb\x90\x00" + b"\x00" * 100) is None
 
 
-def test_extract_apic_no_apic_frame() -> None:
+def testextract_apic_no_apic_frame() -> None:
     """Returns None when ID3 exists but has no APIC frame."""
     meta = TrackMetadata(title="T", artist="A")  # No image_data
-    header = _build_id3_header(meta)
-    assert _extract_apic(header + b"\xff\xfb\x90\x00") is None
+    header = build_id3_header(meta)
+    assert extract_apic(header + b"\xff\xfb\x90\x00") is None
 
 
 # ── retag_flac ─────────────────────────────────────────────────────
@@ -1041,7 +1042,9 @@ async def test_retag_flac_calls_ffmpeg_with_copy(tmp_path) -> None:
     proc_mock.communicate = AsyncMock(return_value=(b"", b""))
     proc_mock.returncode = 0
 
-    with patch("custom_components.suno.audio.asyncio.create_subprocess_exec", return_value=proc_mock) as mock_exec:
+    with patch(
+        "custom_components.suno.audio_retag.asyncio.create_subprocess_exec", return_value=proc_mock
+    ) as mock_exec:
         # The retag writes to .retag.tmp which we need to simulate
         tmp_out = flac_path.with_suffix(".retag.tmp")
 
@@ -1065,7 +1068,7 @@ async def test_retag_flac_calls_ffmpeg_with_copy(tmp_path) -> None:
 
 
 async def test_retag_flac_applies_cover_type_fix(tmp_path) -> None:
-    """retag_flac re-applies _fix_flac_cover_type when image_data is provided."""
+    """retag_flac re-applies fix_flac_cover_type when image_data is provided."""
     flac_path = tmp_path / "test.flac"
     flac_data = b"fLaC" + b"\x00" * 50
     flac_path.write_bytes(flac_data)
@@ -1077,8 +1080,8 @@ async def test_retag_flac_applies_cover_type_fix(tmp_path) -> None:
     proc_mock.returncode = 0
 
     with (
-        patch("custom_components.suno.audio.asyncio.create_subprocess_exec", return_value=proc_mock),
-        patch("custom_components.suno.audio._fix_flac_cover_type", return_value=flac_data) as mock_fix,
+        patch("custom_components.suno.audio_retag.asyncio.create_subprocess_exec", return_value=proc_mock),
+        patch("custom_components.suno.audio_retag.fix_flac_cover_type", return_value=flac_data) as mock_fix,
     ):
         tmp_out = flac_path.with_suffix(".retag.tmp")
 
@@ -1104,7 +1107,7 @@ async def test_retag_flac_returns_false_on_ffmpeg_failure(tmp_path) -> None:
     proc_mock.communicate = AsyncMock(return_value=(b"", b"error output"))
     proc_mock.returncode = 1
 
-    with patch("custom_components.suno.audio.asyncio.create_subprocess_exec", return_value=proc_mock):
+    with patch("custom_components.suno.audio_retag.asyncio.create_subprocess_exec", return_value=proc_mock):
         result = await retag_flac("/usr/bin/ffmpeg", flac_path, meta)
 
     assert result is False
@@ -1125,7 +1128,7 @@ async def test_retag_flac_ffmpeg_not_found(tmp_path) -> None:
     meta = TrackMetadata(title="T", artist="A", album="A")
 
     with patch(
-        "custom_components.suno.audio.asyncio.create_subprocess_exec",
+        "custom_components.suno.audio_retag.asyncio.create_subprocess_exec",
         side_effect=FileNotFoundError,
     ):
         result = await retag_flac("/nonexistent/ffmpeg", flac_path, meta)

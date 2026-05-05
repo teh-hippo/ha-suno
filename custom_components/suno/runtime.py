@@ -16,7 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.start import async_at_started
 
 from .api import SunoClient
-from .audio import download_and_transcode_to_flac
+from .audio_stream import download_and_transcode_to_flac
 from .auth import ClerkAuth
 from .cache import SunoCache
 from .const import (
