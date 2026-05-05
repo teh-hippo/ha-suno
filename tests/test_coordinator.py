@@ -40,7 +40,7 @@ async def test_coordinator_successful_update(hass: HomeAssistant, mock_suno_clie
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     data = coordinator.data
 
     assert len(data.clips) == 2
@@ -62,7 +62,7 @@ async def test_coordinator_auth_failure_raises_config_entry_auth_failed(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     mock_suno_client.get_all_songs.side_effect = SunoAuthError("Token expired")
 
     with pytest.raises(ConfigEntryAuthFailed):
@@ -77,7 +77,7 @@ async def test_coordinator_song_failure_publishes_partial_library(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     previous = coordinator.data.clips
     mock_suno_client.get_all_songs.side_effect = SunoApiError("Server error")
 
@@ -98,7 +98,7 @@ async def test_coordinator_empty_library(hass: HomeAssistant, mock_suno_client: 
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert coordinator.data.clips == []
     assert coordinator.data.liked_clips == []
     assert coordinator.data.playlists == []
@@ -111,7 +111,7 @@ async def test_coordinator_credits_failure_graceful(hass: HomeAssistant, mock_su
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert len(coordinator.data.clips) == 2
     assert coordinator.data.credits is None
 
@@ -123,7 +123,7 @@ async def test_coordinator_liked_songs_failure_graceful(hass: HomeAssistant, moc
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert len(coordinator.data.clips) == 2
     assert coordinator.data.liked_clips == []
 
@@ -135,7 +135,7 @@ async def test_coordinator_playlists_failure_graceful(hass: HomeAssistant, mock_
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert len(coordinator.data.clips) == 2
     assert coordinator.data.playlists == []
 
@@ -146,7 +146,7 @@ async def test_coordinator_uses_default_cache_ttl(hass: HomeAssistant, mock_suno
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert coordinator.update_interval is not None
     # DEFAULT_CACHE_TTL is 30 minutes
     assert coordinator.update_interval.total_seconds() == 30 * 60
@@ -162,7 +162,7 @@ async def test_display_name_from_clip_data(hass: HomeAssistant, mock_suno_client
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert coordinator.user.display_name == "CoolArtist"
 
 
@@ -185,7 +185,7 @@ async def test_display_name_change_logged(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert coordinator.user.display_name == "OldName"
 
     mock_suno_client.suno_display_name = "NewName"
@@ -202,7 +202,7 @@ async def test_title_no_update_when_unchanged(hass: HomeAssistant, mock_suno_cli
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     # Trigger another update — display name matches, so title shouldn't change
     mock_suno_client.suno_display_name = "Suno"
@@ -236,7 +236,7 @@ async def test_load_stored_data_corrupt(hass: HomeAssistant, mock_suno_client: A
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Simulate corrupt data by patching the store to return bad data
     with patch.object(coordinator._store, "async_load", return_value={"clips": [{"bad": "data"}]}):
         result = await coordinator.async_load_stored_data()
@@ -250,7 +250,7 @@ async def test_load_stored_data_non_dict(hass: HomeAssistant, mock_suno_client: 
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     with patch.object(coordinator._store, "async_load", return_value="not a dict"):
         result = await coordinator.async_load_stored_data()
         assert result is None
@@ -262,7 +262,7 @@ async def test_load_stored_data_none(hass: HomeAssistant, mock_suno_client: Asyn
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     with patch.object(coordinator._store, "async_load", return_value=None):
         result = await coordinator.async_load_stored_data()
         assert result is None
@@ -274,7 +274,7 @@ async def test_load_stored_data_exception(hass: HomeAssistant, mock_suno_client:
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     with patch.object(coordinator._store, "async_load", side_effect=Exception("IO Error")):
         # async_load_stored_data doesn't catch this itself — it propagates
         # But the caller in __init__.py wraps it
@@ -294,7 +294,7 @@ async def test_playlist_clips_populated(hass: HomeAssistant, mock_suno_client: A
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # The default mock returns sample_playlists() with one playlist "pl-001"
     assert "pl-001" in coordinator.data.playlist_clips
     assert len(coordinator.data.playlist_clips["pl-001"]) > 0
@@ -324,7 +324,7 @@ async def test_playlist_clip_fetch_partial_failure(hass: HomeAssistant, mock_sun
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert "pl-ok" in coordinator.data.playlist_clips
     # pl-fail should not be in playlist_clips because it errored
     assert "pl-fail" not in coordinator.data.playlist_clips
@@ -339,7 +339,7 @@ async def test_corrupt_non_dict_stored_data_returns_none(hass: HomeAssistant, mo
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Dict with entries that cannot construct a SunoClip → skipped by _safe_clips
     corrupt = {"clips": [{"title": "only title, missing required fields"}]}
     with patch.object(coordinator._store, "async_load", return_value=corrupt):
@@ -354,7 +354,7 @@ async def test_valid_stored_data_restores_coordinator(hass: HomeAssistant, mock_
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     stored = {
         "clips": [asdict(c) for c in sample_clips()],
         "liked_clips": [asdict(c) for c in sample_clips(1)],
@@ -378,7 +378,7 @@ async def test_store_exception_caught_returns_none(hass: HomeAssistant, mock_sun
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Dict with non-iterable clips value → TypeError during list comprehension
     with patch.object(coordinator._store, "async_load", return_value={"clips": 42}):
         result = await coordinator.async_load_stored_data()
@@ -403,7 +403,7 @@ async def test_multiple_playlists_clips_fanout(hass: HomeAssistant, mock_suno_cl
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert len(coordinator.data.playlist_clips) == 2
     assert len(coordinator.data.playlist_clips["pl-001"]) == 1
     assert len(coordinator.data.playlist_clips["pl-002"]) == 1
@@ -428,7 +428,7 @@ async def test_partial_playlist_failure_others_succeed(hass: HomeAssistant, mock
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert "pl-good" in coordinator.data.playlist_clips
     assert "pl-bad" not in coordinator.data.playlist_clips
     assert len(coordinator.data.playlist_clips["pl-good"]) == 1
@@ -448,7 +448,7 @@ async def test_playlist_clips_keys_match_ids(hass: HomeAssistant, mock_suno_clie
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert set(coordinator.data.playlist_clips.keys()) == {"pl-alpha", "pl-beta", "pl-gamma"}
 
 
@@ -488,7 +488,7 @@ async def test_root_ancestor_in_memory_chain(hass: HomeAssistant, mock_suno_clie
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     clip_c = _make_lineage_clip("clip-c", title="Root Song")
     clip_b = _make_lineage_clip("clip-b", edited_clip_id="clip-c")
     clip_a = _make_lineage_clip("clip-a", edited_clip_id="clip-b")
@@ -507,7 +507,7 @@ async def test_root_ancestor_via_parent_api(hass: HomeAssistant, mock_suno_clien
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Clip D is a remix with edited_clip_id pointing outside the library,
     # so Phase 1 chain breaks and Phase 2 API resolution kicks in.
     clip_d = _make_lineage_clip("clip-d", edited_clip_id="external-parent", is_remix=True)
@@ -532,7 +532,7 @@ async def test_root_ancestor_deep_chain(hass: HomeAssistant, mock_suno_client: A
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     clip_e = _make_lineage_clip("clip-e", title="Root")
     clip_d = _make_lineage_clip("clip-d", edited_clip_id="clip-e")
     clip_c = _make_lineage_clip("clip-c", edited_clip_id="clip-d")
@@ -553,7 +553,7 @@ async def test_root_ancestor_broken_chain(hass: HomeAssistant, mock_suno_client:
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # edited_clip_id points to a clip not in the library, and is_remix=False
     # so Phase 2 API lookup won't run either
     clip_a = _make_lineage_clip("clip-a", edited_clip_id="missing-clip")
@@ -570,7 +570,7 @@ async def test_root_ancestor_circular_chain(hass: HomeAssistant, mock_suno_clien
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     clip_a = _make_lineage_clip("clip-a", edited_clip_id="clip-b")
     clip_b = _make_lineage_clip("clip-b", edited_clip_id="clip-a")
 
@@ -592,7 +592,7 @@ async def test_root_ancestor_cached_across_updates(hass: HomeAssistant, mock_sun
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Pre-resolved clip
     clip = _make_lineage_clip("clip-x", is_remix=True, root_ancestor_id="root-z")
 
@@ -612,7 +612,7 @@ async def test_phased_resolution_caps_api_calls(hass: HomeAssistant, mock_suno_c
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     # Create 20 orphan remixes with edited_clip_id pointing outside library
     # so Phase 1 chain breaks and Phase 2 kicks in
     clips = [_make_lineage_clip(f"orphan-{i}", edited_clip_id=f"ext-{i}", is_remix=True) for i in range(20)]
@@ -642,7 +642,7 @@ async def test_data_version_increments_on_success(hass: HomeAssistant, mock_suno
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     initial = coordinator.data_version
     assert initial >= 1
     # data_version is incremented by _async_fetch_remote_data, which now runs
@@ -658,7 +658,7 @@ async def test_data_version_unchanged_on_failure(hass: HomeAssistant, mock_suno_
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     before = coordinator.data_version
     mock_suno_client.get_all_songs.side_effect = SunoApiError("boom")
     await coordinator.async_refresh()
@@ -675,7 +675,7 @@ async def test_store_save_failure_logged_not_raised(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     with patch.object(coordinator._store, "async_save", side_effect=OSError("disk full")):
         caplog.set_level(logging.WARNING, logger="custom_components.suno.coordinator")
@@ -701,7 +701,7 @@ async def test_unavailable_remix_lineage_is_published_honestly(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     new_clip = SunoClip(
         id="remix-new-id",
         title="Remix Track",
@@ -738,7 +738,7 @@ async def test_update_does_not_await_lineage_lookup(hass: HomeAssistant, mock_su
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     # Inject an unresolved remix so ancestor resolution would try API calls.
     remix = _make_lineage_clip(
@@ -780,7 +780,7 @@ async def test_in_memory_resolution_runs_in_update(hass: HomeAssistant, mock_sun
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     # Build a chain A -> B -> C entirely in memory (no API needed).
     clip_c = _make_lineage_clip("chain-c", title="Root")
@@ -804,7 +804,7 @@ async def test_concurrent_lineage_refresh_dedupes(hass: HomeAssistant, mock_suno
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     remix = _make_lineage_clip(
         "remix-dedup-id",
@@ -846,7 +846,7 @@ async def test_update_returns_cached_data_fast_when_warm(hass: HomeAssistant, mo
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     assert coordinator.data is not None  # warm
 
     cached = coordinator.data
@@ -882,7 +882,7 @@ async def test_cold_start_returns_empty_library_fast(hass: HomeAssistant, mock_s
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     # Simulate a cold start by clearing data and resetting tracking state.
     coordinator.data = None  # type: ignore[assignment]
@@ -904,7 +904,7 @@ async def test_concurrent_refresh_dedupes(hass: HomeAssistant, mock_suno_client:
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     async def _hang(*_args, **_kwargs):
         await asyncio.sleep(30)
@@ -930,7 +930,7 @@ async def test_background_refresh_publishes_fresh_data(hass: HomeAssistant, mock
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     initial_version = coordinator.data_version
 
     # Tweak the API response so we can detect the refresh landed.
@@ -954,7 +954,7 @@ async def test_background_refresh_auth_failure_propagates(hass: HomeAssistant, m
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     mock_suno_client.get_all_songs = AsyncMock(side_effect=SunoAuthError("Token expired"))
 
@@ -973,7 +973,7 @@ async def test_background_refresh_generic_section_error_publishes_partial(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     mock_suno_client.get_all_songs = AsyncMock(side_effect=SunoApiError("500 server"))
 
@@ -994,7 +994,7 @@ async def test_background_refresh_unexpected_exception_caught(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     # Patch a downstream pure-Python helper to blow up. This is a path the
     # API gather's return_exceptions=True can't intercept, so it bubbles
@@ -1020,7 +1020,7 @@ async def test_finished_refresh_task_allows_new_refresh(hass: HomeAssistant, moc
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     await coordinator._async_update_data()
     first_task = coordinator._refresh_task
@@ -1042,7 +1042,7 @@ async def test_cold_start_auth_failure_surfaces_from_background_refresh(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     coordinator.data = None  # type: ignore[assignment]
     coordinator._data_version = 0
 
@@ -1065,7 +1065,7 @@ async def test_update_connection_error_preserves_current_library(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     mock_suno_client.ensure_authenticated = AsyncMock(side_effect=SunoConnectionError("dns"))
 
@@ -1084,7 +1084,7 @@ async def test_direct_refresh_auth_error_at_pre_check_raises_config_entry_auth(
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
 
     mock_suno_client.ensure_authenticated = AsyncMock(side_effect=SunoAuthError("token"))
 
@@ -1098,7 +1098,7 @@ async def test_stored_data_load_bumps_version(hass: HomeAssistant, mock_suno_cli
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
-    coordinator: SunoCoordinator = entry.runtime_data
+    coordinator: SunoCoordinator = entry.runtime_data.coordinator
     coordinator._data_version = 0  # simulate fresh start
 
     stored = {
