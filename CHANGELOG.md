@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.0.20 (2026-05-05)
+
+### Chores
+
+- **deps**: Sync uv.lock after v6.0.18 release
+  ([`8706ed1`](https://github.com/teh-hippo/ha-suno/commit/8706ed13c5630043ea1cef7460625972c3e6eadd))
+
+### Refactoring
+
+- **downloaded_library**: Extract reconciliation passes to submodule
+  ([`17ecc29`](https://github.com/teh-hippo/ha-suno/commit/17ecc29c71e454266c40b28bc9640a6c2be8094e))
+
+
 ## v6.0.19 (2026-05-05)
 
 ### Chores
