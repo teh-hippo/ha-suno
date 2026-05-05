@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.25 (2026-05-05)
+
+### Refactoring
+
+- **models**: Lift SunoData dataclass from library_refresh to models
+  ([`b3443bd`](https://github.com/teh-hippo/ha-suno/commit/b3443bd246f2563799446440cb97ef3959e45a37))
+
+
 ## v6.0.24 (2026-05-05)
 
 ### Refactoring
