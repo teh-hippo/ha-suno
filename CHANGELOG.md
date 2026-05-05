@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.21 (2026-05-05)
+
+### Refactoring
+
+- **downloaded_library**: Split _run_download into named phase methods
+  ([`5348cc8`](https://github.com/teh-hippo/ha-suno/commit/5348cc8d85c59ec1a8a6b62d8463f2e301268319))
+
+
 ## v6.0.20 (2026-05-05)
 
 ### Chores
