@@ -1348,6 +1348,77 @@ async def test_my_songs_minimum_overrides_expired_days(hass: HomeAssistant) -> N
     assert len(plan.items) == 5
 
 
+# ── last_result persistence + bootstrap display ─────────────────
+
+
+async def test_last_result_persisted_and_restored(hass: HomeAssistant) -> None:
+    """last_result is saved to state and restored on async_load."""
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {},
+            "last_download": "2026-03-22T08:00:00+00:00",
+            "last_result": "3 new songs, 1 removal",
+        }
+    )
+    library = DownloadedLibrary(hass, storage)
+    await library.async_load()
+
+    assert library.last_result == "3 new songs, 1 removal"
+
+
+async def test_async_reconcile_downloads_all_clips_without_batch_cap(hass: HomeAssistant, tmp_path: Path) -> None:
+    """All clips download in one reconcile — no batch caps or continuation."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    num_clips = 30
+    clips = [_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(num_clips)]
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=clips),
+    )
+
+    assert library.pending == 0
+    assert library.total_files == num_clips
+
+
+async def test_async_reconcile_initial_sync_label(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Initial reconcile records 'Initial sync' in status_callback updates."""
+    results_during: list[str] = []
+
+    def capture(status: object) -> None:
+        results_during.append(status.last_result)  # type: ignore[attr-defined]
+
+    audio = _FakeAudio()
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=audio,
+        status_callback=capture,
+    )
+    await library.async_load()
+
+    clips = [_clip(f"clip-{i:04d}-0000-0000-0000-000000000000", f"Song {i}") for i in range(3)]
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=clips),
+        initial=True,
+    )
+
+    assert any("Initial sync" in r for r in results_during)
+
+
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
 
 
