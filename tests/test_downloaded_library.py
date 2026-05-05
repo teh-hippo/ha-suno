@@ -78,10 +78,16 @@ def _options(download_path: Path) -> dict[str, object]:
 
 
 class _FakeAudio:
-    def __init__(self, data: bytes = b"fLaC" + b"\x00" * 50) -> None:
+    def __init__(
+        self,
+        data: bytes = b"fLaC" + b"\x00" * 50,
+        video_data: bytes | None = b"\x00\x00\x00\x1cftypisom",
+    ) -> None:
         self.data = data
+        self.video_data = video_data
         self.rendered: list[str] = []
         self.render_qualities: list[str] = []
+        self.video_calls: list[tuple[str, Path]] = []
 
     async def fetch_image(self, _image_url: str) -> bytes | None:
         return None
@@ -102,8 +108,12 @@ class _FakeAudio:
     async def retag(self, _target: Path, _meta: TrackMetadata) -> bool:
         return True
 
-    async def download_video(self, _video_url: str, _target: Path) -> None:
-        return
+    async def download_video(self, video_url: str, target: Path) -> None:
+        self.video_calls.append((video_url, target))
+        if self.video_data is None:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.video_data)
 
 
 class _FakeCache:
@@ -2016,6 +2026,130 @@ async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
     plan = library.build_desired(options, SunoData(liked_clips=[_clip("c1")]))
     ids = {item.clip.id for item in plan.items}
     assert "c1" in ids
+
+
+# ── Video downloads ─────────────────────────────────────────────
+
+
+async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video is downloaded alongside audio when video_url is present and downloads enabled."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=audio,
+        download_videos=True,
+    )
+    await library.async_load()
+
+    clip = _clip_with_display(
+        "clip-vid-00000-0000-0000-000000000000",
+        "Video Song",
+        video_url="https://cdn1.suno.ai/clip-vid.mp4",
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
+    assert video_path.exists()
+    assert video_path.read_bytes() == b"\x00\x00\x00\x1cftypisom"
+    assert audio.video_calls == [(clip.video_url, video_path)]
+
+
+async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download is skipped when download_videos is False."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=audio,
+        download_videos=False,
+    )
+    await library.async_load()
+
+    clip = _clip_with_display(
+        "clip-novid-000-0000-0000-000000000000",
+        "No Video",
+        video_url="https://cdn1.suno.ai/clip-novid.mp4",
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
+    assert not video_path.exists()
+    assert audio.video_calls == []
+
+
+async def test_video_download_handles_failure(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When download_video returns without writing, no video file lands; audio still succeeds."""
+    audio = _FakeAudio(video_data=None)  # No video bytes written
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=audio,
+        download_videos=True,
+    )
+    await library.async_load()
+
+    clip = _clip_with_display(
+        "clip-v404-0000-0000-0000-000000000000",
+        "Video 404",
+        video_url="https://cdn1.suno.ai/clip-v404.mp4",
+    )
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    video_path = tmp_path / "mirror" / _video_clip_path(clip)
+    assert not video_path.exists()
+    assert library.errors == 0
+    assert library.total_files == 1
+
+
+async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download is skipped when clip has no video_url."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=audio,
+        download_videos=True,
+    )
+    await library.async_load()
+
+    clip = _clip("clip-nourl-000-0000-0000-000000000000", "No URL")
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+            CONF_SHOW_LIKED: True,
+            CONF_ALL_PLAYLISTS: False,
+            CONF_PLAYLISTS: [],
+        },
+        SunoData(liked_clips=[clip]),
+    )
+
+    assert not (tmp_path / "mirror" / _video_clip_path(clip)).exists()
+    assert audio.video_calls == []
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
