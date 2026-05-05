@@ -1,6 +1,75 @@
 # CHANGELOG
 
 
+## v6.0.15 (2026-05-05)
+
+### Chores
+
+- Sync uv.lock after v6.0.13 release
+  ([`8c677f6`](https://github.com/teh-hippo/ha-suno/commit/8c677f611aba449762562fd63036faa80bd53a60))
+
+### Refactoring
+
+- **download**: Delete _legacy_fetch_suno_library
+  ([`80f494c`](https://github.com/teh-hippo/ha-suno/commit/80f494cd176ecfd39a93370890f6aaebe96e06ec))
+
+- **download**: Slim wrapper to its public surface
+  ([`db1b0cd`](https://github.com/teh-hippo/ha-suno/commit/db1b0cdbb9a8aa0fccde9c968bb6a70d24e2960b))
+
+### Testing
+
+- **downloaded_library**: Migrate build_desired and my_songs filtering tests
+  ([`83c05ba`](https://github.com/teh-hippo/ha-suno/commit/83c05ba09da3d6f4603529559630d83167a4eab4))
+
+- **downloaded_library**: Migrate cache mode + album from root ancestor tests
+  ([`0ad281e`](https://github.com/teh-hippo/ha-suno/commit/0ad281e58f3ec7e2f4d2f59cf60125ee310f3ee2))
+
+- **downloaded_library**: Migrate cover art handling tests
+  ([`061a3e1`](https://github.com/teh-hippo/ha-suno/commit/061a3e177bd3ddea34e9c14a206b57b7c93bd3eb))
+
+- **downloaded_library**: Migrate disk reconcile, get_path, library_size, my_songs_minimum
+  ([`71234c9`](https://github.com/teh-hippo/ha-suno/commit/71234c91bc5f2698c59c5bd007fb2f7404bc9e3e))
+
+- **downloaded_library**: Migrate download-clip rendering branch tests
+  ([`c50ab55`](https://github.com/teh-hippo/ha-suno/commit/c50ab551ea8768ef1936e6a49d72ac3a98983c70))
+
+- **downloaded_library**: Migrate hash-change + retag-failure tests
+  ([`f6c95bc`](https://github.com/teh-hippo/ha-suno/commit/f6c95bc2c2dfd35905c8bde217b8518f366fd9e6))
+
+- **downloaded_library**: Migrate hash-formula + manifest-OSError tests
+  ([`1ea2568`](https://github.com/teh-hippo/ha-suno/commit/1ea25682b85d24e0be151a8b3283edcccbce016e))
+
+- **downloaded_library**: Migrate last_result/bootstrap display tests
+  ([`7733f76`](https://github.com/teh-hippo/ha-suno/commit/7733f763a63bb66f6c8018c4a161b773b2437a54))
+
+- **downloaded_library**: Migrate path-migration / file-rename tests
+  ([`ef22780`](https://github.com/teh-hippo/ha-suno/commit/ef22780a45a220b52e6c021854333ccb5361c525))
+
+- **downloaded_library**: Migrate property/breakdown/cleanup/write helpers
+  ([`f0c749a`](https://github.com/teh-hippo/ha-suno/commit/f0c749ae33ffe0ed8778cbcd21123184e7110455))
+
+- **downloaded_library**: Migrate quality tracking tests
+  ([`05e6e6b`](https://github.com/teh-hippo/ha-suno/commit/05e6e6b14f4429f579f36f2ebe8dc0ac2eb7f955))
+
+- **downloaded_library**: Migrate reconcile / present-file / missing-file / zero-size
+  ([`c289934`](https://github.com/teh-hippo/ha-suno/commit/c28993415f6df4433886b8fe40b572b9dbab5c75))
+
+- **downloaded_library**: Migrate retag_clip / cover_art helpers / album / build_desired toggles
+  ([`6e5e564`](https://github.com/teh-hippo/ha-suno/commit/6e5e56492ec04dec3bd517aa6e8f3065db914455))
+
+- **downloaded_library**: Migrate sync downloads/orphan/manifest tests
+  ([`3a6c3ac`](https://github.com/teh-hippo/ha-suno/commit/3a6c3ac10f4c4f0c3541a736cfed6896899de2ec))
+
+- **downloaded_library**: Migrate sync-init and reconcile-guard tests
+  ([`2c43b79`](https://github.com/teh-hippo/ha-suno/commit/2c43b79ab9eae00b1e2ce7f7e2db9f22ce673138))
+
+- **downloaded_library**: Migrate username-change rename tests
+  ([`326606e`](https://github.com/teh-hippo/ha-suno/commit/326606ea1d01cf953870f689f27dfc432b7fd492))
+
+- **downloaded_library**: Migrate video download tests
+  ([`6ae3a15`](https://github.com/teh-hippo/ha-suno/commit/6ae3a1516e409598c78c425651ac44600809d8a6))
+
+
 ## v6.0.14 (2026-05-04)
 
 ### Build System
