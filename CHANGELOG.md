@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.23 (2026-05-05)
+
+### Refactoring
+
+- **runtime**: Remove cache/downloaded_library/client property setters
+  ([`4c724e6`](https://github.com/teh-hippo/ha-suno/commit/4c724e6bd4d3c0bfd6ce46be267da70eb074901f))
+
+
 ## v6.0.22 (2026-05-05)
 
 ### Chores
