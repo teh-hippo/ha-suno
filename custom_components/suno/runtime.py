@@ -170,10 +170,6 @@ class HomeAssistantRuntime:
         """Compatibility access to the coordinator's current Suno Library."""
         return self.coordinator.data
 
-    @data.setter
-    def data(self, value: SunoData) -> None:
-        self.coordinator.data = value
-
     @property
     def user(self) -> SunoUser:
         """Return the current Suno Identity."""
@@ -183,14 +179,6 @@ class HomeAssistantRuntime:
     def data_version(self) -> int:
         """Return the current Suno Library data version."""
         return self.coordinator.data_version
-
-    @property
-    def _data_version(self) -> int:
-        return self.coordinator._data_version
-
-    @_data_version.setter
-    def _data_version(self, version: int) -> None:
-        self.coordinator._data_version = version
 
     @property
     def download_status(self) -> DownloadedLibraryStatus:
@@ -521,14 +509,6 @@ class HomeAssistantRuntime:
     def client(self) -> SunoClient:
         """Compatibility access for older tests and private callers."""
         return self._client
-
-    @client.setter
-    def client(self, value: SunoClient) -> None:
-        self._client = value
-
-    def __getattr__(self, name: str) -> Any:
-        """Delegate legacy coordinator-shaped access to the coordinator."""
-        return getattr(self.coordinator, name)
 
 
 def runtime_from_entry(entry: ConfigEntry[Any]) -> HomeAssistantRuntime | None:
