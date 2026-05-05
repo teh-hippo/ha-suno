@@ -19,8 +19,7 @@ from ..const import (
     DOWNLOAD_MODE_ARCHIVE,
     QUALITY_HIGH,
 )
-from ..library_refresh import SunoData
-from ..models import SunoClip, clip_meta_hash
+from ..models import SunoClip, SunoData, clip_meta_hash
 from .audio_adapter import HomeAssistantDownloadedLibraryAudio
 from .cache_adapter import NullDownloadedLibraryCache, SunoCacheDownloadedLibraryAdapter
 from .contracts import (

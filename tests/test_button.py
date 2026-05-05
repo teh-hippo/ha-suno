@@ -12,7 +12,8 @@ from custom_components.suno.button import (
     SunoDownloadLibraryButton,
 )
 from custom_components.suno.const import CONF_DOWNLOAD_PATH
-from custom_components.suno.coordinator import SunoCoordinator, SunoData
+from custom_components.suno.coordinator import SunoCoordinator
+from custom_components.suno.models import SunoData
 from custom_components.suno.runtime import HomeAssistantRuntime
 
 from .conftest import make_entry, patch_suno_setup, setup_entry

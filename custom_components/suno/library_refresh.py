@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from homeassistant.core import HomeAssistant
@@ -13,7 +13,7 @@ from homeassistant.helpers.storage import Store
 
 from .api import SunoClient
 from .exceptions import SunoAuthError, SunoConnectionError
-from .models import SunoClip, SunoCredits, SunoPlaylist, SunoUser, _safe_clips, _safe_playlists
+from .models import SunoClip, SunoCredits, SunoData, SunoPlaylist, SunoUser, _safe_clips, _safe_playlists
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,18 +29,6 @@ LINEAGE_PENDING = "pending"
 type TaskFactory = Callable[[Coroutine[Any, Any, None], str], asyncio.Task[None]]
 type SnapshotCallback = Callable[["LibrarySnapshot"], None]
 type ErrorCallback = Callable[[BaseException], None]
-
-
-@dataclass
-class SunoData:
-    clips: list[SunoClip] = field(default_factory=list)
-    liked_clips: list[SunoClip] = field(default_factory=list)
-    playlists: list[SunoPlaylist] = field(default_factory=list)
-    playlist_clips: dict[str, list[SunoClip]] = field(default_factory=dict)
-    credits: SunoCredits | None = None
-    stale_sections: tuple[str, ...] = ()
-    hidden_pending_remix_count: int = 0
-    unavailable_lineage_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,7 +598,6 @@ __all__ = [
     "ParentLookup",
     "StoredLibraryAdapter",
     "SunoClientLibraryAdapter",
-    "SunoData",
     "SunoLibraryAdapter",
     "_MAX_PARENT_LOOKUPS_PER_CYCLE",
 ]

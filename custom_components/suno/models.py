@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 from .const import CDN_BASE_URL
@@ -268,3 +268,17 @@ def _safe_playlists(raw_list: list[dict[str, Any]]) -> list[SunoPlaylist]:
         except Exception:
             _LOGGER.warning("Skipping corrupt playlist entry: %s", p.get("id", "unknown"))
     return result
+
+
+@dataclass
+class SunoData:
+    """Aggregate Suno Library snapshot used across the integration."""
+
+    clips: list[SunoClip] = field(default_factory=list)
+    liked_clips: list[SunoClip] = field(default_factory=list)
+    playlists: list[SunoPlaylist] = field(default_factory=list)
+    playlist_clips: dict[str, list[SunoClip]] = field(default_factory=dict)
+    credits: SunoCredits | None = None
+    stale_sections: tuple[str, ...] = ()
+    hidden_pending_remix_count: int = 0
+    unavailable_lineage_count: int = 0

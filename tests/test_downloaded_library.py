@@ -44,8 +44,7 @@ from custom_components.suno.downloaded_library import (
     _write_file,
     _write_m3u8_playlists,
 )
-from custom_components.suno.library_refresh import SunoData
-from custom_components.suno.models import SunoClip, TrackMetadata
+from custom_components.suno.models import SunoClip, SunoData, TrackMetadata
 
 
 def _clip(clip_id: str, title: str = "Song") -> SunoClip:

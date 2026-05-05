@@ -34,8 +34,7 @@ from ..const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from ..library_refresh import SunoData
-from ..models import SunoClip, clip_meta_hash
+from ..models import SunoClip, SunoData, clip_meta_hash
 from .contracts import DesiredDownloadPlan, DownloadItem
 from .source_modes import _get_source_mode, _source_modes_for
 

@@ -11,9 +11,9 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
-from custom_components.suno.coordinator import _MAX_PARENT_LOOKUPS_PER_CYCLE, SunoCoordinator, SunoData
+from custom_components.suno.coordinator import _MAX_PARENT_LOOKUPS_PER_CYCLE, SunoCoordinator
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError
-from custom_components.suno.models import SunoClip, SunoPlaylist
+from custom_components.suno.models import SunoClip, SunoData, SunoPlaylist
 
 from .conftest import (
     make_entry,
