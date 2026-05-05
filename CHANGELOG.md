@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.0.17 (2026-05-05)
+
+### Chores
+
+- Sync uv.lock after v6.0.15 release
+  ([`4498552`](https://github.com/teh-hippo/ha-suno/commit/44985520052cfbfb49a227cea26b78e1c75b0030))
+
+### Refactoring
+
+- Delete download.py wrapper, runtime owns engine directly
+  ([`a19e8cd`](https://github.com/teh-hippo/ha-suno/commit/a19e8cdf99a25ad2e30ae1a3df73811c2312e8e0))
+
+
 ## v6.0.16 (2026-05-05)
 
 ### Refactoring
