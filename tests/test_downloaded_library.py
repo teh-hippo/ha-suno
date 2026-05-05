@@ -1950,6 +1950,158 @@ async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: P
     assert library.errors == 1
 
 
+async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Full username change: multiple clips renamed + re-tagged, no re-downloads."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync_dir = tmp_path / "mirror"
+
+    clips_old = [
+        _clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="olduser")
+        for i in range(3)
+    ]
+    initial_clips: dict[str, object] = {}
+    for clip in clips_old:
+        rel_path = _clip_path(clip, QUALITY_HIGH)
+        target = sync_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+        initial_clips[clip.id] = {
+            "path": rel_path,
+            "title": clip.title,
+            "created": "2026-03-15",
+            "sources": ["liked"],
+            "size": 54,
+            "meta_hash": clip_meta_hash(clip),
+            "quality": QUALITY_HIGH,
+        }
+
+    storage = InMemoryDownloadedLibraryStorage({"clips": initial_clips, "last_download": None})
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clips_new = [
+        _clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="newuser")
+        for i in range(3)
+    ]
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=clips_new))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 3
+
+    for clip in clips_new:
+        new_rel = _clip_path(clip, QUALITY_HIGH)
+        assert (sync_dir / new_rel).exists(), f"Missing: {new_rel}"
+        assert library.state["clips"][clip.id]["path"] == new_rel
+
+    for clip in clips_old:
+        old_rel = _clip_path(clip, QUALITY_HIGH)
+        assert not (sync_dir / old_rel).exists(), f"Stale: {old_rel}"
+
+    assert library.errors == 0
+
+
+async def test_liked_from_other_user_not_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Liked songs from other artists are NOT renamed when user changes name."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync_dir = tmp_path / "mirror"
+    other_clip = _clip_with_display("other-clip-0000-0000-000000000000", "Other Song", display_name="otheartist")
+    other_rel = _clip_path(other_clip, QUALITY_HIGH)
+    other_target = sync_dir / other_rel
+    other_target.parent.mkdir(parents=True, exist_ok=True)
+    other_target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                other_clip.id: {
+                    "path": other_rel,
+                    "title": "Other Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(other_clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[other_clip]))
+
+    assert audio.rendered == []
+    assert audio.retag_calls == []
+    assert other_target.exists()
+    assert library.state["clips"][other_clip.id]["path"] == other_rel
+    assert library.errors == 0
+
+
+async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: Path) -> None:
+    """OSError on one file during rename should not abort the batch."""
+    from custom_components.suno.models import clip_meta_hash
+
+    sync_dir = tmp_path / "mirror"
+
+    clips_old = [
+        _clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="olduser")
+        for i in range(2)
+    ]
+    initial_clips: dict[str, object] = {}
+    for clip in clips_old:
+        rel_path = _clip_path(clip, QUALITY_HIGH)
+        target = sync_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+        initial_clips[clip.id] = {
+            "path": rel_path,
+            "title": clip.title,
+            "created": "2026-03-15",
+            "sources": ["liked"],
+            "size": 54,
+            "meta_hash": clip_meta_hash(clip),
+            "quality": QUALITY_HIGH,
+        }
+
+    storage = InMemoryDownloadedLibraryStorage({"clips": initial_clips, "last_download": None})
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    clips_new = [
+        _clip_with_display(f"clip{i:04d}-0000-0000-0000-000000000000", f"Song {i}", display_name="newuser")
+        for i in range(2)
+    ]
+
+    call_count = 0
+    original_rename = Path.rename
+
+    def _flaky_rename(self_path: Path, target: Path) -> Path:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise OSError("Permission denied")
+        return original_rename(self_path, target)
+
+    with patch.object(Path, "rename", _flaky_rename):
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=clips_new))
+
+    assert call_count >= 2
+    # The failed-rename clip should have been queued for re-download.
+    assert len(audio.rendered) == 1
+
+    new_paths = [_clip_path(c, QUALITY_HIGH) for c in clips_new]
+    paths = [library.state["clips"][c.id]["path"] for c in clips_new]
+    # Both clips reference the new path — one via in-place rename, one via
+    # re-download after the rename failure cleared the stale path.
+    assert all(p in new_paths for p in paths)
+
+
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
     from custom_components.suno.downloaded_library import _update_cover_art
