@@ -761,13 +761,16 @@ def _clip_with_display(
     title: str = "Song",
     created: str = "2026-03-15T10:00:00Z",
     display_name: str = "testuser",
+    image_url: str | None = None,
+    image_large_url: str | None = None,
+    video_url: str = "",
 ) -> SunoClip:
     return SunoClip(
         id=clip_id,
         title=title,
         audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
-        image_url=None,
-        image_large_url=None,
+        image_url=image_url,
+        image_large_url=image_large_url,
         is_liked=True,
         status="complete",
         created_at=created,
@@ -776,6 +779,7 @@ def _clip_with_display(
         clip_type="gen",
         has_vocal=True,
         display_name=display_name,
+        video_url=video_url,
     )
 
 
@@ -1583,6 +1587,228 @@ async def test_migration_cleans_old_parent_dirs(hass: HomeAssistant, tmp_path: P
 
     assert not (sync_dir / "old_artist" / "OldTitle").exists()
     assert not (sync_dir / "old_artist").exists()
+
+
+# ── Cover art handling ──────────────────────────────────────────
+
+
+async def test_cover_jpg_written_on_download(hass: HomeAssistant, tmp_path: Path) -> None:
+    """cover.jpg is written when a clip is downloaded with an image URL."""
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    clip = _clip_with_display(
+        "clip-cover-0000-0000-0000-000000000000",
+        "Cover Song",
+        image_url="https://cdn2.suno.ai/image_abcd.jpeg",
+    )
+    fake_image = b"\xff\xd8\xff\xe0JFIF"
+
+    with (
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch(
+            "custom_components.suno.downloaded_library.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=fake_image,
+        ),
+    ):
+        await library.async_reconcile(
+            {
+                CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+                CONF_SHOW_LIKED: True,
+                CONF_ALL_PLAYLISTS: False,
+                CONF_PLAYLISTS: [],
+            },
+            SunoData(liked_clips=[clip]),
+        )
+
+    rel_path = _clip_path(clip, "high")
+    cover_path = (tmp_path / "mirror" / rel_path).parent / "cover.jpg"
+    assert cover_path.exists()
+    assert cover_path.read_bytes() == fake_image
+
+
+async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path: Path) -> None:
+    """.cover_hash file is written alongside cover.jpg."""
+    import hashlib
+
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    image_url = "https://cdn2.suno.ai/image_hashtest.jpeg"
+    clip = _clip_with_display(
+        "clip-hash-0000-0000-0000-000000000000",
+        "Hash Song",
+        image_url=image_url,
+    )
+    fake_image = b"\xff\xd8\xff\xe0JFIF"
+
+    with (
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch(
+            "custom_components.suno.downloaded_library.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=fake_image,
+        ),
+    ):
+        await library.async_reconcile(
+            {
+                CONF_DOWNLOAD_PATH: str(tmp_path / "mirror"),
+                CONF_SHOW_LIKED: True,
+                CONF_ALL_PLAYLISTS: False,
+                CONF_PLAYLISTS: [],
+            },
+            SunoData(liked_clips=[clip]),
+        )
+
+    rel_path = _clip_path(clip, "high")
+    hash_path = (tmp_path / "mirror" / rel_path).parent / ".cover_hash"
+    assert hash_path.exists()
+    expected_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    assert hash_path.read_text().strip() == expected_hash
+
+
+async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Cover art is refreshed when image URL hash differs from stored .cover_hash."""
+    import hashlib
+
+    clip_id = "clip-refresh-000-0000-0000-000000000000"
+    new_image_url = "https://cdn2.suno.ai/new_image.jpeg"
+    clip = _clip_with_display(clip_id, "Refresh Song", image_url=new_image_url)
+    rel_path = _clip_path(clip, "high")
+
+    sync_dir = tmp_path / "mirror"
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    cover_path = target.parent / "cover.jpg"
+    hash_path = target.parent / ".cover_hash"
+    cover_path.write_bytes(b"old_image_data")
+    hash_path.write_text("old_hash_value")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": rel_path,
+                    "title": "Refresh Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "5ed3d7d7bb17",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality="high")],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+    new_image_data = b"\xff\xd8\xff\xe0NEW_IMAGE"
+
+    with (
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch(
+            "custom_components.suno.downloaded_library.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=new_image_data,
+        ) as mock_fetch,
+    ):
+        await library.async_reconcile(
+            {
+                CONF_DOWNLOAD_PATH: str(sync_dir),
+                CONF_SHOW_LIKED: True,
+                CONF_ALL_PLAYLISTS: False,
+                CONF_PLAYLISTS: [],
+            },
+            SunoData(liked_clips=[clip]),
+            desired_plan=plan,
+        )
+
+    assert cover_path.read_bytes() == new_image_data
+    expected_hash = hashlib.md5(new_image_url.encode()).hexdigest()[:12]  # noqa: S324
+    assert hash_path.read_text().strip() == expected_hash
+    mock_fetch.assert_called()
+
+
+async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Cover art is NOT re-fetched when .cover_hash matches current image URL."""
+    import hashlib
+
+    clip_id = "clip-cached-000-0000-0000-000000000000"
+    image_url = "https://cdn2.suno.ai/same_image.jpeg"
+    clip = _clip_with_display(clip_id, "Cached Song", image_url=image_url)
+    rel_path = _clip_path(clip, "high")
+
+    sync_dir = tmp_path / "mirror"
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    cover_path = target.parent / "cover.jpg"
+    hash_path = target.parent / ".cover_hash"
+    existing_image = b"existing_cover_data"
+    cover_path.write_bytes(existing_image)
+    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    hash_path.write_text(url_hash)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_id: {
+                    "path": rel_path,
+                    "title": "Cached Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "ea0d9c4102fe",
+                    "quality": "high",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    plan = DesiredDownloadPlan(
+        items=[DownloadItem(clip=clip, sources=["liked"], quality="high")],
+        preserved_ids=set(),
+        source_to_name={"liked": "Liked Songs"},
+        playlist_order={},
+    )
+
+    with (
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch(
+            "custom_components.suno.downloaded_library.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=b"should_not_be_used",
+        ) as mock_fetch,
+    ):
+        await library.async_reconcile(
+            {
+                CONF_DOWNLOAD_PATH: str(sync_dir),
+                CONF_SHOW_LIKED: True,
+                CONF_ALL_PLAYLISTS: False,
+                CONF_PLAYLISTS: [],
+            },
+            SunoData(liked_clips=[clip]),
+            desired_plan=plan,
+        )
+
+    mock_fetch.assert_not_called()
+    assert cover_path.read_bytes() == existing_image
 
 
 # ── Helpers (relocated from tests/test_download.py during Phase 1.6 collapse) ──
