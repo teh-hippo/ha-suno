@@ -12,6 +12,7 @@
   ],
   "automerge": true,
   "platformAutomerge": true,
+  "pinDigests": true,
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": [
