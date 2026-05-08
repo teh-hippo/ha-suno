@@ -387,6 +387,21 @@ class LibraryRefresh:
             previous_clip = previous_clips.get(clip.id)
             if (
                 previous_clip is not None
+                and previous_clip.root_ancestor_id
+                and previous_clip.lineage_status in (LINEAGE_RESOLVED, LINEAGE_EXTERNAL)
+                and previous_clip.is_remix == clip.is_remix
+                and previous_clip.edited_clip_id == clip.edited_clip_id
+            ):
+                # Lineage is immutable on Suno once resolved, and the parent
+                # link has not changed since the last refresh. Reuse the prior
+                # result instead of spending an API call from the per-cycle
+                # parent-lookup budget. Without this, every cycle re-resolves
+                # all LINEAGE_EXTERNAL clips and starves clips that are only
+                # present in playlist_clips of any lookup attempt.
+                _copy_lineage(previous_clip, clip)
+                continue
+            if (
+                previous_clip is not None
                 and previous_clip.lineage_status == LINEAGE_UNAVAILABLE
                 and self._lineage_cycle % _UNAVAILABLE_LINEAGE_RETRY_INTERVAL != 0
             ):

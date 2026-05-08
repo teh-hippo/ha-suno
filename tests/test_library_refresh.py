@@ -8,7 +8,9 @@ from typing import Any
 
 from custom_components.suno.exceptions import SunoApiError, SunoConnectionError
 from custom_components.suno.library_refresh import (
+    _MAX_PARENT_LOOKUPS_PER_CYCLE,
     LINEAGE_EXTERNAL,
+    LINEAGE_RESOLVED,
     LINEAGE_UNAVAILABLE,
     InMemoryStoredLibrary,
     LibraryRefresh,
@@ -250,3 +252,142 @@ async def test_pending_lineage_preserves_previously_published_remix() -> None:
     assert snapshot.data.clips == [previous]
     assert snapshot.data.hidden_pending_remix_count == 0
     assert snapshot.data.clips[0].title == "Old Remix"
+
+
+async def test_resolve_external_lineage_uses_previous_snapshot_cache() -> None:
+    """LINEAGE_EXTERNAL clips skip API lookup when previous snapshot has them resolved.
+
+    Without the cache, every refresh re-resolves all known external remixes,
+    consuming the per-cycle parent-lookup budget. With the cache, the budget
+    is preserved for clips that genuinely need fresh resolution.
+    """
+    previous = _make_clip(
+        "remix",
+        title="Remix",
+        edited_clip_id="external-parent",
+        is_remix=True,
+        root_ancestor_id="external-parent",
+        lineage_status=LINEAGE_EXTERNAL,
+        album_title="Remixes of external",
+    )
+    incoming = _make_clip("remix", title="Remix", edited_clip_id="external-parent", is_remix=True)
+    source = FakeSunoLibraryAdapter(clips=[incoming], parents={})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=[previous])
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert source.parent_calls == [], "expected no parent lookup when previous lineage is cached"
+    assert snapshot.data.clips[0].lineage_status == LINEAGE_EXTERNAL
+    assert snapshot.data.clips[0].root_ancestor_id == "external-parent"
+
+
+async def test_cached_lineage_self_corrects_when_root_no_longer_present() -> None:
+    """A cached LINEAGE_RESOLVED reverts to LINEAGE_EXTERNAL if the root is gone.
+
+    Locks in the invariant that ``_apply_album_details`` re-evaluates lineage
+    status against the current clip set even when ``_resolve_root_ancestors_api``
+    short-circuits via the cache fast-path.
+    """
+    previous = _make_clip(
+        "child",
+        title="Remix",
+        edited_clip_id="root",
+        is_remix=True,
+        root_ancestor_id="root",
+        lineage_status=LINEAGE_RESOLVED,
+        album_title="Original Title",
+    )
+    incoming = _make_clip("child", title="Remix", edited_clip_id="root", is_remix=True)
+    source = FakeSunoLibraryAdapter(clips=[incoming], parents={})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=[previous])
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert source.parent_calls == []
+    assert snapshot.data.clips[0].lineage_status == LINEAGE_EXTERNAL
+    assert snapshot.data.clips[0].album_title == "Remixes of root"
+
+
+async def test_cached_lineage_invalidated_when_edited_clip_id_changes() -> None:
+    """Fast-path falls back to fresh lookup if the parent link changed upstream."""
+    previous = _make_clip(
+        "remix",
+        title="Remix",
+        edited_clip_id="old-parent",
+        is_remix=True,
+        root_ancestor_id="old-parent",
+        lineage_status=LINEAGE_EXTERNAL,
+        album_title="Remixes of old-pare",
+    )
+    incoming = _make_clip("remix", title="Remix", edited_clip_id="new-parent", is_remix=True)
+    source = FakeSunoLibraryAdapter(clips=[incoming], parents={"remix": "new-parent", "new-parent": None})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=[previous])
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert "remix" in source.parent_calls, "expected fresh lookup when edited_clip_id differs"
+    assert snapshot.data.clips[0].root_ancestor_id == "new-parent"
+
+
+async def test_playlist_only_remix_not_starved_by_cached_external_clips() -> None:
+    """A new playlist-only remix resolves in one cycle even when prior external clips outnumber the budget.
+
+    Reproduces the verified DnB-style starvation: the new remix appears only in
+    ``playlist_clips`` (last in iteration order) while many already-resolved
+    external clips would otherwise consume the per-cycle lookup budget.
+    """
+    cached_count = _MAX_PARENT_LOOKUPS_PER_CYCLE + 5
+    cached_clips = [
+        _make_clip(
+            f"cached-{i}",
+            title=f"Cached Remix {i}",
+            edited_clip_id=f"cached-parent-{i}",
+            is_remix=True,
+            root_ancestor_id=f"cached-parent-{i}",
+            lineage_status=LINEAGE_EXTERNAL,
+            album_title="Remixes of cached-p",
+        )
+        for i in range(cached_count)
+    ]
+    fresh_cached_clips = [
+        _make_clip(
+            f"cached-{i}",
+            title=f"Cached Remix {i}",
+            edited_clip_id=f"cached-parent-{i}",
+            is_remix=True,
+        )
+        for i in range(cached_count)
+    ]
+    new_remix = _make_clip(
+        "new-dnb",
+        title="DnB Version",
+        edited_clip_id="new-parent",
+        is_remix=True,
+    )
+    playlist = SunoPlaylist(id="pl", name="Mixes", image_url="", num_clips=1)
+    source = FakeSunoLibraryAdapter(
+        clips=fresh_cached_clips,
+        playlists=[playlist],
+        playlist_clips={"pl": [new_remix]},
+        parents={"new-dnb": "new-parent", "new-parent": None},
+    )
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=cached_clips)
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    playlist_clip_ids = [c.id for c in snapshot.data.playlist_clips.get("pl", [])]
+    assert "new-dnb" in playlist_clip_ids, (
+        "playlist-only remix must not be starved out of the playlist by cached external clips"
+    )
+    assert snapshot.data.hidden_pending_remix_count == 0
+    assert source.parent_calls.count("new-dnb") == 1, "fresh remix should get exactly one parent lookup"
+    for cached in cached_clips:
+        assert cached.id not in source.parent_calls, "cached external clip should not be re-looked-up"
