@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.27 (2026-05-08)
+
+### Bug Fixes
+
+- **lineage**: Cache resolved/external lineage from previous snapshot
+  ([`33d9340`](https://github.com/teh-hippo/ha-suno/commit/33d934040b47ce51ed9ee47a9db556a1416697a1))
+
+
 ## v6.0.26 (2026-05-05)
 
 ### Refactoring
