@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.28 (2026-05-08)
+
+### Bug Fixes
+
+- **lineage**: Pre-populate root_ancestor_id from previous snapshot
+  ([`01082a4`](https://github.com/teh-hippo/ha-suno/commit/01082a40b0aa27d0eb36c1f22bac92ddbb34da95))
+
+
 ## v6.0.27 (2026-05-08)
 
 ### Bug Fixes
