@@ -391,3 +391,64 @@ async def test_playlist_only_remix_not_starved_by_cached_external_clips() -> Non
     assert source.parent_calls.count("new-dnb") == 1, "fresh remix should get exactly one parent lookup"
     for cached in cached_clips:
         assert cached.id not in source.parent_calls, "cached external clip should not be re-looked-up"
+
+
+async def test_chain_resolves_in_memory_when_intermediate_parent_root_is_cached_in_previous() -> None:
+    """A chain whose root is missing from current data resolves via cached intermediate parent.
+
+    Reproduces the verified second starvation: child -> parent (in library) -> grandparent (NOT in library).
+    The grandparent is e.g. an unowned remix-source. The parent's root_ancestor_id was resolved to
+    the grandparent on a prior cycle and persisted, but the fresh API fetch returns the parent with
+    empty root_ancestor_id. Without pre-population, the in-memory walk steps from child to parent,
+    sees parent's empty root_ancestor_id, walks to grandparent, finds it missing from the library,
+    breaks the chain, and forces both child and parent to compete for the per-cycle API budget every
+    refresh. With pre-population, the parent's cached root is restored before the walk and the
+    chain resolves without any API call.
+    """
+    previous_parent = _make_clip(
+        "parent",
+        title="Parent",
+        edited_clip_id="external-grandparent",
+        is_remix=True,
+        root_ancestor_id="external-grandparent",
+        lineage_status=LINEAGE_EXTERNAL,
+        album_title="Remixes of external-g",
+    )
+    incoming_parent = _make_clip("parent", title="Parent", edited_clip_id="external-grandparent", is_remix=True)
+    child = _make_clip("child", title="Child", edited_clip_id="parent", is_remix=True)
+    source = FakeSunoLibraryAdapter(clips=[incoming_parent, child], parents={})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=[previous_parent])
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert source.parent_calls == [], "expected no parent lookup when intermediate parent has cached external root"
+    by_id = {c.id: c for c in snapshot.data.clips}
+    assert by_id["child"].root_ancestor_id == "external-grandparent"
+    assert by_id["child"].lineage_status == LINEAGE_EXTERNAL
+    assert by_id["parent"].root_ancestor_id == "external-grandparent"
+    assert by_id["parent"].lineage_status == LINEAGE_EXTERNAL
+
+
+async def test_prepopulation_invalidated_when_edited_clip_id_changes() -> None:
+    """Cached lineage must not be reused if the parent linkage changed upstream."""
+    previous = _make_clip(
+        "remix",
+        title="Remix",
+        edited_clip_id="old-parent",
+        is_remix=True,
+        root_ancestor_id="old-parent",
+        lineage_status=LINEAGE_EXTERNAL,
+        album_title="Remixes of old-pare",
+    )
+    incoming = _make_clip("remix", title="Remix", edited_clip_id="new-parent", is_remix=True)
+    source = FakeSunoLibraryAdapter(clips=[incoming], parents={"remix": "new-parent", "new-parent": None})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+    refresh.current_data = SunoData(clips=[previous])
+    refresh.data_version = 1
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert "remix" in source.parent_calls, "fresh lookup expected when edited_clip_id differs"
+    assert snapshot.data.clips[0].root_ancestor_id == "new-parent"

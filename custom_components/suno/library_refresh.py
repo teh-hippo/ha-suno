@@ -340,6 +340,7 @@ class LibraryRefresh:
 
     async def _apply_lineage(self, data: SunoData, previous: SunoData) -> SunoData:
         self._lineage_cycle += 1
+        _prepopulate_lineage_from_previous(data, previous)
         self._resolve_root_ancestors_in_memory(data)
         pending_ids = await self._resolve_root_ancestors_api(data, previous)
         self._apply_album_details(data)
@@ -544,6 +545,42 @@ def _build_clip_index(data: SunoData) -> dict[str, SunoClip]:
         for clip in clips:
             all_clips[clip.id] = clip
     return all_clips
+
+
+def _prepopulate_lineage_from_previous(data: SunoData, previous: SunoData) -> None:
+    """Seed fresh clips with cached root_ancestor_id/lineage_status from previous.
+
+    The Suno API does not return root_ancestor_id, so every refresh starts with
+    fresh clips that have empty lineage fields. Without seeding, the in-memory
+    chain walk in _resolve_root_ancestors_in_memory cannot short-circuit through
+    intermediate parents whose root was resolved on a prior cycle: the walk
+    sees the parent's empty root_ancestor_id and continues to the grandparent,
+    which may exit the library and break the chain. The clip is then forced
+    into the per-cycle API budget and starves out behind 10 other queue entries.
+
+    Seed only when the parent linkage (is_remix, edited_clip_id) is unchanged
+    upstream and the previous lineage was definitively resolved or external.
+    LINEAGE_PENDING and LINEAGE_UNAVAILABLE are not seeded so they go through
+    fresh resolution as before. _apply_album_details still re-evaluates against
+    the current clip set, so a seeded LINEAGE_RESOLVED whose root is no longer
+    in the library self-corrects to LINEAGE_EXTERNAL.
+    """
+    previous_clips = _build_clip_index(previous)
+    if not previous_clips:
+        return
+    for clip in _build_clip_index(data).values():
+        if clip.root_ancestor_id:
+            continue
+        previous_clip = previous_clips.get(clip.id)
+        if (
+            previous_clip is None
+            or not previous_clip.root_ancestor_id
+            or previous_clip.lineage_status not in (LINEAGE_RESOLVED, LINEAGE_EXTERNAL)
+            or previous_clip.is_remix != clip.is_remix
+            or previous_clip.edited_clip_id != clip.edited_clip_id
+        ):
+            continue
+        _copy_lineage(previous_clip, clip)
 
 
 def _mark_chain_resolved(chain: list[str], root_id: str, all_clips: dict[str, SunoClip]) -> None:
