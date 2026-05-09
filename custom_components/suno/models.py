@@ -218,6 +218,28 @@ class TrackMetadata:
     suno_lineage: str = ""
 
 
+def selected_image_url(clip: SunoClip) -> str:
+    """Pick the embedded album art URL for a clip.
+
+    Single source of truth so the download path, the cover.jpg sync path,
+    the retag path, and the meta-hash that detects "needs retag" all use
+    the same URL. Mismatch caused embedded art to drift from cover.jpg
+    when Suno regenerated covers under the legacy ``image_url`` namespace
+    only.
+    """
+    return clip.image_large_url or clip.image_url or clip.video_cover_url or ""
+
+
+def image_url_hash(image_url: str) -> str:
+    """Short stable digest of an art URL.
+
+    Used as both the on-disk ``.cover_hash`` sentinel and the manifest
+    ``embedded_art_hash`` sentinel so a single comparison tells us whether
+    the bytes embedded in the audio file match the current Suno art URL.
+    """
+    return hashlib.md5(image_url.encode()).hexdigest()[:12] if image_url else ""  # noqa: S324
+
+
 def clip_meta_hash(clip: SunoClip) -> str:
     """Short hash of clip metadata for content change detection.
 
@@ -228,7 +250,7 @@ def clip_meta_hash(clip: SunoClip) -> str:
     """
     return hashlib.md5(  # noqa: S324
         (
-            f"{clip.title}|{clip.tags}|{clip.image_url}|{clip.video_url}|"
+            f"{clip.title}|{clip.tags}|{selected_image_url(clip)}|{clip.video_url}|"
             f"{clip.root_ancestor_id}|{clip.lineage_status}|{clip.album_title}"
         ).encode()
     ).hexdigest()[:12]
