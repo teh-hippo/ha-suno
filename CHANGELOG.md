@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.29 (2026-05-09)
+
+### Bug Fixes
+
+- **retag**: Refresh embedded album art when cover changes
+  ([`4d03471`](https://github.com/teh-hippo/ha-suno/commit/4d03471ce135bbf77e09221586231bdb83f940a2))
+
+
 ## v6.0.28 (2026-05-08)
 
 ### Bug Fixes
