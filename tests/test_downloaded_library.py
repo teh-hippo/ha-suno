@@ -82,18 +82,22 @@ class _FakeAudio:
         data: bytes = b"fLaC" + b"\x00" * 50,
         video_data: bytes | None = b"\x00\x00\x00\x1cftypisom",
         retag_result: bool = True,
+        image_bytes: bytes | None = b"\xff\xd8\xff\xe0fakejpegheader",
     ) -> None:
         self.data = data
         self.video_data = video_data
         self.retag_result = retag_result
+        self.image_bytes = image_bytes
         self.rendered: list[str] = []
         self.render_qualities: list[str] = []
         self.render_metas: list[TrackMetadata] = []
         self.retag_calls: list[tuple[Path, TrackMetadata]] = []
         self.video_calls: list[tuple[str, Path]] = []
+        self.image_fetches: list[str] = []
 
-    async def fetch_image(self, _image_url: str) -> bytes | None:
-        return None
+    async def fetch_image(self, image_url: str) -> bytes | None:
+        self.image_fetches.append(image_url)
+        return self.image_bytes
 
     async def render(
         self,
@@ -3500,3 +3504,186 @@ class TestPlaylistOrderPreservation:
         for idx, api_clip_id in enumerate(api_order):
             clip_num = api_clip_id.replace("clip", "")
             assert f"Song {clip_num}" in lines[idx]
+
+
+def _clip_with_art(
+    clip_id: str,
+    title: str = "Song",
+    image_large_url: str = "https://cdn1.suno.ai/img.jpg",
+) -> SunoClip:
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url="",
+        image_large_url=image_large_url,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        display_name="artist",
+    )
+
+
+async def test_stale_embedded_art_hash_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Manifest entries with missing/stale embedded_art_hash queue retag even when meta_hash matches."""
+    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
+
+    clip = _clip_with_art("clip-art-0000-0000-0000-000000000000", "Art Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Art Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert len(audio.retag_calls) == 1, "missing embedded_art_hash must trigger retag once"
+    _retag_target, retag_meta = audio.retag_calls[0]
+    assert retag_meta.image_data is not None, "retag must receive current art bytes"
+    expected = image_url_hash(selected_image_url(clip))
+    assert library.state["clips"][clip.id]["embedded_art_hash"] == expected
+    assert library.errors == 0
+
+
+async def test_retag_uses_validated_cover_jpg_without_network_fetch(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When cover.jpg + .cover_hash match the current URL, retag uses cover.jpg bytes."""
+    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
+
+    clip = _clip_with_art("clip-cov-0000-0000-0000-000000000000", "Cover Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+    cover_bytes = b"\xff\xd8\xffmock_jpeg_bytes_from_disk"
+    (target.parent / "cover.jpg").write_bytes(cover_bytes)
+    (target.parent / ".cover_hash").write_text(image_url_hash(selected_image_url(clip)))
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Cover Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert len(audio.retag_calls) == 1
+    _retag_target, retag_meta = audio.retag_calls[0]
+    assert retag_meta.image_data == cover_bytes, "must use validated cover.jpg bytes"
+    assert audio.image_fetches == [], "must not network-fetch when cover.jpg is validated"
+
+
+async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A stale .cover_hash forces a fresh fetch — protects against embedding stale art."""
+    from custom_components.suno.models import clip_meta_hash, selected_image_url
+
+    clip = _clip_with_art("clip-mis-0000-0000-0000-000000000000", "Mismatch Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+    (target.parent / "cover.jpg").write_bytes(b"\xff\xd8\xffSTALE_BYTES")
+    (target.parent / ".cover_hash").write_text("stalehash1234")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Mismatch Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    fresh_bytes = b"\xff\xd8\xffFRESH_FROM_CDN"
+    audio = _FakeAudio(image_bytes=fresh_bytes)
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.image_fetches == [selected_image_url(clip)]
+    _retag_target, retag_meta = audio.retag_calls[0]
+    assert retag_meta.image_data == fresh_bytes, "must use freshly-fetched bytes when cover.jpg is stale"
+
+
+async def test_retag_aborts_when_image_url_set_but_no_bytes_available(hass: HomeAssistant, tmp_path: Path) -> None:
+    """If we cannot obtain current art bytes, do not advance manifest sentinels."""
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _clip_with_art("clip-noart-0000-0000-0000-00000000000", "No Art Song")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "No Art Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": clip_meta_hash(clip),
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio(image_bytes=None)
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.retag_calls == [], "retag must not run without current art bytes"
+    assert "embedded_art_hash" not in library.state["clips"][clip.id], "sentinel must not be set on failure"

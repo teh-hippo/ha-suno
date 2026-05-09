@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ..audio_stream import fetch_album_art
+from ..models import image_url_hash
 from .filesystem import _write_file, _write_track_sidecar
 
 
@@ -21,7 +21,7 @@ async def _update_cover_art(
     track_path: Path | None = None,
 ) -> bool:
     """Write album art sidecars if the source image changed."""
-    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
+    url_hash = image_url_hash(image_url)
     existing_hash = ""
     if await hass.async_add_executor_job(hash_path.exists):
         existing_hash = (await hass.async_add_executor_job(hash_path.read_text)).strip()

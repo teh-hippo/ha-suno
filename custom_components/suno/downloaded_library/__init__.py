@@ -19,7 +19,7 @@ from ..const import (
     DOWNLOAD_MODE_ARCHIVE,
     QUALITY_HIGH,
 )
-from ..models import SunoClip, SunoData, clip_meta_hash
+from ..models import SunoClip, SunoData, clip_meta_hash, image_url_hash, selected_image_url
 from .audio_adapter import HomeAssistantDownloadedLibraryAudio
 from .cache_adapter import NullDownloadedLibraryCache, SunoCacheDownloadedLibraryAdapter
 from .contracts import (
@@ -457,7 +457,11 @@ class DownloadedLibrary:
                 existing["source_modes"] = _source_modes_for(item.sources, options)
                 old_hash = existing.get("meta_hash", "")
                 new_hash = clip_meta_hash(item.clip)
-                if old_hash and new_hash != old_hash:
+                expected_art_hash = image_url_hash(selected_image_url(item.clip))
+                stored_art_hash = existing.get("embedded_art_hash", "")
+                meta_changed = old_hash and new_hash != old_hash
+                art_stale = expected_art_hash and stored_art_hash != expected_art_hash
+                if meta_changed or art_stale:
                     to_retag.append(item)
 
         to_delete: list[str] = []
@@ -497,6 +501,7 @@ class DownloadedLibrary:
             result = await self._retag_clip(item, target)
             if result is RetagResult.OK:
                 existing["meta_hash"] = clip_meta_hash(item.clip)
+                existing["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
@@ -541,6 +546,7 @@ class DownloadedLibrary:
                     continue
             if (file_size := await self._download_clip(item, base, rel_path, force=force)) is not None:
                 clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size, options)
+                clips_state[item.clip.id]["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
                 await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                 downloaded += 1
             else:
@@ -732,7 +738,14 @@ class DownloadedLibrary:
         return await _reconcile_manifest_fn(self.hass, base, clips_state)
 
     async def _retag_clip(self, item: DownloadItem, target: Path) -> RetagResult:
-        """Re-tag an existing downloaded file."""
+        """Re-tag an existing downloaded file.
+
+        Refreshes the embedded album art so it tracks the current Suno cover.
+        Trusts ``cover.jpg`` only when its sibling ``.cover_hash`` matches the
+        hash of the currently selected art URL — otherwise falls back to a
+        fresh CDN fetch. If neither yields bytes the retag is treated as
+        FAILED so the manifest sentinels are not advanced past stale art.
+        """
         try:
             stat = await self.hass.async_add_executor_job(target.stat)
         except FileNotFoundError:
@@ -745,13 +758,51 @@ class DownloadedLibrary:
         if self._audio is None:
             return RetagResult.FAILED
 
-        meta = item.clip.to_track_metadata(album=_album_for_clip(item.clip, self._clip_index))
+        image_url = selected_image_url(item.clip)
+        image_data: bytes | None = None
+        if image_url:
+            image_data = await self._read_validated_cover(target.parent, image_url)
+            if image_data is None:
+                image_data = await self._audio.fetch_image(image_url)
+            if image_data is None:
+                _LOGGER.warning("Re-tag aborted, no current album art available: %s", target)
+                return RetagResult.FAILED
+
+        meta = _with_image(
+            item.clip.to_track_metadata(album=_album_for_clip(item.clip, self._clip_index)),
+            image_data,
+        )
         try:
             ok = await self._audio.retag(target, meta)
         except Exception:
             _LOGGER.exception("Failed to re-tag %s", target)
             return RetagResult.FAILED
         return RetagResult.OK if ok else RetagResult.FAILED
+
+    async def _read_validated_cover(self, folder: Path, image_url: str) -> bytes | None:
+        """Return ``cover.jpg`` bytes only if ``.cover_hash`` matches ``image_url``."""
+        if not image_url:
+            return None
+        expected = image_url_hash(image_url)
+        if not expected:
+            return None
+        cover_path = folder / "cover.jpg"
+        hash_path = folder / ".cover_hash"
+
+        def _read() -> bytes | None:
+            try:
+                stored = hash_path.read_text().strip()
+            except OSError:
+                return None
+            if stored != expected:
+                return None
+            try:
+                data = cover_path.read_bytes()
+            except OSError:
+                return None
+            return data or None
+
+        return await self.hass.async_add_executor_job(_read)
 
     async def async_cleanup_disabled_downloads(
         self,
