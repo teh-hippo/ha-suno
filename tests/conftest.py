@@ -149,6 +149,20 @@ async def setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    await _await_entry_refresh(hass, entry)
+
+
+async def _await_entry_refresh(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Wait for the initial Suno library background refresh."""
+    runtime = getattr(entry, "runtime_data", None)
+    coordinator = getattr(runtime, "coordinator", None)
+    refresh_task = getattr(coordinator, "_refresh_task", None)
+    if refresh_task is not None:
+        await refresh_task
+        await hass.async_block_till_done()
+    unschedule_refresh = getattr(coordinator, "_async_unsub_refresh", None)
+    if unschedule_refresh is not None:
+        unschedule_refresh()
 
 
 def sample_clips(count: int = 2) -> list[SunoClip]:

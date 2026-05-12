@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.suno.cache import SunoCache
@@ -18,6 +20,24 @@ def _mp3_bytes(size: int = 256) -> bytes:
 def _flac_bytes(size: int = 256) -> bytes:
     """Return fake FLAC data with valid fLaC magic."""
     return b"fLaC" + b"\x00" * (size - 4)
+
+
+@pytest.fixture(autouse=True)
+async def _flush_cache_saves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[None]:
+    """Flush debounced cache saves created by each cache test."""
+    caches: list[SunoCache] = []
+    original_init = SunoCache.__init__
+
+    def _tracked_init(self: SunoCache, hass: HomeAssistant, max_size_mb: int) -> None:
+        original_init(self, hass, max_size_mb)
+        caches.append(self)
+
+    monkeypatch.setattr(SunoCache, "__init__", _tracked_init)
+    yield
+    for cache in caches:
+        await cache.async_flush()
 
 
 async def test_cache_init_creates_dir(hass: HomeAssistant, tmp_path: Path) -> None:
