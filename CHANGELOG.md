@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v6.0.30 (2026-05-12)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`ea40aaf`](https://github.com/teh-hippo/ha-suno/commit/ea40aaf5a2cb5ddfefea0bec208c6afdd08b5750))
+
+### Chores
+
+- **deps**: Sync uv.lock to v6.0.29
+  ([`0b25f0a`](https://github.com/teh-hippo/ha-suno/commit/0b25f0a1f671901070561bd5007ea6eb53d4fc11))
+
+### Testing
+
+- Stabilise async fixture cleanup
+  ([`afa51a0`](https://github.com/teh-hippo/ha-suno/commit/afa51a00fba07aeda9230d5f6b001d3ff7d300f9))
+
+
 ## v6.0.29 (2026-05-09)
 
 ### Bug Fixes
