@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.0.31 (2026-05-17)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`fdfdfae`](https://github.com/teh-hippo/ha-suno/commit/fdfdfaecc5b45887571bf53cda5711d96b8651b6))
+
+### Continuous Integration
+
+- Stagger cron + pin third-party action refs
+  ([`fd39062`](https://github.com/teh-hippo/ha-suno/commit/fd39062183e817962cea01b5c72955322991bdf1))
+
+
 ## v6.0.30 (2026-05-12)
 
 ### Build System
