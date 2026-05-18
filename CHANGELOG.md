@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.32 (2026-05-18)
+
+### Build System
+
+- **deps**: Pin dependencies
+  ([`4a88344`](https://github.com/teh-hippo/ha-suno/commit/4a883446f13725662b9ef63fbb09cfe562e59f58))
+
+
 ## v6.0.31 (2026-05-17)
 
 ### Build System
