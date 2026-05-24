@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v6.0.33 (2026-05-24)
+
+### Build System
+
+- **deps**: Update github/codeql-action digest to 7211b7c
+  ([`a0d96a8`](https://github.com/teh-hippo/ha-suno/commit/a0d96a8d4be632627d7c3183e5c10dbb4d27b728))
+
+- **deps**: Upgrade
+  ([`95e37a3`](https://github.com/teh-hippo/ha-suno/commit/95e37a3e151b0cfcf07df5d7bb0ba5046fb81633))
+
+- **deps**: Upgrade
+  ([`bbb75b6`](https://github.com/teh-hippo/ha-suno/commit/bbb75b60702597ffda72ab0a61f1f2bfa07b0805))
+
+
 ## v6.0.32 (2026-05-18)
 
 ### Build System
