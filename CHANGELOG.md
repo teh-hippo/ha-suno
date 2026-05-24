@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.34 (2026-05-24)
+
+### Build System
+
+- **deps**: Upgrade
+  ([`00034f3`](https://github.com/teh-hippo/ha-suno/commit/00034f36b4894f9a87bcd9d7914b5b44bc5d8000))
+
+
 ## v6.0.33 (2026-05-24)
 
 ### Build System
