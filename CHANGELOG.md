@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.35 (2026-05-26)
+
+### Build System
+
+- **deps**: Adopt shared Renovate preset
+  ([`24e9aff`](https://github.com/teh-hippo/ha-suno/commit/24e9affdb561cb823c084260a4d8678de1601346))
+
+
 ## v6.0.34 (2026-05-24)
 
 ### Build System
