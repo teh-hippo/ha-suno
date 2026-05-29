@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.0.38 (2026-05-29)
+
+### Bug Fixes
+
+- Download video cover art during retag and reconcile paths
+  ([`a900408`](https://github.com/teh-hippo/ha-suno/commit/a90040822c64bfc283ccd2098be5558c1a1c75bb))
+
+
 ## v6.0.36 (2026-05-29)
 
 ### Bug Fixes
