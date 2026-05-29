@@ -502,6 +502,7 @@ class DownloadedLibrary:
             if result is RetagResult.OK:
                 existing["meta_hash"] = clip_meta_hash(item.clip)
                 existing["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
+                await self._ensure_video(item.clip, base)
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
@@ -541,6 +542,7 @@ class DownloadedLibrary:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
                     clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size, options)
+                    await self._ensure_video(item.clip, base)
                     await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                     reconciled += 1
                     continue
@@ -778,6 +780,11 @@ class DownloadedLibrary:
             _LOGGER.exception("Failed to re-tag %s", target)
             return RetagResult.FAILED
         return RetagResult.OK if ok else RetagResult.FAILED
+
+    async def _ensure_video(self, clip: SunoClip, base: Path) -> None:
+        """Download video cover art if enabled and available but not yet on disk."""
+        if self._download_videos and clip.video_cover_url and self._audio:
+            await self._audio.download_video(clip.video_cover_url, base / _video_clip_path(clip))
 
     async def _read_validated_cover(self, folder: Path, image_url: str) -> bytes | None:
         """Return ``cover.jpg`` bytes only if ``.cover_hash`` matches ``image_url``."""

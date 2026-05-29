@@ -1916,6 +1916,76 @@ async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path
     assert library.errors == 0
 
 
+async def test_retag_downloads_video_when_missing(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Retag path should also download video cover art if not yet on disk."""
+    clip = _clip_with_display(
+        "clip-vid1-0000-0000-0000-000000000000",
+        "Video Retag Song",
+        display_name="artist",
+        video_cover_url="https://cdn1.suno.ai/video_gen_test_processed_video.mp4",
+    )
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Video Retag Song OLD",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": "stale_hash",
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert len(audio.retag_calls) == 1
+    assert len(audio.video_calls) == 1
+    assert audio.video_calls[0][0] == clip.video_cover_url
+
+
+async def test_reconcile_existing_file_downloads_video(hass: HomeAssistant, tmp_path: Path) -> None:
+    """When audio already exists on disk (reconcile path), video should still be downloaded."""
+    clip = _clip_with_display(
+        "clip-vid2-0000-0000-0000-000000000000",
+        "Reconcile Video Song",
+        display_name="artist",
+        video_cover_url="https://cdn1.suno.ai/video_gen_reconcile_processed_video.mp4",
+    )
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    # Clip NOT in manifest - triggers download path, but file exists = reconcile
+    storage = InMemoryDownloadedLibraryStorage({"clips": {}, "last_download": None})
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    # Audio should not have been rendered (file exists)
+    assert audio.rendered == []
+    # But video should have been downloaded
+    assert len(audio.video_calls) == 1
+    assert audio.video_calls[0][0] == clip.video_cover_url
+
+
 async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: Path) -> None:
     """When re-tag fails, meta_hash is NOT updated so next sync retries."""
     clip = _clip("clip-fail-0000-0000-0000-000000000000", "Fail Song")
