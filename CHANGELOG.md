@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v6.1.1 (2026-05-29)
+
+### Bug Fixes
+
+- Resolve ffmpeg fps_mode conflict in WebP conversion
+  ([`bbe4fc1`](https://github.com/teh-hippo/ha-suno/commit/bbe4fc1813ddbfe026b7ac08e6214e09b842f916))
+
+
+## v6.1.0 (2026-05-29)
+
+### Features
+
+- Add animated WebP cover art conversion via ffmpeg
+  ([`be64bdf`](https://github.com/teh-hippo/ha-suno/commit/be64bdfb7683b430ace864c2bede6e4d9cb88e43))
+
+
+## v6.0.39 (2026-05-29)
+
+### Bug Fixes
+
+- Ensure video cover art downloads on every sync pass
+  ([`80d0114`](https://github.com/teh-hippo/ha-suno/commit/80d0114d834eaa373a10e21a28c706b98c4dd705))
+
+### Chores
+
+- Bump version to 6.0.39
+  ([`a5e10d0`](https://github.com/teh-hippo/ha-suno/commit/a5e10d0a88a36da5c37fb1ab32959351f25eaa38))
+
+
 ## v6.0.38 (2026-05-29)
 
 ### Bug Fixes
