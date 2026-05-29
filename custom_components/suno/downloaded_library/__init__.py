@@ -359,6 +359,7 @@ class DownloadedLibrary:
         )
 
         await self._sync_cover_art(base, plan.items, clips_state)
+        await self._sync_videos(base, plan.items, clips_state)
 
         await self._prune_removed_entries(base, to_delete, clips_state)
 
@@ -502,7 +503,6 @@ class DownloadedLibrary:
             if result is RetagResult.OK:
                 existing["meta_hash"] = clip_meta_hash(item.clip)
                 existing["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
-                await self._ensure_video(item.clip, base)
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
@@ -542,7 +542,6 @@ class DownloadedLibrary:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
                     clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size, options)
-                    await self._ensure_video(item.clip, base)
                     await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                     reconciled += 1
                     continue
@@ -584,6 +583,25 @@ class DownloadedLibrary:
         if covers_fixed:
             _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
         return covers_fixed
+
+    async def _sync_videos(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, Any]) -> int:
+        """Download video cover art for every desired clip that has one but is missing on disk."""
+        if not self._download_videos or not self._audio:
+            return 0
+        videos_downloaded = 0
+        for item in desired:
+            entry = clips_state.get(item.clip.id)
+            if not entry or not entry.get("path"):
+                continue
+            if not item.clip.video_cover_url:
+                continue
+            await self._audio.download_video(item.clip.video_cover_url, base / _video_clip_path(item.clip))
+            video_target = base / _video_clip_path(item.clip)
+            if await self.hass.async_add_executor_job(video_target.exists):
+                videos_downloaded += 1
+        if videos_downloaded:
+            _LOGGER.info("Ensured %d video cover art files", videos_downloaded)
+        return videos_downloaded
 
     async def _prune_removed_entries(self, base: Path, to_delete: list[str], clips_state: dict[str, Any]) -> None:
         """Drop deleted entries from manifest and clean their files + sidecars."""
@@ -780,11 +798,6 @@ class DownloadedLibrary:
             _LOGGER.exception("Failed to re-tag %s", target)
             return RetagResult.FAILED
         return RetagResult.OK if ok else RetagResult.FAILED
-
-    async def _ensure_video(self, clip: SunoClip, base: Path) -> None:
-        """Download video cover art if enabled and available but not yet on disk."""
-        if self._download_videos and clip.video_cover_url and self._audio:
-            await self._audio.download_video(clip.video_cover_url, base / _video_clip_path(clip))
 
     async def _read_validated_cover(self, folder: Path, image_url: str) -> bytes | None:
         """Return ``cover.jpg`` bytes only if ``.cover_hash`` matches ``image_url``."""

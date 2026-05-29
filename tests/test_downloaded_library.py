@@ -118,6 +118,8 @@ class _FakeAudio:
         return self.retag_result
 
     async def download_video(self, video_url: str, target: Path) -> None:
+        if target.exists():
+            return
         self.video_calls.append((video_url, target))
         if self.video_data is None:
             return
@@ -1982,6 +1984,56 @@ async def test_reconcile_existing_file_downloads_video(hass: HomeAssistant, tmp_
     # Audio should not have been rendered (file exists)
     assert audio.rendered == []
     # But video should have been downloaded
+    assert len(audio.video_calls) == 1
+    assert audio.video_calls[0][0] == clip.video_cover_url
+
+
+async def test_sync_videos_downloads_for_unchanged_clip(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video is downloaded even when clip metadata is unchanged (no retag/download triggered)."""
+    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
+
+    clip = _clip_with_display(
+        "clip-vid3-0000-0000-0000-000000000000",
+        "Stable Video Song",
+        display_name="artist",
+        video_cover_url="https://cdn1.suno.ai/video_gen_stable_processed_video.mp4",
+    )
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    # Clip in manifest with MATCHING hashes - no retag or download triggered
+    current_hash = clip_meta_hash(clip)
+    current_art_hash = image_url_hash(selected_image_url(clip))
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Stable Video Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": current_hash,
+                    "quality": QUALITY_HIGH,
+                    "embedded_art_hash": current_art_hash,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    # No retag, no download
+    assert audio.rendered == []
+    assert audio.retag_calls == []
+    # But video sync pass should still download it
     assert len(audio.video_calls) == 1
     assert audio.video_calls[0][0] == clip.video_cover_url
 
