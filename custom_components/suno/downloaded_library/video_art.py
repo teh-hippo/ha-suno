@@ -68,6 +68,7 @@ async def convert_mp4_to_webp(
     args = [
         ffmpeg_binary,
         "-y",
+        "-hide_banner",
         "-i",
         str(mp4_path),
         "-c:v",
@@ -75,14 +76,10 @@ async def convert_mp4_to_webp(
         "-loop",
         "0",
         "-an",
-        "-fps_mode",
-        "passthrough",
         "-quality",
         str(_WEBP_QUALITY),
-        "-r",
-        str(_WEBP_FPS),
         "-vf",
-        f"scale='min({_WEBP_MAX_WIDTH},iw)':-2",
+        f"fps={_WEBP_FPS},scale='min({_WEBP_MAX_WIDTH},iw)':-2",
         "-f",
         "webp",
         str(tmp_path),
@@ -97,10 +94,18 @@ async def convert_mp4_to_webp(
         )
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_FFMPEG_TIMEOUT)
         if proc.returncode != 0:
+            err_text = stderr.decode() if stderr else "unknown error"
+            # Strip ffmpeg banner to surface the actual error
+            err_lines = [
+                ln
+                for ln in err_text.splitlines()
+                if not ln.startswith(("ffmpeg version", "  built with", "  configuration:", "  lib"))
+            ]
             _LOGGER.warning(
-                "WebP conversion failed for %s: %s",
+                "WebP conversion failed for %s (rc=%d): %s",
                 mp4_path.name,
-                stderr.decode()[:200] if stderr else "unknown error",
+                proc.returncode,
+                "\n".join(err_lines)[:500] if err_lines else err_text[:200],
             )
             await hass.async_add_executor_job(tmp_path.unlink, True)
             return False
