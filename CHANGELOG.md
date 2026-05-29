@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v6.0.36 (2026-05-29)
+
+### Bug Fixes
+
+- Download animated cover art instead of full music videos
+  ([`e8914cf`](https://github.com/teh-hippo/ha-suno/commit/e8914cf070a6d31b00390f4b5617adebe4bd2b2c))
+
+### Continuous Integration
+
+- Adopt shared CodeQL workflow
+  ([`71d8f8e`](https://github.com/teh-hippo/ha-suno/commit/71d8f8eb75b384a34abb973062f2567eabc72138))
+
+- Adopt uv sync --locked pattern
+  ([`711999d`](https://github.com/teh-hippo/ha-suno/commit/711999d3be98debec7d729a3614be6f076cd855f))
+
+- **release**: Commit uv.lock from build_command via assets
+  ([`0f3bcc0`](https://github.com/teh-hippo/ha-suno/commit/0f3bcc03fa16158a60f5d03995956363dd0ef001))
+
+- **validate**: Drop daily cron and Dependabot/Copilot branch push triggers
+  ([`151ca06`](https://github.com/teh-hippo/ha-suno/commit/151ca06d5fc8e1e855e5b70afd4725a670f9450c))
+
+
 ## v6.0.35 (2026-05-26)
 
 ### Build System
