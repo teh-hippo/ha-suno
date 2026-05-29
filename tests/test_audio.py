@@ -826,8 +826,8 @@ def test_suno_lineage_history_none() -> None:
     assert clip.suno_lineage == ""
 
 
-def test_clip_meta_hash_changes_when_video_url_changes() -> None:
-    """clip_meta_hash changes when video_url changes."""
+def test_clip_meta_hash_changes_when_video_cover_url_changes() -> None:
+    """clip_meta_hash changes when video_cover_url changes."""
     base = dict(
         id="test",
         title="T",
@@ -843,8 +843,8 @@ def test_clip_meta_hash_changes_when_video_url_changes() -> None:
         has_vocal=False,
         display_name="user",
     )
-    clip1 = SunoClip(**base, video_url="https://cdn1.suno.ai/v1.mp4")
-    clip2 = SunoClip(**base, video_url="https://cdn1.suno.ai/v2.mp4")
+    clip1 = SunoClip(**base, video_cover_url="https://cdn1.suno.ai/video_gen_a_processed_video.mp4")
+    clip2 = SunoClip(**base, video_cover_url="https://cdn1.suno.ai/video_gen_b_processed_video.mp4")
     assert clip_meta_hash(clip1) != clip_meta_hash(clip2)
 
 

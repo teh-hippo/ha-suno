@@ -250,7 +250,7 @@ def clip_meta_hash(clip: SunoClip) -> str:
     """
     return hashlib.md5(  # noqa: S324
         (
-            f"{clip.title}|{clip.tags}|{selected_image_url(clip)}|{clip.video_url}|"
+            f"{clip.title}|{clip.tags}|{selected_image_url(clip)}|{clip.video_cover_url}|"
             f"{clip.root_ancestor_id}|{clip.lineage_status}|{clip.album_title}"
         ).encode()
     ).hexdigest()[:12]

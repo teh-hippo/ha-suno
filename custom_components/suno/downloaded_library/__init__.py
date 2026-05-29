@@ -718,8 +718,8 @@ class DownloadedLibrary:
                     track_path=target,
                 )
 
-            if self._download_videos and clip.video_url:
-                await self._audio.download_video(clip.video_url, base / _video_clip_path(clip))
+            if self._download_videos and clip.video_cover_url:
+                await self._audio.download_video(clip.video_cover_url, base / _video_clip_path(clip))
 
             try:
                 await self._cache.async_put(clip.id, rendered.fmt, rendered.data, meta_hash=meta_hash)

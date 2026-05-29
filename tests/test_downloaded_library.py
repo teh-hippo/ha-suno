@@ -783,6 +783,7 @@ def _clip_with_display(
     image_url: str | None = None,
     image_large_url: str | None = None,
     video_url: str = "",
+    video_cover_url: str = "",
 ) -> SunoClip:
     return SunoClip(
         id=clip_id,
@@ -799,6 +800,7 @@ def _clip_with_display(
         has_vocal=True,
         display_name=display_name,
         video_url=video_url,
+        video_cover_url=video_cover_url,
     )
 
 
@@ -2340,7 +2342,7 @@ async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
 
 
 async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Video is downloaded alongside audio when video_url is present and downloads enabled."""
+    """Video is downloaded alongside audio when video_cover_url is present and downloads enabled."""
     audio = _FakeAudio()
     library = DownloadedLibrary(
         hass,
@@ -2353,7 +2355,7 @@ async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> No
     clip = _clip_with_display(
         "clip-vid-00000-0000-0000-000000000000",
         "Video Song",
-        video_url="https://cdn1.suno.ai/clip-vid.mp4",
+        video_cover_url="https://cdn1.suno.ai/video_gen_abc_processed_video.mp4",
     )
     await library.async_reconcile(
         {
@@ -2368,7 +2370,7 @@ async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> No
     video_path = tmp_path / "mirror" / _video_clip_path(clip)
     assert video_path.exists()
     assert video_path.read_bytes() == b"\x00\x00\x00\x1cftypisom"
-    assert audio.video_calls == [(clip.video_url, video_path)]
+    assert audio.video_calls == [(clip.video_cover_url, video_path)]
 
 
 async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -2385,7 +2387,7 @@ async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_pat
     clip = _clip_with_display(
         "clip-novid-000-0000-0000-000000000000",
         "No Video",
-        video_url="https://cdn1.suno.ai/clip-novid.mp4",
+        video_cover_url="https://cdn1.suno.ai/video_gen_xyz_processed_video.mp4",
     )
     await library.async_reconcile(
         {
@@ -2416,7 +2418,7 @@ async def test_video_download_handles_failure(hass: HomeAssistant, tmp_path: Pat
     clip = _clip_with_display(
         "clip-v404-0000-0000-0000-000000000000",
         "Video 404",
-        video_url="https://cdn1.suno.ai/clip-v404.mp4",
+        video_cover_url="https://cdn1.suno.ai/video_gen_404_processed_video.mp4",
     )
     await library.async_reconcile(
         {
@@ -2434,8 +2436,8 @@ async def test_video_download_handles_failure(hass: HomeAssistant, tmp_path: Pat
     assert library.total_files == 1
 
 
-async def test_video_download_skipped_when_no_video_url(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Video download is skipped when clip has no video_url."""
+async def test_video_download_skipped_when_no_video_cover_url(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Video download is skipped when clip has no video_cover_url."""
     audio = _FakeAudio()
     library = DownloadedLibrary(
         hass,
