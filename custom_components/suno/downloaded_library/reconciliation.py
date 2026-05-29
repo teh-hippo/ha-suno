@@ -22,13 +22,15 @@ async def _reconcile_disk(hass: HomeAssistant, base: Path, clips_state: dict[str
     for entry in clips_state.values():
         if entry.get("path"):
             known_paths.add(str(Path(entry["path"]).with_suffix(".mp4")))
+            # cover.webp lives at album level alongside cover.jpg
+            known_paths.add(str(Path(entry["path"]).parent / "cover.webp"))
 
     def _scan_and_remove(base_path: Path, known: set[str]) -> int:
         count = 0
         if not base_path.exists():
             return 0
         for f in base_path.rglob("*"):
-            if not f.is_file() or f.suffix.lower() not in (".flac", ".mp3", ".mp4"):
+            if not f.is_file() or f.suffix.lower() not in (".flac", ".mp3", ".mp4", ".webp"):
                 continue
             rel = str(f.relative_to(base_path))
             if rel not in known:
@@ -40,7 +42,7 @@ async def _reconcile_disk(hass: HomeAssistant, base: Path, clips_state: dict[str
                 continue
             has_audio = any(f.suffix.lower() in (".flac", ".mp3") for f in d.iterdir() if f.is_file())
             if not has_audio:
-                for sidecar in ("cover.jpg", ".cover_hash"):
+                for sidecar in ("cover.jpg", "cover.webp", ".cover_hash"):
                     sc = d / sidecar
                     if sc.exists():
                         sc.unlink(missing_ok=True)

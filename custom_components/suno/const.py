@@ -36,7 +36,8 @@ CONF_QUALITY_MY_SONGS = "quality_my_songs"
 CONF_DOWNLOAD_MODE_LIKED = "download_mode_liked"
 CONF_DOWNLOAD_MODE_PLAYLISTS = "download_mode_playlists"
 CONF_DOWNLOAD_MODE_MY_SONGS = "download_mode_my_songs"
-CONF_DOWNLOAD_VIDEOS = "download_videos"
+CONF_DOWNLOAD_VIDEOS = "download_videos"  # legacy, migrated to video_art_mode
+CONF_VIDEO_ART_MODE = "video_art_mode"
 
 # Defaults
 DEFAULT_SHOW_LIKED = True
@@ -60,6 +61,12 @@ QUALITY_STANDARD = "standard"
 DOWNLOAD_MODE_MIRROR = "mirror"
 DOWNLOAD_MODE_ARCHIVE = "archive"
 DOWNLOAD_MODE_CACHE = "cache"
+
+# Video art modes
+VIDEO_ART_OFF = "off"
+VIDEO_ART_DOWNLOAD = "download"
+VIDEO_ART_CONVERT = "convert"
+VIDEO_ART_BOTH = "both"
 
 # Download operational constants
 DOWNLOAD_FFMPEG_TIMEOUT = 60

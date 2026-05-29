@@ -32,6 +32,7 @@ from .const import (
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
+    CONF_VIDEO_ART_MODE,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_DOWNLOAD_MODE_MY_SONGS,
@@ -42,6 +43,10 @@ from .const import (
     DOWNLOAD_MODE_CACHE,
     QUALITY_HIGH,
     QUALITY_STANDARD,
+    VIDEO_ART_BOTH,
+    VIDEO_ART_CONVERT,
+    VIDEO_ART_DOWNLOAD,
+    VIDEO_ART_OFF,
 )
 from .coordinator import SunoCoordinator
 from .downloaded_library import (
@@ -51,6 +56,7 @@ from .downloaded_library import (
     HomeAssistantDownloadedLibraryStorage,
     SunoCacheDownloadedLibraryAdapter,
 )
+from .downloaded_library.video_art import probe_libwebp_anim
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoData, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
@@ -405,7 +411,16 @@ class HomeAssistantRuntime:
         engine.audio = HomeAssistantDownloadedLibraryAudio(self.hass, self._client)
         engine.cache = SunoCacheDownloadedLibraryAdapter(self._cache)
         engine.download_path = entry.options.get(CONF_DOWNLOAD_PATH, "")
-        engine.download_videos = entry.options.get(CONF_DOWNLOAD_VIDEOS, True)
+        video_mode = self._resolve_video_art_mode(entry)
+        ffmpeg_binary = get_ffmpeg_manager(self.hass).binary
+        # Probe libwebp_anim for WebP modes; degrade to download if unavailable
+        if video_mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH):
+            if await probe_libwebp_anim(self.hass, ffmpeg_binary):
+                engine.ffmpeg_binary = ffmpeg_binary
+            else:
+                _LOGGER.warning("ffmpeg lacks libwebp_anim encoder; degrading video art mode to 'download'")
+                video_mode = VIDEO_ART_DOWNLOAD
+        engine.video_art_mode = video_mode
         await engine.async_load()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await engine.cleanup_tmp_files(download_path)
@@ -421,6 +436,17 @@ class HomeAssistantRuntime:
             coordinator.async_set_updated_data(coordinator.data)
         finally:
             self._updating_sensors = False
+
+    @staticmethod
+    def _resolve_video_art_mode(entry: ConfigEntry[Any]) -> str:
+        """Resolve video_art_mode from options, migrating legacy download_videos bool."""
+        opts = entry.options
+        if CONF_VIDEO_ART_MODE in opts:
+            return str(opts[CONF_VIDEO_ART_MODE])
+        # Migrate legacy boolean
+        if opts.get(CONF_DOWNLOAD_VIDEOS, False):
+            return VIDEO_ART_DOWNLOAD
+        return VIDEO_ART_OFF
 
     def _wire_downloaded_library_lifecycle(self) -> None:
         """Wire Home Assistant lifecycle hooks for the active Downloaded Library."""

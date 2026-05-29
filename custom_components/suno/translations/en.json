@@ -24,6 +24,7 @@
           "show_my_songs": "My Songs",
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
+          "video_art_mode": "Animated cover art",
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
@@ -32,6 +33,7 @@
           "show_my_songs": "Include your most recent songs, filtered by count and age.",
           "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
+          "video_art_mode": "How to handle animated cover art videos. Off: skip. Download: save MP4. Convert: produce animated WebP only. Both: keep MP4 and produce WebP.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
       }
@@ -58,6 +60,7 @@
           "show_my_songs": "My Songs",
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
+          "video_art_mode": "Animated cover art",
           "cache_max_size_mb": "Maximum cache size"
         },
         "data_description": {
@@ -66,6 +69,7 @@
           "show_my_songs": "Include your most recent songs, filtered by count and age.",
           "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
+          "video_art_mode": "How to handle animated cover art videos. Off: skip. Download: save MP4. Convert: produce animated WebP only. Both: keep MP4 and produce WebP.",
           "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
         }
       },

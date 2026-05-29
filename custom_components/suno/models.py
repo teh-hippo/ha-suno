@@ -240,6 +240,11 @@ def image_url_hash(image_url: str) -> str:
     return hashlib.md5(image_url.encode()).hexdigest()[:12] if image_url else ""  # noqa: S324
 
 
+def video_url_hash(video_url: str) -> str:
+    """Short stable digest of a video cover URL for staleness detection."""
+    return hashlib.md5(video_url.encode()).hexdigest()[:12] if video_url else ""  # noqa: S324
+
+
 def clip_meta_hash(clip: SunoClip) -> str:
     """Short hash of clip metadata for content change detection.
 

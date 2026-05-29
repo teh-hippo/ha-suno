@@ -18,8 +18,12 @@ from ..const import (
     CONF_DOWNLOAD_PATH,
     DOWNLOAD_MODE_ARCHIVE,
     QUALITY_HIGH,
+    VIDEO_ART_BOTH,
+    VIDEO_ART_CONVERT,
+    VIDEO_ART_DOWNLOAD,
+    VIDEO_ART_OFF,
 )
-from ..models import SunoClip, SunoData, clip_meta_hash, image_url_hash, selected_image_url
+from ..models import SunoClip, SunoData, clip_meta_hash, image_url_hash, selected_image_url, video_url_hash
 from .audio_adapter import HomeAssistantDownloadedLibraryAudio
 from .cache_adapter import NullDownloadedLibraryCache, SunoCacheDownloadedLibraryAdapter
 from .contracts import (
@@ -52,6 +56,7 @@ from .source_modes import (
     _source_preserves_files,
 )
 from .storage import HomeAssistantDownloadedLibraryStorage, InMemoryDownloadedLibraryStorage
+from .video_art import convert_mp4_to_webp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,7 +97,7 @@ class DownloadedLibrary:
         cache: DownloadedLibraryCache | None = None,
         status_callback: Any | None = None,
         download_path: str = "",
-        download_videos: bool = True,
+        video_art_mode: str = VIDEO_ART_OFF,
     ) -> None:
         self.hass = hass
         self._storage = storage
@@ -101,7 +106,8 @@ class DownloadedLibrary:
         self._status_callback = status_callback
         self._state: dict[str, Any] = {"clips": {}, "last_download": None}
         self._download_path = download_path
-        self._download_videos = download_videos
+        self._video_art_mode = video_art_mode
+        self._ffmpeg_binary: str = ""
         self._running = False
         self._errors = self._pending = 0
         self._last_result = ""
@@ -129,12 +135,30 @@ class DownloadedLibrary:
         self._download_path = value
 
     @property
+    def video_art_mode(self) -> str:
+        return self._video_art_mode
+
+    @video_art_mode.setter
+    def video_art_mode(self, value: str) -> None:
+        self._video_art_mode = value
+
+    @property
     def download_videos(self) -> bool:
-        return self._download_videos
+        """Legacy compatibility: True if any video download mode is active."""
+        return self._video_art_mode != VIDEO_ART_OFF
 
     @download_videos.setter
     def download_videos(self, value: bool) -> None:
-        self._download_videos = value
+        """Legacy compatibility setter."""
+        self._video_art_mode = VIDEO_ART_DOWNLOAD if value else VIDEO_ART_OFF
+
+    @property
+    def ffmpeg_binary(self) -> str:
+        return self._ffmpeg_binary
+
+    @ffmpeg_binary.setter
+    def ffmpeg_binary(self, value: str) -> None:
+        self._ffmpeg_binary = value
 
     @property
     def audio(self) -> DownloadedLibraryAudio | None:
@@ -585,23 +609,51 @@ class DownloadedLibrary:
         return covers_fixed
 
     async def _sync_videos(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, Any]) -> int:
-        """Download video cover art for every desired clip that has one but is missing on disk."""
-        if not self._download_videos or not self._audio:
+        """Download video cover art and optionally convert to animated WebP."""
+        mode = self._video_art_mode
+        if mode == VIDEO_ART_OFF or not self._audio:
             return 0
-        videos_downloaded = 0
+        videos_processed = 0
         for item in desired:
             entry = clips_state.get(item.clip.id)
             if not entry or not entry.get("path"):
                 continue
             if not item.clip.video_cover_url:
                 continue
-            await self._audio.download_video(item.clip.video_cover_url, base / _video_clip_path(item.clip))
-            video_target = base / _video_clip_path(item.clip)
-            if await self.hass.async_add_executor_job(video_target.exists):
-                videos_downloaded += 1
-        if videos_downloaded:
-            _LOGGER.info("Ensured %d video cover art files", videos_downloaded)
-        return videos_downloaded
+            current_hash = video_url_hash(item.clip.video_cover_url)
+            stored_hash = entry.get("video_url_hash", "")
+            mp4_target = base / _video_clip_path(item.clip)
+            mp4_exists = await self.hass.async_add_executor_job(mp4_target.exists)
+
+            # Determine if we need to (re-)download the MP4
+            needs_download = not mp4_exists or current_hash != stored_hash
+
+            if needs_download:
+                await self._audio.download_video(item.clip.video_cover_url, mp4_target)
+                mp4_exists = await self.hass.async_add_executor_job(mp4_target.exists)
+                if mp4_exists:
+                    entry["video_url_hash"] = current_hash
+
+            if not mp4_exists:
+                continue
+
+            # Handle WebP conversion for convert/both modes
+            if mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH) and self._ffmpeg_binary:
+                webp_target = mp4_target.parent / "cover.webp"
+                webp_exists = await self.hass.async_add_executor_job(webp_target.exists)
+                if needs_download or not webp_exists:
+                    await convert_mp4_to_webp(self.hass, self._ffmpeg_binary, mp4_target, webp_target)
+
+            # In convert mode, remove the MP4 after successful WebP generation
+            if mode == VIDEO_ART_CONVERT and self._ffmpeg_binary:
+                webp_target = mp4_target.parent / "cover.webp"
+                if await self.hass.async_add_executor_job(webp_target.exists):
+                    await self.hass.async_add_executor_job(mp4_target.unlink, True)
+
+            videos_processed += 1
+        if videos_processed:
+            _LOGGER.info("Processed %d video cover art files (mode=%s)", videos_processed, mode)
+        return videos_processed
 
     async def _prune_removed_entries(self, base: Path, to_delete: list[str], clips_state: dict[str, Any]) -> None:
         """Drop deleted entries from manifest and clean their files + sidecars."""
@@ -647,7 +699,7 @@ class DownloadedLibrary:
             await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
             await self.hass.async_add_executor_job(old_video.rename, new_video)
         if old_file.parent != new_file.parent:
-            for sidecar_name in ("cover.jpg", ".cover_hash"):
+            for sidecar_name in ("cover.jpg", "cover.webp", ".cover_hash"):
                 old_sc = old_file.parent / sidecar_name
                 if await self.hass.async_add_executor_job(old_sc.exists):
                     new_sc = new_file.parent / sidecar_name
@@ -678,6 +730,7 @@ class DownloadedLibrary:
             clip_file.with_suffix(".mp4"),
             clip_file.with_suffix(".jpg"),
             clip_file.parent / "cover.jpg",
+            clip_file.parent / "cover.webp",
             clip_file.parent / ".cover_hash",
         )
         for sidecar in sidecars:
@@ -738,7 +791,7 @@ class DownloadedLibrary:
                     track_path=target,
                 )
 
-            if self._download_videos and clip.video_cover_url:
+            if self._video_art_mode != VIDEO_ART_OFF and clip.video_cover_url:
                 await self._audio.download_video(clip.video_cover_url, base / _video_clip_path(clip))
 
             try:

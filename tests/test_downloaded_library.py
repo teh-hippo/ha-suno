@@ -27,6 +27,8 @@ from custom_components.suno.const import (
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
+    VIDEO_ART_DOWNLOAD,
+    VIDEO_ART_OFF,
 )
 from custom_components.suno.downloaded_library import (
     DesiredDownloadPlan,
@@ -1949,7 +1951,7 @@ async def test_retag_downloads_video_when_missing(hass: HomeAssistant, tmp_path:
         }
     )
     audio = _FakeAudio()
-    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    library = DownloadedLibrary(hass, storage, audio=audio, video_art_mode=VIDEO_ART_DOWNLOAD)
     await library.async_load()
 
     await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
@@ -1976,7 +1978,7 @@ async def test_reconcile_existing_file_downloads_video(hass: HomeAssistant, tmp_
     # Clip NOT in manifest - triggers download path, but file exists = reconcile
     storage = InMemoryDownloadedLibraryStorage({"clips": {}, "last_download": None})
     audio = _FakeAudio()
-    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    library = DownloadedLibrary(hass, storage, audio=audio, video_art_mode=VIDEO_ART_DOWNLOAD)
     await library.async_load()
 
     await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
@@ -2025,7 +2027,7 @@ async def test_sync_videos_downloads_for_unchanged_clip(hass: HomeAssistant, tmp
         }
     )
     audio = _FakeAudio()
-    library = DownloadedLibrary(hass, storage, audio=audio, download_videos=True)
+    library = DownloadedLibrary(hass, storage, audio=audio, video_art_mode=VIDEO_ART_DOWNLOAD)
     await library.async_load()
 
     await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
@@ -2470,7 +2472,7 @@ async def test_video_download_success(hass: HomeAssistant, tmp_path: Path) -> No
         hass,
         InMemoryDownloadedLibraryStorage(),
         audio=audio,
-        download_videos=True,
+        video_art_mode=VIDEO_ART_DOWNLOAD,
     )
     await library.async_load()
 
@@ -2502,7 +2504,7 @@ async def test_video_download_skipped_when_disabled(hass: HomeAssistant, tmp_pat
         hass,
         InMemoryDownloadedLibraryStorage(),
         audio=audio,
-        download_videos=False,
+        video_art_mode=VIDEO_ART_OFF,
     )
     await library.async_load()
 
@@ -2533,7 +2535,7 @@ async def test_video_download_handles_failure(hass: HomeAssistant, tmp_path: Pat
         hass,
         InMemoryDownloadedLibraryStorage(),
         audio=audio,
-        download_videos=True,
+        video_art_mode=VIDEO_ART_DOWNLOAD,
     )
     await library.async_load()
 
@@ -2565,7 +2567,7 @@ async def test_video_download_skipped_when_no_video_cover_url(hass: HomeAssistan
         hass,
         InMemoryDownloadedLibraryStorage(),
         audio=audio,
-        download_videos=True,
+        video_art_mode=VIDEO_ART_DOWNLOAD,
     )
     await library.async_load()
 

@@ -49,6 +49,7 @@ from .const import (
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
+    CONF_VIDEO_ART_MODE,
     DEFAULT_ALL_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CREATE_PLAYLISTS,
@@ -66,6 +67,10 @@ from .const import (
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
+    VIDEO_ART_BOTH,
+    VIDEO_ART_CONVERT,
+    VIDEO_ART_DOWNLOAD,
+    VIDEO_ART_OFF,
 )
 from .exceptions import SunoAuthError, SunoConnectionError
 
@@ -79,6 +84,12 @@ MODE_OPTIONS = [
     SelectOptionDict(value=DOWNLOAD_MODE_MIRROR, label="Mirror"),
     SelectOptionDict(value=DOWNLOAD_MODE_ARCHIVE, label="Archive"),
     SelectOptionDict(value=DOWNLOAD_MODE_CACHE, label="Cache"),
+]
+VIDEO_ART_OPTIONS = [
+    SelectOptionDict(value=VIDEO_ART_OFF, label="Off"),
+    SelectOptionDict(value=VIDEO_ART_DOWNLOAD, label="Download"),
+    SelectOptionDict(value=VIDEO_ART_CONVERT, label="Convert"),
+    SelectOptionDict(value=VIDEO_ART_BOTH, label="Both"),
 ]
 
 
@@ -117,6 +128,12 @@ def _library_schema(opts: dict[str, Any]) -> vol.Schema:
                 default=opts.get(CONF_CREATE_PLAYLISTS, DEFAULT_CREATE_PLAYLISTS),
             )
         ] = BooleanSelector()
+        schema[
+            vol.Required(
+                CONF_VIDEO_ART_MODE,
+                default=opts.get(CONF_VIDEO_ART_MODE, VIDEO_ART_OFF),
+            )
+        ] = SelectSelector(SelectSelectorConfig(options=VIDEO_ART_OPTIONS, mode=SelectSelectorMode.DROPDOWN))
     schema[
         vol.Required(
             CONF_CACHE_MAX_SIZE,
