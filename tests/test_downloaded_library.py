@@ -1920,6 +1920,52 @@ async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path
     assert library.errors == 0
 
 
+async def test_async_reconcile_retags_when_prompt_changes(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Prompt-only metadata drift should retag lyrics without re-downloading."""
+    from custom_components.suno.models import clip_meta_hash
+
+    clip_old = _clip("clip-prompt-0000-0000-0000-000000000000", "Prompt Song")
+    clip_old.prompt = "prompt A"
+    clip_new = _clip("clip-prompt-0000-0000-0000-000000000000", "Prompt Song")
+    clip_new.prompt = "prompt B"
+
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip_new, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    old_hash = clip_meta_hash(clip_old)
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip_new.id: {
+                    "path": rel_path,
+                    "title": "Prompt Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": old_hash,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip_new]))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 1
+    assert audio.retag_calls[0][1].lyrics == "prompt B"
+    assert target.exists()
+    assert library.state["clips"][clip_new.id]["meta_hash"] == clip_meta_hash(clip_new)
+    assert library.errors == 0
+
+
 async def test_retag_downloads_video_when_missing(hass: HomeAssistant, tmp_path: Path) -> None:
     """Retag path should also download video cover art if not yet on disk."""
     clip = _clip_with_display(
