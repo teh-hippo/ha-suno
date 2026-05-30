@@ -3105,6 +3105,85 @@ async def test_async_reconcile_preserves_archive_playlist_clip_when_playlist_dis
     assert library.state["clips"][archived_clip.id]["sources"] == ["playlist:pl-removed"]
 
 
+async def test_async_reconcile_renames_m3u8_when_playlist_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A Suno-side playlist rename swaps the .m3u8 filename without disturbing clips.
+
+    Rename is id-stable: ``suno_library.playlists[i].id`` is unchanged so the
+    manifest's ``playlist:<id>`` source tag, ``source_modes``, and the audio
+    file path all stay put. Only ``source_to_name`` carries the new label, so
+    ``_write_m3u8_playlists`` writes the new ``<NewName>.m3u8`` and its
+    end-of-write cleanup unlinks the stale ``<OldName>.m3u8`` from a previous
+    cycle. The case-only rename here (``album`` -> ``Album``) is two distinct
+    filenames on the case-sensitive Linux filesystem HA OS uses, so any
+    case-insensitive matching in the cleanup would surface here.
+    """
+    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
+    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
+
+    sync_dir = tmp_path / "downloads"
+    sync_dir.mkdir()
+
+    clip = _clip("clip-rename-0000-0000-0000-000000000000", title="OnlyClip")
+    rel = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    stale_m3u8 = sync_dir / "The Second album.m3u8"
+    stale_m3u8.write_text("#EXTM3U\nstale\n", encoding="utf-8")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel,
+                    "sources": ["playlist:pl-rename"],
+                    "source_modes": {"playlist:pl-rename": DOWNLOAD_MODE_MIRROR},
+                    "size": target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(clip),
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    suno_data = SunoData(
+        playlists=[SunoPlaylist(id="pl-rename", name="The Second Album", image_url=None, num_clips=1)],
+        playlist_clips={"pl-rename": [clip]},
+    )
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: False,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_SHOW_MY_SONGS: False,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_CREATE_PLAYLISTS: True,
+        },
+        suno_data,
+    )
+
+    assert not stale_m3u8.exists()
+    new_m3u8 = sync_dir / "The Second Album.m3u8"
+    assert new_m3u8.exists()
+    new_content = new_m3u8.read_text(encoding="utf-8")
+    assert "#PLAYLIST:The Second Album" in new_content
+    assert "#EXTINF:" in new_content
+    assert str(target) in new_content
+
+    assert target.exists()
+    entry = library.state["clips"][clip.id]
+    assert entry["sources"] == ["playlist:pl-rename"]
+    assert entry["source_modes"] == {"playlist:pl-rename": DOWNLOAD_MODE_MIRROR}
+    assert entry["path"] == rel
+
+
 # ── Album from root ancestor ────────────────────────────────────
 
 
