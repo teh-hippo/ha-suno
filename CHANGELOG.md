@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v6.2.2 (2026-05-30)
+
+### Bug Fixes
+
+- **downloaded_library**: Clean up orphan video sidecars on video_art_mode change
+  ([`4e359ba`](https://github.com/teh-hippo/ha-suno/commit/4e359ba5092263f7de0d7b394092e8eec58e0dcf))
+
+- **models**: Include clip.gpt_description_prompt in clip_meta_hash
+  ([`7f2b5ad`](https://github.com/teh-hippo/ha-suno/commit/7f2b5ad9c0581e897a02c8d517316a458f9a210c))
+
+
 ## v6.2.1 (2026-05-30)
 
 ### Bug Fixes
