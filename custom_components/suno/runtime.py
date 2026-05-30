@@ -387,9 +387,17 @@ class HomeAssistantRuntime:
 
     async def _async_setup_downloaded_library(self) -> None:
         previous_options = _pop_previous_options(self.hass, self.entry.entry_id)
+        previous_path = (previous_options or {}).get(CONF_DOWNLOAD_PATH)
+        current_path = self.entry.options.get(CONF_DOWNLOAD_PATH)
+        path_changed = bool(previous_path and current_path and previous_path != current_path)
         if downloaded_library_enabled(self.entry.options):
             self._downloaded_library = await self._build_downloaded_library_engine()
             self._wire_downloaded_library_lifecycle()
+            if path_changed:
+                await self._async_purge_old_path(str(previous_path))
+            return
+        if path_changed:
+            await self._async_purge_old_path(str(previous_path))
         elif (
             previous_options is not None
             and downloaded_library_enabled(previous_options)
@@ -493,15 +501,24 @@ class HomeAssistantRuntime:
         options: Mapping[str, Any],
         previous_options: Mapping[str, Any] | None,
     ) -> None:
-        engine = self._downloaded_library
-        if engine is None:
-            storage = HomeAssistantDownloadedLibraryStorage(self.hass, f"suno_sync_{self.entry.entry_id}")
-            engine = DownloadedLibrary(self.hass, storage)
-            await engine.async_load()
+        engine = await self._async_downloaded_library_engine_for_cleanup()
         await engine.async_cleanup_disabled_downloads(
             dict(options),
             dict(previous_options) if previous_options else None,
         )
+
+    async def _async_purge_old_path(self, old_path: str) -> None:
+        engine = await self._async_downloaded_library_engine_for_cleanup()
+        await engine.async_purge_old_path(old_path)
+
+    async def _async_downloaded_library_engine_for_cleanup(self) -> DownloadedLibrary:
+        engine = self._downloaded_library
+        if engine is not None:
+            return engine
+        storage = HomeAssistantDownloadedLibraryStorage(self.hass, f"suno_sync_{self.entry.entry_id}")
+        engine = DownloadedLibrary(self.hass, storage)
+        await engine.async_load()
+        return engine
 
     @property
     def cache(self) -> SunoCache:

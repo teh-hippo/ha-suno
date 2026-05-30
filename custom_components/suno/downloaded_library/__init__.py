@@ -913,8 +913,7 @@ class DownloadedLibrary:
 
             clips_state.pop(clip_id, None)
             if entry.get("path"):
-                await _delete_file(self.hass, base, str(entry["path"]))
-                await self._delete_sidecars(base, str(entry["path"]))
+                await self._delete_clip_artifacts(base, str(entry["path"]))
             removed += 1
 
         await self._delete_generated_playlists(base)
@@ -931,6 +930,38 @@ class DownloadedLibrary:
         self._state["last_result"] = self._last_result
         await self._save_state(base)
         self._publish_status()
+
+    async def async_purge_old_path(self, old_path: str) -> None:
+        """Delete manifest-tracked files and generated playlists from an abandoned path."""
+        if not old_path:
+            return
+
+        base = Path(old_path)
+        clips_state = dict(self._state.get("clips", {}))
+        removed = 0
+
+        for clip_id, entry in list(clips_state.items()):
+            clips_state.pop(clip_id, None)
+            removed += 1
+            if not isinstance(entry, dict):
+                continue
+            rel_path = entry.get("path")
+            if rel_path:
+                await self._delete_clip_artifacts(base, str(rel_path))
+
+        await self._delete_generated_playlists(base)
+        await _delete_file(self.hass, base, _MANIFEST_FILENAME)
+        self._state["clips"] = clips_state
+        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
+        self._last_result = f"Download path changed: {removed} removed" if removed else "Download path changed"
+        self._state["last_result"] = self._last_result
+        await self._storage.async_save(self._state)
+        self._publish_status()
+
+    async def _delete_clip_artifacts(self, base: Path, rel_path: str) -> None:
+        await self._delete_sidecars(base, rel_path)
+        await _delete_file(self.hass, base, rel_path)
+        _cleanup_empty_dirs(base, base / rel_path)
 
     async def _delete_generated_playlists(self, base: Path) -> None:
         """Remove generated playlist files from the Downloaded Library root."""
