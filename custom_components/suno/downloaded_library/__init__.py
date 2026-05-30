@@ -400,10 +400,15 @@ class DownloadedLibrary:
             to_download_count=len(to_download),
         )
 
-        if allow_destructive and (downloaded or to_delete or migrated or force):
+        stored_video_art_mode = self._state.get("video_art_mode")
+        video_art_mode_changed = stored_video_art_mode is not None and stored_video_art_mode != self._video_art_mode
+        if allow_destructive and (downloaded or to_delete or migrated or force or video_art_mode_changed):
             orphans = await self._reconcile_disk(base, clips_state)
             if orphans:
                 _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
+        if allow_destructive and stored_video_art_mode != self._video_art_mode:
+            self._state["video_art_mode"] = self._video_art_mode
+            await self._save_state(base)
 
     async def _migrate_renamed_paths(
         self,
@@ -748,7 +753,7 @@ class DownloadedLibrary:
 
     async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
         """Remove orphaned audio and video files not tracked in download state."""
-        return await _reconcile_disk_fn(self.hass, base, clips_state)
+        return await _reconcile_disk_fn(self.hass, base, clips_state, self._video_art_mode)
 
     async def _download_clip(self, item: DownloadItem, base: Path, rel_path: str, *, force: bool = False) -> int | None:
         """Ensure a clip exists at the target path by promoting cache or rendering audio."""
