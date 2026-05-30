@@ -550,20 +550,29 @@ def _build_clip_index(data: SunoData) -> dict[str, SunoClip]:
 def _prepopulate_lineage_from_previous(data: SunoData, previous: SunoData) -> None:
     """Seed fresh clips with cached root_ancestor_id/lineage_status from previous.
 
-    The Suno API does not return root_ancestor_id, so every refresh starts with
-    fresh clips that have empty lineage fields. Without seeding, the in-memory
-    chain walk in _resolve_root_ancestors_in_memory cannot short-circuit through
-    intermediate parents whose root was resolved on a prior cycle: the walk
-    sees the parent's empty root_ancestor_id and continues to the grandparent,
-    which may exit the library and break the chain. The clip is then forced
-    into the per-cycle API budget and starves out behind 10 other queue entries.
+    Suno enriches root_ancestor_id inconsistently per endpoint:
+    /api/playlist/ responses populate it (extracted top-level by
+    SunoClip.from_api_response since v6.3.1 / R4-3), while the liked
+    endpoint and the bulk of /api/feed/v2/ entries do not. Clips whose
+    own payload arrived empty are skipped early by the
+    `if clip.root_ancestor_id: continue` guard below — seeding only
+    touches those gaps.
 
-    Seed only when the parent linkage (is_remix, edited_clip_id) is unchanged
-    upstream and the previous lineage was definitively resolved or external.
-    LINEAGE_PENDING and LINEAGE_UNAVAILABLE are not seeded so they go through
-    fresh resolution as before. _apply_album_details still re-evaluates against
-    the current clip set, so a seeded LINEAGE_RESOLVED whose root is no longer
-    in the library self-corrects to LINEAGE_EXTERNAL.
+    Without seeding, the in-memory chain walk in
+    _resolve_root_ancestors_in_memory cannot short-circuit through
+    intermediate parents whose root was resolved on a prior cycle: the
+    walk sees the parent's empty root_ancestor_id and continues to the
+    grandparent, which may exit the library and break the chain. The
+    clip is then forced into the per-cycle API budget and starves out
+    behind 10 other queue entries.
+
+    Seed only when the parent linkage (is_remix, edited_clip_id) is
+    unchanged upstream and the previous lineage was definitively
+    resolved or external. LINEAGE_PENDING and LINEAGE_UNAVAILABLE are
+    not seeded so they go through fresh resolution as before.
+    _apply_album_details still re-evaluates against the current clip
+    set, so a seeded LINEAGE_RESOLVED whose root is no longer in the
+    library self-corrects to LINEAGE_EXTERNAL.
     """
     previous_clips = _build_clip_index(previous)
     if not previous_clips:
