@@ -204,6 +204,29 @@ async def test_external_lineage_root_sets_synthetic_album_details() -> None:
     assert published.album_title == "Remixes of external"
 
 
+async def test_playlist_enriched_root_ancestor_skips_parent_lookup() -> None:
+    """Playlist-provided root ancestors preserve parent lookup budget."""
+    root = _make_clip("root", title="Original")
+    remix = _make_clip(
+        "remix",
+        title="Remix",
+        edited_clip_id="missing-parent",
+        is_remix=True,
+        root_ancestor_id="root",
+    )
+    playlist = SunoPlaylist(id="pl", name="Mixes", image_url="", num_clips=2)
+    source = FakeSunoLibraryAdapter(playlists=[playlist], playlist_clips={"pl": [root, remix]}, parents={})
+    refresh = LibraryRefresh(source, InMemoryStoredLibrary())
+
+    snapshot = await refresh.async_refresh_once()
+
+    assert source.parent_calls == []
+    playlist_remix = snapshot.data.playlist_clips["pl"][1]
+    assert playlist_remix.root_ancestor_id == "root"
+    assert playlist_remix.lineage_status == LINEAGE_RESOLVED
+    assert playlist_remix.album_title == "Original"
+
+
 async def test_unavailable_lineage_publishes_honest_album_details() -> None:
     """Unavailable Lineage is publishable but marked honestly."""
     remix = _make_clip("remix", title="Remix", edited_clip_id="hidden-parent", is_remix=True)

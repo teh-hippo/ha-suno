@@ -53,6 +53,52 @@ def test_clip_meta_hash_changes_when_handle_changes() -> None:
     assert clip_meta_hash(clip_a) != clip_meta_hash(clip_b)
 
 
+class TestFromApiResponse:
+    """Tests for fresh Suno API payload parsing."""
+
+    def _raw(self, **overrides: object) -> dict[str, object]:
+        raw: dict[str, object] = {
+            "id": "clip-1",
+            "title": "Test",
+            "audio_url": "https://cdn1.suno.ai/clip-1.mp3",
+            "image_url": "",
+            "image_large_url": "",
+            "is_liked": False,
+            "status": "complete",
+            "created_at": "2026-01-01T00:00:00Z",
+            "metadata": {
+                "tags": "pop",
+                "duration": 120.0,
+                "type": "gen",
+                "has_vocal": True,
+            },
+        }
+        raw.update(overrides)
+        return raw
+
+    def test_from_api_response_extracts_root_ancestor_id_when_present(self) -> None:
+        clip = SunoClip.from_api_response(self._raw(root_ancestor_id="abc123"))
+
+        assert clip.root_ancestor_id == "abc123"
+
+    def test_from_api_response_extracts_lineage_status_when_present(self) -> None:
+        clip = SunoClip.from_api_response(self._raw(lineage_status="resolved"))
+
+        assert clip.lineage_status == "resolved"
+
+    def test_from_api_response_extracts_album_title_when_present(self) -> None:
+        clip = SunoClip.from_api_response(self._raw(album_title="Original Album"))
+
+        assert clip.album_title == "Original Album"
+
+    def test_from_api_response_defaults_lineage_fields_when_absent(self) -> None:
+        clip = SunoClip.from_api_response(self._raw())
+
+        assert clip.root_ancestor_id == ""
+        assert clip.lineage_status == ""
+        assert clip.album_title == ""
+
+
 class TestSafeClip:
     """Tests for defensive clip loading."""
 
