@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.3.0 (2026-05-30)
+
+### Features
+
+- **video_art**: Configurable WebP conversion + ffmpeg escape hatch
+  ([`32901cf`](https://github.com/teh-hippo/ha-suno/commit/32901cfdcacec66581342a990c8f0ffcabf8e458))
+
+
 ## v6.2.3 (2026-05-30)
 
 ### Bug Fixes
