@@ -27,6 +27,8 @@ from custom_components.suno.const import (
     DOWNLOAD_MODE_MIRROR,
     QUALITY_HIGH,
     QUALITY_STANDARD,
+    VIDEO_ART_BOTH,
+    VIDEO_ART_CONVERT,
     VIDEO_ART_DOWNLOAD,
     VIDEO_ART_OFF,
 )
@@ -1182,8 +1184,12 @@ async def test_reconcile_disk_cleans_empty_dirs(hass: HomeAssistant, tmp_path: P
 
 
 async def test_reconcile_disk_keeps_mp4_sidecar_next_to_audio(hass: HomeAssistant, tmp_path: Path) -> None:
-    """mp4 sidecars sharing an audio file's basename are not treated as orphans."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
+    """mp4 sidecars sharing an audio file's basename are kept when the mode expects them."""
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        video_art_mode=VIDEO_ART_DOWNLOAD,
+    )
     rel = "artist/Song/artist-Song [abcd1234].flac"
     audio_path = tmp_path / rel
     audio_path.parent.mkdir(parents=True)
@@ -1563,7 +1569,7 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
 
 
 async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Video .mp4 sidecar follows its audio file when the clip is renamed."""
+    """Video .mp4 sidecar follows its audio file when MP4 video art is enabled."""
     clip_id = "abcd1234-0000-0000-0000-000000000000"
     sync_dir = tmp_path / "mirror"
     old_rel = "old_artist/Song/old_artist-Song [abcd1234].flac"
@@ -1590,7 +1596,7 @@ async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) 
         }
     )
     audio = _FakeAudio()
-    library = DownloadedLibrary(hass, storage, audio=audio)
+    library = DownloadedLibrary(hass, storage, audio=audio, video_art_mode=VIDEO_ART_DOWNLOAD)
     await library.async_load()
 
     clip = _clip_with_display(clip_id, "Song", display_name="newartist")
@@ -2689,6 +2695,159 @@ async def test_video_download_skipped_when_no_video_cover_url(hass: HomeAssistan
     assert audio.video_calls == []
 
 
+async def test_async_reconcile_removes_orphan_mp4_and_webp_when_video_art_off(
+    hass: HomeAssistant,
+    tmp_path: Path,
+) -> None:
+    """Video sidecars are swept when video art mode is off."""
+    clip = _clip_with_display("clip-side-off-0000-0000-000000000000", "Sidecar Off")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    audio_path = sync_dir / rel_path
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
+    mp4_path = audio_path.with_suffix(".mp4")
+    webp_path = audio_path.parent / "cover.webp"
+    mp4_path.write_bytes(b"\x00\x00\x00\x1cftypisom")
+    webp_path.write_bytes(b"RIFFfakeWEBP")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": audio_path.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio(), video_art_mode=VIDEO_ART_OFF)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]), force=True)
+
+    assert audio_path.exists()
+    assert not mp4_path.exists()
+    assert not webp_path.exists()
+
+
+async def test_async_reconcile_removes_video_sidecars_after_mode_change_without_force(
+    hass: HomeAssistant,
+    tmp_path: Path,
+) -> None:
+    """A video art mode change triggers disk reconciliation even when clips are unchanged."""
+    clip = _clip_with_display("clip-side-chg-0000-0000-000000000000", "Sidecar Change")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    audio_path = sync_dir / rel_path
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
+    mp4_path = audio_path.with_suffix(".mp4")
+    webp_path = audio_path.parent / "cover.webp"
+    mp4_path.write_bytes(b"\x00\x00\x00\x1cftypisom")
+    webp_path.write_bytes(b"RIFFfakeWEBP")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": audio_path.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+            "video_art_mode": VIDEO_ART_BOTH,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio, video_art_mode=VIDEO_ART_OFF)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert audio_path.exists()
+    assert not mp4_path.exists()
+    assert not webp_path.exists()
+    assert library.state["video_art_mode"] == VIDEO_ART_OFF
+
+
+async def test_async_reconcile_removes_orphan_webp_when_video_art_download(
+    hass: HomeAssistant,
+    tmp_path: Path,
+) -> None:
+    """Animated WebP sidecars are swept when only MP4 downloads are configured."""
+    clip = _clip_with_display("clip-side-dl-0000-0000-000000000000", "Sidecar Download")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    audio_path = sync_dir / rel_path
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
+    webp_path = audio_path.parent / "cover.webp"
+    webp_path.write_bytes(b"RIFFfakeWEBP")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": audio_path.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio(), video_art_mode=VIDEO_ART_DOWNLOAD)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]), force=True)
+
+    assert audio_path.exists()
+    assert not webp_path.exists()
+
+
+async def test_async_reconcile_removes_orphan_mp4_when_video_art_convert(
+    hass: HomeAssistant,
+    tmp_path: Path,
+) -> None:
+    """MP4 sidecars are swept when convert mode should leave only animated WebP."""
+    clip = _clip_with_display("clip-side-cv-0000-0000-000000000000", "Sidecar Convert")
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    audio_path = sync_dir / rel_path
+    audio_path.parent.mkdir(parents=True)
+    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
+    mp4_path = audio_path.with_suffix(".mp4")
+    webp_path = audio_path.parent / "cover.webp"
+    mp4_path.write_bytes(b"\x00\x00\x00\x1cftypisom")
+    webp_path.write_bytes(b"RIFFfakeWEBP")
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "size": audio_path.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio(), video_art_mode=VIDEO_ART_CONVERT)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]), force=True)
+
+    assert audio_path.exists()
+    assert not mp4_path.exists()
+    assert webp_path.exists()
+
+
 # ── Reconcile manifest / present-file / missing-file ────────────
 
 
@@ -2867,7 +3026,7 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 
 
 async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Reconciliation is skipped when no downloads, deletions, or migrations occurred."""
+    """Reconciliation is skipped when no downloads, deletions, migrations, or mode changes occurred."""
     from custom_components.suno.models import clip_meta_hash
 
     clip_id = "clip0099-0000-0000-0000-000000000000"
@@ -2888,6 +3047,7 @@ async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_p
                 }
             },
             "last_download": None,
+            "video_art_mode": VIDEO_ART_OFF,
         }
     )
     audio = _FakeAudio()

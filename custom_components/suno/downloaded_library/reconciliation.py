@@ -13,17 +13,29 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from ..const import VIDEO_ART_BOTH, VIDEO_ART_CONVERT, VIDEO_ART_DOWNLOAD
+
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _reconcile_disk(hass: HomeAssistant, base: Path, clips_state: dict[str, Any]) -> int:
+async def _reconcile_disk(
+    hass: HomeAssistant,
+    base: Path,
+    clips_state: dict[str, Any],
+    video_art_mode: str = VIDEO_ART_BOTH,
+) -> int:
     """Remove orphaned audio and video files not tracked in download state."""
     known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
+    keep_mp4 = video_art_mode in (VIDEO_ART_DOWNLOAD, VIDEO_ART_BOTH)
+    keep_webp = video_art_mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH)
     for entry in clips_state.values():
-        if entry.get("path"):
-            known_paths.add(str(Path(entry["path"]).with_suffix(".mp4")))
-            # cover.webp lives at album level alongside cover.jpg
-            known_paths.add(str(Path(entry["path"]).parent / "cover.webp"))
+        if not entry.get("path"):
+            continue
+        clip_path = Path(entry["path"])
+        if keep_mp4:
+            known_paths.add(str(clip_path.with_suffix(".mp4")))
+        if keep_webp:
+            known_paths.add(str(clip_path.parent / "cover.webp"))
 
     def _scan_and_remove(base_path: Path, known: set[str]) -> int:
         count = 0
