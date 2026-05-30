@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v6.2.3 (2026-05-30)
+
+### Bug Fixes
+
+- **downloaded_library**: Detect album drift when remix root title changes
+  ([`005ae8c`](https://github.com/teh-hippo/ha-suno/commit/005ae8c617ba87c31ce65e7d54e92026fb643275))
+
+- **models**: Include clip.handle in clip_meta_hash
+  ([`8cf6234`](https://github.com/teh-hippo/ha-suno/commit/8cf6234fa031d4e89c7073e8923f55c2797e00be))
+
+
 ## v6.2.2 (2026-05-30)
 
 ### Bug Fixes
