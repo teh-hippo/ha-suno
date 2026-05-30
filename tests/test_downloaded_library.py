@@ -48,7 +48,7 @@ from custom_components.suno.downloaded_library import (
     _write_file,
     _write_m3u8_playlists,
 )
-from custom_components.suno.downloaded_library.planning import _apply_clip_metadata
+from custom_components.suno.downloaded_library.planning import _apply_clip_metadata, _apply_file_state
 from custom_components.suno.models import SunoClip, SunoData, TrackMetadata, image_url_hash
 
 
@@ -148,12 +148,8 @@ class _FakeCache:
         self.puts.append((clip_id, fmt, data, meta_hash))
 
 
-def test_apply_clip_metadata_sets_album_and_embedded_art_hash() -> None:
-    from custom_components.suno.models import (
-        clip_meta_hash,
-        image_url_hash,
-        selected_image_url,
-    )
+def test_apply_clip_metadata_mirrors_clip_fields_only() -> None:
+    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-meta-0000-0000-0000-000000000000", "New Title")
     clip.image_large_url = "https://images.example/cover.jpg"
@@ -166,36 +162,180 @@ def test_apply_clip_metadata_sets_album_and_embedded_art_hash() -> None:
         "created": "2025-01-01",
         "size": 1,
         "meta_hash": "old",
+        "embedded_art_hash": "old-art",
     }
 
-    _apply_clip_metadata(entry, clip, 123, album="Liked Songs")
+    _apply_clip_metadata(entry, clip, album="Liked Songs")
 
+    # Clip-mirror fields refreshed.
+    assert entry["title"] == "New Title"
+    assert entry["created"] == "2026-03-15"
+    assert entry["meta_hash"] == clip_meta_hash(clip)
+    assert entry["album"] == "Liked Songs"
+    # File-mirror fields left alone — caller must invoke _apply_file_state
+    # only after a verified file write.
+    assert entry["size"] == 1
+    assert entry["embedded_art_hash"] == "old-art"
+    # Untouched bookkeeping survives.
     assert entry["path"] == "keep.flac"
     assert entry["sources"] == ["liked"]
     assert entry["source_modes"] == {"liked": DOWNLOAD_MODE_MIRROR}
     assert entry["quality"] == QUALITY_HIGH
-    assert entry["title"] == "New Title"
-    assert entry["created"] == "2026-03-15"
-    assert entry["size"] == 123
-    assert entry["meta_hash"] == clip_meta_hash(clip)
-    assert entry["embedded_art_hash"] == image_url_hash(selected_image_url(clip))
-    assert entry["album"] == "Liked Songs"
 
 
-def test_apply_clip_metadata_clears_album_and_embedded_art_hash() -> None:
+def test_apply_clip_metadata_clears_album_without_touching_file_state() -> None:
     clip = _clip("clip-meta-clear-0000-0000-0000-000000000000", "No Album")
     entry: dict[str, object] = {
         "album": "Old Album",
         "embedded_art_hash": "old-art",
+        "size": 999,
     }
 
-    _apply_clip_metadata(entry, clip, 456)
+    _apply_clip_metadata(entry, clip)
 
     assert entry["title"] == "No Album"
     assert entry["created"] == "2026-03-15"
-    assert entry["size"] == 456
     assert "album" not in entry
+    # File-mirror fields preserved.
+    assert entry["embedded_art_hash"] == "old-art"
+    assert entry["size"] == 999
+
+
+def test_apply_file_state_writes_size_and_embedded_art_hash() -> None:
+    from custom_components.suno.models import image_url_hash, selected_image_url
+
+    clip = _clip("clip-file-0000-0000-0000-000000000000", "Song")
+    clip.image_large_url = "https://images.example/cover.jpg"
+    entry: dict[str, object] = {}
+
+    _apply_file_state(entry, clip, 12345)
+
+    assert entry["size"] == 12345
+    assert entry["embedded_art_hash"] == image_url_hash(selected_image_url(clip))
+
+
+def test_apply_file_state_clears_embedded_art_hash_when_no_image() -> None:
+    clip = _clip("clip-file-noart-0000-0000-0000-000000000000", "Song")
+    entry: dict[str, object] = {"embedded_art_hash": "stale"}
+
+    _apply_file_state(entry, clip, 0)
+
+    assert entry["size"] == 0
     assert "embedded_art_hash" not in entry
+
+
+async def test_stale_title_heals_without_retag(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Historic drift: manifest title stale but meta_hash in sync should heal.
+
+    Reproduces the production bug fixed in this commit: a clip whose
+    ``meta_hash`` matches current Suno (so no retag fires) but whose
+    denormalised ``title`` field never got updated by a pre-R4-1 code
+    generation. The unchanged-branch reconciler in ``_plan_actions`` must
+    refresh clip-mirror fields without touching file-mirror fields or
+    issuing a retag.
+    """
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _clip("clip-stale-title-0000-0000-0000-000000000000", "New Live Title")
+    clip.image_large_url = "https://images.example/cover.jpg"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = tmp_path / "downloads" / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "source_modes": {"liked": DOWNLOAD_MODE_MIRROR},
+                    "quality": QUALITY_HIGH,
+                    "title": "Old Stale Title",
+                    "created": "2025-01-01",
+                    "size": target.stat().st_size,
+                    "meta_hash": clip_meta_hash(clip),
+                    "embedded_art_hash": image_url_hash(clip.image_large_url),
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(
+        _options(tmp_path / "downloads"),
+        SunoData(liked_clips=[clip]),
+    )
+
+    entry = library.state["clips"][clip.id]
+    # Clip-mirror fields healed.
+    assert entry["title"] == "New Live Title"
+    assert entry["created"] == "2026-03-15"
+    # No retag fired — the heal path must not touch the file or its
+    # file-mirror manifest fields.
+    assert audio.retag_calls == []
+    assert entry["embedded_art_hash"] == image_url_hash(clip.image_large_url)
+    assert entry["size"] == target.stat().st_size
+
+
+async def test_unchanged_clip_reconcile_does_not_clobber_embedded_art_hash(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Regression guard: the no-retag reconcile must not touch file-mirror fields.
+
+    Setup: the file on disk has *old* art (stored ``embedded_art_hash``).
+    Suno currently advertises *new* art. The drift-detection branch
+    correctly enqueues a retag (so ``art_stale`` is the trigger here),
+    but the production crash mode would be: an erroneous unchanged-
+    branch reconciler that overwrites ``embedded_art_hash`` from
+    ``selected_image_url`` without retagging the file, leaving the
+    manifest lying about file content.
+
+    This test cuts the inverse case — the art *does* match — to prove
+    the unchanged reconciler preserves it untouched (it would also
+    overwrite with the same value, but the test pins that contract).
+    """
+    from custom_components.suno.models import clip_meta_hash
+
+    clip = _clip("clip-no-art-clobber-0000-0000-0000-000000000000", "Stable Song")
+    clip.image_large_url = "https://images.example/keep.jpg"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = tmp_path / "downloads" / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "sources": ["liked"],
+                    "source_modes": {"liked": DOWNLOAD_MODE_MIRROR},
+                    "quality": QUALITY_HIGH,
+                    "title": "Stable Song",
+                    "created": "2026-03-15",
+                    "size": target.stat().st_size,
+                    "meta_hash": clip_meta_hash(clip),
+                    "embedded_art_hash": image_url_hash(clip.image_large_url),
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(
+        _options(tmp_path / "downloads"),
+        SunoData(liked_clips=[clip]),
+    )
+
+    entry = library.state["clips"][clip.id]
+    assert entry["embedded_art_hash"] == image_url_hash(clip.image_large_url)
+    assert entry["size"] == target.stat().st_size
+    assert audio.retag_calls == []
 
 
 async def test_stale_liked_section_preserves_downloaded_file(hass: HomeAssistant, tmp_path: Path) -> None:

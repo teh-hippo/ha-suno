@@ -49,6 +49,7 @@ from .paths import _clip_path, _safe_name, _video_clip_path
 from .planning import (
     _add_clip,
     _apply_clip_metadata,
+    _apply_file_state,
     _clip_entry,
     _set_manifest_album,
     build_desired,
@@ -515,6 +516,8 @@ class DownloadedLibrary:
                     album_changed = resolved_album != existing.get("album")
                 if meta_changed or art_stale or album_changed:
                     to_retag.append(item)
+                else:
+                    _apply_clip_metadata(existing, item.clip, album=resolved_album)
 
         to_delete: list[str] = []
         if allow_destructive:
@@ -572,9 +575,9 @@ class DownloadedLibrary:
                 _apply_clip_metadata(
                     existing,
                     item.clip,
-                    stat.st_size,
                     album=_manifest_album_for_clip(item.clip, self._clip_index),
                 )
+                _apply_file_state(existing, item.clip, stat.st_size)
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
