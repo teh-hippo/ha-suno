@@ -65,6 +65,40 @@ async def test_convert_mp4_to_webp_success(hass: HomeAssistant, tmp_path: Path) 
     assert webp_path.exists()
 
 
+async def test_convert_mp4_to_webp_uses_lossless_args(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Conversion invokes ffmpeg with lossless animated WebP settings."""
+    mp4_path = tmp_path / "test.mp4"
+    mp4_path.write_bytes(b"\x00" * 100)
+    webp_path = tmp_path / "cover.webp"
+    captured_args: list[tuple[object, ...]] = []
+
+    mock_proc = AsyncMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+    mock_proc.returncode = 0
+
+    async def fake_subprocess(*args: object, **kwargs: object) -> AsyncMock:
+        captured_args.append(args)
+        (tmp_path / "cover.webp.tmp").write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+        return mock_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_subprocess):
+        await convert_mp4_to_webp(hass, "/usr/bin/ffmpeg", mp4_path, webp_path)
+
+    assert len(captured_args) == 1
+    cmd = list(captured_args[0])
+    assert "-lossless" in cmd and cmd[cmd.index("-lossless") + 1] == "1"
+    assert "-compression_level" in cmd and cmd[cmd.index("-compression_level") + 1] == "6"
+    vf_indices = [i for i, arg in enumerate(cmd) if arg == "-vf"]
+    for index in vf_indices:
+        assert "fps=" not in cmd[index + 1]
+    for index in vf_indices:
+        assert "scale=" not in cmd[index + 1]
+    assert "-quality" not in cmd
+    assert "libwebp_anim" in cmd
+    assert "-loop" in cmd and cmd[cmd.index("-loop") + 1] == "0"
+    assert "-an" in cmd
+
+
 async def test_convert_mp4_to_webp_ffmpeg_failure(hass: HomeAssistant, tmp_path: Path) -> None:
     """Failed conversion returns False and cleans up tmp file."""
     mp4_path = tmp_path / "test.mp4"
