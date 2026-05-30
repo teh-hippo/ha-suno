@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.3.2 (2026-05-30)
+
+### Bug Fixes
+
+- **downloaded_library**: Refresh manifest title/created/size on retag via shared helper
+  ([`77a1e0c`](https://github.com/teh-hippo/ha-suno/commit/77a1e0c14524dc9c8d2be60a9f6803881c9e08ff))
+
+
 ## v6.3.1 (2026-05-30)
 
 ### Bug Fixes
