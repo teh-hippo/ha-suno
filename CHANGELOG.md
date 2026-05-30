@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.3.1 (2026-05-30)
+
+### Bug Fixes
+
+- **models**: Preserve lineage fields from API response
+  ([`38df19c`](https://github.com/teh-hippo/ha-suno/commit/38df19c0afd2e209df30dd47bc435c105cc0ab83))
+
+
 ## v6.3.0 (2026-05-30)
 
 ### Features
