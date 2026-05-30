@@ -1,6 +1,7 @@
 """Tests for model defensive loading and lineage metadata."""
 
 from custom_components.suno.models import (
+    SunoClip,
     _safe_clip,
     _safe_clips,
     _safe_playlist,
@@ -134,6 +135,26 @@ class TestSafeClip:
         clip.root_ancestor_id = "root-123"
         hash_after = clip_meta_hash(clip)
         assert hash_before != hash_after
+
+    def test_clip_meta_hash_changes_when_prompt_changes(self) -> None:
+        """clip_meta_hash changes when the lyrics-driving prompt changes."""
+        base_kwargs = dict(
+            id="c1",
+            title="T",
+            audio_url="",
+            image_url="",
+            image_large_url="",
+            is_liked=False,
+            status="complete",
+            created_at="",
+            tags="",
+            duration=0.0,
+            clip_type="",
+            has_vocal=False,
+        )
+        clip_a = SunoClip(**base_kwargs, prompt="prompt A")
+        clip_b = SunoClip(**base_kwargs, prompt="prompt B")
+        assert clip_meta_hash(clip_a) != clip_meta_hash(clip_b)
 
 
 class TestSafePlaylist:
