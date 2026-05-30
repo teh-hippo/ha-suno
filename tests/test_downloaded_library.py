@@ -2080,6 +2080,52 @@ async def test_async_reconcile_retags_when_gpt_description_prompt_changes(
     assert library.errors == 0
 
 
+async def test_async_reconcile_retags_when_handle_changes(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changed Suno handle should re-tag SUNO_HANDLE in place."""
+    from custom_components.suno.models import clip_meta_hash
+
+    old_clip = _clip("clip-handle-0000-0000-0000-000000000000", "Handle Song")
+    old_clip.handle = "@alice"
+    clip = _clip(old_clip.id, "Handle Song")
+    clip.handle = "@alice-renamed"
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    old_hash = clip_meta_hash(old_clip)
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel_path,
+                    "title": "Handle Song",
+                    "created": "2026-03-15",
+                    "sources": ["liked"],
+                    "size": 54,
+                    "meta_hash": old_hash,
+                    "quality": QUALITY_HIGH,
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    assert audio.rendered == []
+    assert len(audio.retag_calls) == 1
+    assert audio.retag_calls[0][1].suno_handle == "@alice-renamed"
+    new_hash = clip_meta_hash(clip)
+    assert new_hash != old_hash
+    assert library.state["clips"][clip.id]["meta_hash"] == new_hash
+    assert library.errors == 0
+
+
 async def test_retag_downloads_video_when_missing(hass: HomeAssistant, tmp_path: Path) -> None:
     """Retag path should also download video cover art if not yet on disk."""
     clip = _clip_with_display(

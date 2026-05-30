@@ -31,6 +31,28 @@ def test_clip_meta_hash_changes_when_gpt_description_prompt_changes() -> None:
     assert clip_meta_hash(clip_a) != clip_meta_hash(clip_b)
 
 
+def test_clip_meta_hash_changes_when_handle_changes() -> None:
+
+    base_kwargs = dict(
+        id="c1",
+        title="T",
+        audio_url="",
+        image_url="",
+        image_large_url="",
+        is_liked=False,
+        status="complete",
+        created_at="",
+        tags="",
+        duration=0.0,
+        clip_type="",
+        has_vocal=False,
+    )
+    clip_a = SunoClip(**base_kwargs, handle="@alice")
+    clip_b = SunoClip(**base_kwargs, handle="@alice-renamed")
+
+    assert clip_meta_hash(clip_a) != clip_meta_hash(clip_b)
+
+
 class TestSafeClip:
     """Tests for defensive clip loading."""
 
