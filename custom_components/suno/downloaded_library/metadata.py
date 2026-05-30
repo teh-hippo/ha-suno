@@ -23,6 +23,14 @@ def _album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | No
     return root_clip.title
 
 
+def _manifest_album_for_clip(clip: SunoClip, clip_index: dict[str, SunoClip]) -> str | None:
+    """Return the resolved album value worth storing in the manifest."""
+    resolved_album = _album_for_clip(clip, clip_index)
+    if resolved_album is None or resolved_album == clip.album_title:
+        return None
+    return resolved_album
+
+
 def _with_image(meta: TrackMetadata, image_data: bytes | None) -> TrackMetadata:
     """Return metadata with image data attached."""
     return TrackMetadata(
@@ -43,4 +51,4 @@ def _with_image(meta: TrackMetadata, image_data: bytes | None) -> TrackMetadata:
     )
 
 
-__all__ = ["_album_for_clip", "_with_image"]
+__all__ = ["_album_for_clip", "_manifest_album_for_clip", "_with_image"]
