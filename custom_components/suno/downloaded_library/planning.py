@@ -34,7 +34,13 @@ from ..const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from ..models import SunoClip, SunoData, clip_meta_hash
+from ..models import (
+    SunoClip,
+    SunoData,
+    clip_meta_hash,
+    image_url_hash,
+    selected_image_url,
+)
 from .contracts import DesiredDownloadPlan, DownloadItem
 from .source_modes import _get_source_mode, _source_modes_for
 
@@ -68,6 +74,34 @@ def _preserve_source(
             preserved.add(clip_id)
 
 
+def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
+    """Store the inherited album marker, or remove it when not needed."""
+    if album is None:
+        entry.pop("album", None)
+    else:
+        entry["album"] = album
+
+
+def _apply_clip_metadata(
+    entry: dict[str, Any],
+    clip: SunoClip,
+    file_size: int,
+    *,
+    album: str | None = None,
+) -> None:
+    """Refresh manifest fields that mirror mutable clip metadata and file bytes."""
+    entry["title"] = clip.title
+    entry["created"] = clip.created_at[:10] if clip.created_at else None
+    entry["size"] = file_size
+    entry["meta_hash"] = clip_meta_hash(clip)
+    embedded_art_hash = image_url_hash(selected_image_url(clip))
+    if embedded_art_hash:
+        entry["embedded_art_hash"] = embedded_art_hash
+    else:
+        entry.pop("embedded_art_hash", None)
+    _set_manifest_album(entry, album)
+
+
 def _clip_entry(
     item: DownloadItem,
     rel_path: str,
@@ -79,16 +113,16 @@ def _clip_entry(
     """Build a stored Downloaded Library record for one clip."""
     entry = {
         "path": rel_path,
-        "title": item.clip.title,
-        "created": item.clip.created_at[:10] if item.clip.created_at else None,
         "sources": item.sources,
         "source_modes": _source_modes_for(item.sources, options),
-        "size": file_size,
-        "meta_hash": clip_meta_hash(item.clip),
         "quality": item.quality,
     }
-    if album is not None:
-        entry["album"] = album
+    _apply_clip_metadata(
+        entry,
+        item.clip,
+        file_size,
+        album=album,
+    )
     return entry
 
 

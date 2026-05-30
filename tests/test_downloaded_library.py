@@ -48,6 +48,7 @@ from custom_components.suno.downloaded_library import (
     _write_file,
     _write_m3u8_playlists,
 )
+from custom_components.suno.downloaded_library.planning import _apply_clip_metadata
 from custom_components.suno.models import SunoClip, SunoData, TrackMetadata
 
 
@@ -87,11 +88,13 @@ class _FakeAudio:
         video_data: bytes | None = b"\x00\x00\x00\x1cftypisom",
         retag_result: bool = True,
         image_bytes: bytes | None = b"\xff\xd8\xff\xe0fakejpegheader",
+        retag_data: bytes | None = None,
     ) -> None:
         self.data = data
         self.video_data = video_data
         self.retag_result = retag_result
         self.image_bytes = image_bytes
+        self.retag_data = retag_data
         self.rendered: list[str] = []
         self.render_qualities: list[str] = []
         self.render_metas: list[TrackMetadata] = []
@@ -119,6 +122,8 @@ class _FakeAudio:
 
     async def retag(self, target: Path, meta: TrackMetadata) -> bool:
         self.retag_calls.append((target, meta))
+        if self.retag_result and self.retag_data is not None:
+            target.write_bytes(self.retag_data)
         return self.retag_result
 
     async def download_video(self, video_url: str, target: Path) -> None:
@@ -141,6 +146,56 @@ class _FakeCache:
 
     async def async_put(self, clip_id: str, fmt: str, data: bytes, meta_hash: str) -> None:
         self.puts.append((clip_id, fmt, data, meta_hash))
+
+
+def test_apply_clip_metadata_sets_album_and_embedded_art_hash() -> None:
+    from custom_components.suno.models import (
+        clip_meta_hash,
+        image_url_hash,
+        selected_image_url,
+    )
+
+    clip = _clip("clip-meta-0000-0000-0000-000000000000", "New Title")
+    clip.image_large_url = "https://images.example/cover.jpg"
+    entry: dict[str, object] = {
+        "path": "keep.flac",
+        "sources": ["liked"],
+        "source_modes": {"liked": DOWNLOAD_MODE_MIRROR},
+        "quality": QUALITY_HIGH,
+        "title": "Old Title",
+        "created": "2025-01-01",
+        "size": 1,
+        "meta_hash": "old",
+    }
+
+    _apply_clip_metadata(entry, clip, 123, album="Liked Songs")
+
+    assert entry["path"] == "keep.flac"
+    assert entry["sources"] == ["liked"]
+    assert entry["source_modes"] == {"liked": DOWNLOAD_MODE_MIRROR}
+    assert entry["quality"] == QUALITY_HIGH
+    assert entry["title"] == "New Title"
+    assert entry["created"] == "2026-03-15"
+    assert entry["size"] == 123
+    assert entry["meta_hash"] == clip_meta_hash(clip)
+    assert entry["embedded_art_hash"] == image_url_hash(selected_image_url(clip))
+    assert entry["album"] == "Liked Songs"
+
+
+def test_apply_clip_metadata_clears_album_and_embedded_art_hash() -> None:
+    clip = _clip("clip-meta-clear-0000-0000-0000-000000000000", "No Album")
+    entry: dict[str, object] = {
+        "album": "Old Album",
+        "embedded_art_hash": "old-art",
+    }
+
+    _apply_clip_metadata(entry, clip, 456)
+
+    assert entry["title"] == "No Album"
+    assert entry["created"] == "2026-03-15"
+    assert entry["size"] == 456
+    assert "album" not in entry
+    assert "embedded_art_hash" not in entry
 
 
 async def test_stale_liked_section_preserves_downloaded_file(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -1566,6 +1621,59 @@ async def test_migration_renames_file_instead_of_redownloading(hass: HomeAssista
     new_file = sync_dir / new_rel
     assert new_file.exists()
     assert library.state["clips"][clip_id]["path"] == new_rel
+
+
+async def test_renamed_clip_retag_refreshes_manifest_title_created_and_size(
+    hass: HomeAssistant,
+    tmp_path: Path,
+) -> None:
+    """Retag after a Suno rename refreshes denormalised manifest fields."""
+    clip_id = "titlefix-0000-0000-0000-000000000000"
+    sync_dir = tmp_path / "mirror"
+    retag_data = b"fLaC" + b"retagged-id3-and-cover-bytes"
+    audio = _FakeAudio(retag_data=retag_data)
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
+    await library.async_load()
+
+    original_clip = _clip_with_display(
+        clip_id,
+        "Original Title",
+        created="2026-03-15T10:00:00Z",
+        display_name="artist",
+    )
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[original_clip]))
+
+    entry = library.state["clips"][clip_id]
+    old_path = str(entry["path"])
+    original_size = entry["size"]
+    assert entry["title"] == "Original Title"
+    assert entry["created"] == "2026-03-15"
+    assert original_size != len(retag_data)
+    assert (sync_dir / old_path).exists()
+
+    renamed_clip = _clip_with_display(
+        clip_id,
+        "New Title",
+        created="2026-04-02T11:00:00Z",
+        display_name="artist",
+    )
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[renamed_clip]))
+
+    entry = library.state["clips"][clip_id]
+    new_path = _clip_path(renamed_clip, QUALITY_HIGH)
+    assert entry["path"] == new_path
+    assert entry["title"] == "New Title"
+    assert entry["created"] == "2026-04-02"
+    assert entry["size"] == len(retag_data)
+    manifest = json.loads((sync_dir / ".suno_download.json").read_text())
+    manifest_entry = manifest["clips"][clip_id]
+    assert manifest_entry["title"] == "New Title"
+    assert manifest_entry["created"] == "2026-04-02"
+    assert manifest_entry["size"] == len(retag_data)
+    assert not (sync_dir / old_path).exists()
+    assert (sync_dir / new_path).exists()
+    assert audio.rendered == [clip_id]
+    assert audio.retag_calls
 
 
 async def test_migration_moves_mp4_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
