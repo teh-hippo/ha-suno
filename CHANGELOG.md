@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.3.3 (2026-05-30)
+
+### Bug Fixes
+
+- **cover_art**: Per-clip hash map in .cover_hash to stop variant ping-pong
+  ([`676c1ac`](https://github.com/teh-hippo/ha-suno/commit/676c1ac8333a5056d998090044f8bbb5c25a7037))
+
+
 ## v6.3.2 (2026-05-30)
 
 ### Bug Fixes
