@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v6.2.0 (2026-05-30)
+
+### Bug Fixes
+
+- **models**: Include clip.prompt in clip_meta_hash
+  ([`250555b`](https://github.com/teh-hippo/ha-suno/commit/250555b994e72cbac7b70cbd1724b4e72704eef7))
+
+- **runtime**: Clean up old download path when CONF_DOWNLOAD_PATH changes
+  ([`92921df`](https://github.com/teh-hippo/ha-suno/commit/92921dfb0c252a655035a843d282b5c0ab0587c9))
+
+### Features
+
+- **video_art**: Make WebP cover-art conversion lossless
+  ([`e89f25d`](https://github.com/teh-hippo/ha-suno/commit/e89f25dbb5ca9f03147ada50532a855711a53926))
+
+### Testing
+
+- **downloaded_library**: Pin playlist-removal reconciliation behaviour
+  ([`ff23376`](https://github.com/teh-hippo/ha-suno/commit/ff233762c2bc9a3dfd7b562fe17bcbe3c1124652))
+
+- **downloaded_library**: Pin playlist-rename reconciliation behaviour
+  ([`2759851`](https://github.com/teh-hippo/ha-suno/commit/275985138b126dd588a527a9fa305565e353a6bc))
+
+
 ## v6.1.1 (2026-05-29)
 
 ### Bug Fixes
