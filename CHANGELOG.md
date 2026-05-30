@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.2.1 (2026-05-30)
+
+### Bug Fixes
+
+- **downloaded_library**: Clean up generated .m3u8 when CREATE_PLAYLISTS disabled
+  ([`f53ace4`](https://github.com/teh-hippo/ha-suno/commit/f53ace49a47a72751e516f4703a5add895809d57))
+
+
 ## v6.2.0 (2026-05-30)
 
 ### Bug Fixes
