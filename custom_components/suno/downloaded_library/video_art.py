@@ -1,8 +1,10 @@
 """Animated WebP cover art conversion for the Downloaded Library engine.
 
 Converts MP4 animated cover art videos to animated WebP format using
-ffmpeg's libwebp_anim encoder. Animated WebP is compatible with Navidrome
-and other music servers as album cover art.
+ffmpeg's libwebp_anim encoder in lossless mode. The decoded source frames are
+preserved at their source frame rate and resolution, with maximum compression
+effort. Animated WebP is compatible with Navidrome and other music servers as
+album cover art.
 """
 
 from __future__ import annotations
@@ -17,10 +19,6 @@ from homeassistant.core import HomeAssistant
 from ..const import DOWNLOAD_FFMPEG_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
-
-_WEBP_QUALITY = 80
-_WEBP_FPS = 15
-_WEBP_MAX_WIDTH = 500
 
 
 async def probe_libwebp_anim(hass: HomeAssistant, ffmpeg_binary: str) -> bool:
@@ -73,13 +71,13 @@ async def convert_mp4_to_webp(
         str(mp4_path),
         "-c:v",
         "libwebp_anim",
+        "-lossless",
+        "1",
+        "-compression_level",
+        "6",
         "-loop",
         "0",
         "-an",
-        "-quality",
-        str(_WEBP_QUALITY),
-        "-vf",
-        f"fps={_WEBP_FPS},scale='min({_WEBP_MAX_WIDTH},iw)':-2",
         "-f",
         "webp",
         str(tmp_path),
