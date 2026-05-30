@@ -68,9 +68,16 @@ def _preserve_source(
             preserved.add(clip_id)
 
 
-def _clip_entry(item: DownloadItem, rel_path: str, file_size: int, options: Mapping[str, Any]) -> dict[str, Any]:
+def _clip_entry(
+    item: DownloadItem,
+    rel_path: str,
+    file_size: int,
+    options: Mapping[str, Any],
+    *,
+    album: str | None = None,
+) -> dict[str, Any]:
     """Build a stored Downloaded Library record for one clip."""
-    return {
+    entry = {
         "path": rel_path,
         "title": item.clip.title,
         "created": item.clip.created_at[:10] if item.clip.created_at else None,
@@ -80,6 +87,9 @@ def _clip_entry(item: DownloadItem, rel_path: str, file_size: int, options: Mapp
         "meta_hash": clip_meta_hash(item.clip),
         "quality": item.quality,
     }
+    if album is not None:
+        entry["album"] = album
+    return entry
 
 
 def _filter_my_songs(

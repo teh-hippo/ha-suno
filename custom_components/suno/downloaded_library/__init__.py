@@ -44,7 +44,7 @@ from .filesystem import (
     _write_file,
 )
 from .m3u8 import _write_m3u8_playlists
-from .metadata import _album_for_clip, _with_image
+from .metadata import _album_for_clip, _manifest_album_for_clip, _with_image
 from .paths import _clip_path, _safe_name, _video_clip_path
 from .planning import _add_clip, _clip_entry, build_desired
 from .reconciliation import _reconcile_disk as _reconcile_disk_fn
@@ -83,6 +83,14 @@ def _build_download_summary(
 
 def _is_empty_suno_library(data: SunoData) -> bool:
     return not data.clips and not data.liked_clips and not data.playlists and not data.playlist_clips
+
+
+def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
+    """Store the inherited album marker, or remove it when not needed."""
+    if album is None:
+        entry.pop("album", None)
+    else:
+        entry["album"] = album
 
 
 class DownloadedLibrary:
@@ -447,6 +455,7 @@ class DownloadedLibrary:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
                     existing["path"] = ""
                     existing.pop("meta_hash", None)
+                    _set_manifest_album(existing, None)
         return migrated
 
     def _plan_actions(
@@ -489,9 +498,14 @@ class DownloadedLibrary:
                 new_hash = clip_meta_hash(item.clip)
                 expected_art_hash = image_url_hash(selected_image_url(item.clip))
                 stored_art_hash = existing.get("embedded_art_hash", "")
+                resolved_album = _manifest_album_for_clip(item.clip, self._clip_index)
                 meta_changed = old_hash and new_hash != old_hash
                 art_stale = expected_art_hash and stored_art_hash != expected_art_hash
-                if meta_changed or art_stale:
+                if resolved_album is None:
+                    album_changed = "album" in existing
+                else:
+                    album_changed = resolved_album != existing.get("album")
+                if meta_changed or art_stale or album_changed:
                     to_retag.append(item)
 
         to_delete: list[str] = []
@@ -532,12 +546,14 @@ class DownloadedLibrary:
             if result is RetagResult.OK:
                 existing["meta_hash"] = clip_meta_hash(item.clip)
                 existing["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
+                _set_manifest_album(existing, _manifest_album_for_clip(item.clip, self._clip_index))
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
                 _LOGGER.info("Re-tag target missing, re-downloading: %s", existing["path"])
                 existing["path"] = ""
                 existing.pop("meta_hash", None)
+                _set_manifest_album(existing, None)
                 to_download.append(item)
                 retag_missing += 1
             else:
@@ -570,12 +586,24 @@ class DownloadedLibrary:
                 if stat.st_size == 0:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
-                    clips_state[item.clip.id] = _clip_entry(item, rel_path, stat.st_size, options)
+                    clips_state[item.clip.id] = _clip_entry(
+                        item,
+                        rel_path,
+                        stat.st_size,
+                        options,
+                        album=_manifest_album_for_clip(item.clip, self._clip_index),
+                    )
                     await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                     reconciled += 1
                     continue
             if (file_size := await self._download_clip(item, base, rel_path, force=force)) is not None:
-                clips_state[item.clip.id] = _clip_entry(item, rel_path, file_size, options)
+                clips_state[item.clip.id] = _clip_entry(
+                    item,
+                    rel_path,
+                    file_size,
+                    options,
+                    album=_manifest_album_for_clip(item.clip, self._clip_index),
+                )
                 clips_state[item.clip.id]["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
                 await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                 downloaded += 1

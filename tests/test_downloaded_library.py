@@ -3660,6 +3660,139 @@ async def test_album_set_from_root_ancestor(hass: HomeAssistant, tmp_path: Path)
         meta for clip_id, meta in zip(audio.rendered, audio.render_metas, strict=True) if clip_id == "child-song"
     )
     assert child_meta.album == "Original Song"
+    assert library.state["clips"]["child-song"]["album"] == "Original Song"
+
+
+async def test_async_reconcile_retags_remix_when_root_title_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A renamed root ancestor refreshes the inherited album tag on remixes."""
+    from custom_components.suno.models import clip_meta_hash
+
+    root_clip = SunoClip(
+        id="root1",
+        title="NEW ROOT TITLE",
+        audio_url="https://cdn1.suno.ai/root1.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-15T10:00:00Z",
+        tags="pop",
+        duration=120.0,
+        clip_type="gen",
+        has_vocal=True,
+        root_ancestor_id="root1",
+    )
+    remix_clip = SunoClip(
+        id="remix1",
+        title="Remix Song",
+        audio_url="https://cdn1.suno.ai/remix1.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-16T10:00:00Z",
+        tags="pop",
+        duration=130.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="root1",
+        root_ancestor_id="root1",
+        is_remix=True,
+        album_title="",
+    )
+
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(remix_clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                remix_clip.id: {
+                    "path": rel_path,
+                    "title": remix_clip.title,
+                    "created": "2026-03-16",
+                    "sources": ["liked"],
+                    "size": target.stat().st_size,
+                    "meta_hash": clip_meta_hash(remix_clip),
+                    "quality": QUALITY_HIGH,
+                    "album": "OLD ROOT TITLE",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[remix_clip, root_clip]))
+
+    assert len(audio.retag_calls) == 1
+    retag_target, meta = audio.retag_calls[0]
+    assert retag_target == target
+    assert meta.album == "NEW ROOT TITLE"
+    assert library.state["clips"][remix_clip.id]["album"] == "NEW ROOT TITLE"
+
+
+async def test_async_reconcile_retags_remix_when_root_lineage_unavailable(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A missing root ancestor refreshes the inherited album marker to the fallback."""
+    from custom_components.suno.models import clip_meta_hash
+
+    remix_clip = SunoClip(
+        id="remix-unavailable",
+        title="Unavailable Root Remix",
+        audio_url="https://cdn1.suno.ai/remix-unavailable.mp3",
+        image_url=None,
+        image_large_url=None,
+        is_liked=True,
+        status="complete",
+        created_at="2026-03-16T10:00:00Z",
+        tags="pop",
+        duration=130.0,
+        clip_type="gen",
+        has_vocal=True,
+        edited_clip_id="ancestor123456",
+        root_ancestor_id="ancestor123456",
+        lineage_status="unavailable",
+        is_remix=True,
+        album_title="",
+    )
+
+    sync_dir = tmp_path / "mirror"
+    rel_path = _clip_path(remix_clip, QUALITY_HIGH)
+    target = sync_dir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                remix_clip.id: {
+                    "path": rel_path,
+                    "title": remix_clip.title,
+                    "created": "2026-03-16",
+                    "sources": ["liked"],
+                    "size": target.stat().st_size,
+                    "meta_hash": clip_meta_hash(remix_clip),
+                    "quality": QUALITY_HIGH,
+                    "album": "OLD ROOT TITLE",
+                }
+            },
+            "last_download": None,
+        }
+    )
+    audio = _FakeAudio()
+    library = DownloadedLibrary(hass, storage, audio=audio)
+    await library.async_load()
+
+    await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[remix_clip]))
+
+    fallback_album = "Remixes of ancestor"
+    assert len(audio.retag_calls) == 1
+    assert audio.retag_calls[0][1].album == fallback_album
+    assert library.state["clips"][remix_clip.id]["album"] == fallback_album
 
 
 async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> None:
