@@ -422,6 +422,63 @@ async def test_disabled_download_cleanup_preserves_unknown_legacy_state(hass: Ho
     assert clip.id in library.state["clips"]
 
 
+async def test_path_change_cleans_old_path_and_preserves_archive(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changing path purges all manifest-tracked files, including Archive clips, from the abandoned path."""
+    path_old = tmp_path / "old"
+    path_new = tmp_path / "new"
+    path_new.mkdir()
+    new_sentinel = path_new / "keep.txt"
+    new_sentinel.write_text("new path must not be touched")
+    mirror_clip = _clip("clip-mirror-0000-0000-0000-000000000000", "Mirror")
+    archive_clip = _clip("clip-archive-0000-0000-0000-000000000000", "Archive")
+    shared_clip = _clip("clip-shared-0000-0000-0000-000000000000", "Shared")
+    clip_modes = {
+        mirror_clip.id: (mirror_clip, ["liked"], {"liked": DOWNLOAD_MODE_MIRROR}),
+        archive_clip.id: (archive_clip, ["liked"], {"liked": DOWNLOAD_MODE_ARCHIVE}),
+        shared_clip.id: (
+            shared_clip,
+            ["liked", "playlist:p1"],
+            {"liked": DOWNLOAD_MODE_MIRROR, "playlist:p1": DOWNLOAD_MODE_MIRROR},
+        ),
+    }
+    clips_state: dict[str, dict[str, object]] = {}
+    targets: list[Path] = []
+    for clip_id, (clip, sources, source_modes) in clip_modes.items():
+        rel_path = _clip_path(clip, QUALITY_HIGH)
+        target = path_old / rel_path
+        target.parent.mkdir(parents=True)
+        target.write_bytes(f"fLaC{clip_id}".encode())
+        (target.parent / "cover.jpg").write_bytes(b"cover")
+        (target.parent / ".cover_hash").write_text("hash")
+        clips_state[clip_id] = {
+            "path": rel_path,
+            "sources": sources,
+            "source_modes": source_modes,
+            "size": target.stat().st_size,
+            "quality": QUALITY_HIGH,
+        }
+        targets.append(target)
+    (path_old / "Liked Songs.m3u8").write_text("#EXTM3U\n")
+    (path_old / "My Playlist.m3u8").write_text("#EXTM3U\n")
+    (path_old / ".suno_download.json").write_text("{}")
+    storage = InMemoryDownloadedLibraryStorage({"clips": clips_state, "last_download": None})
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    await library.async_purge_old_path(str(path_old))
+
+    assert all(not target.exists() for target in targets)
+    assert all(not (target.parent / "cover.jpg").exists() for target in targets)
+    assert all(not (target.parent / ".cover_hash").exists() for target in targets)
+    assert all(not target.parent.exists() for target in targets)
+    assert not (path_old / "Liked Songs.m3u8").exists()
+    assert not (path_old / "My Playlist.m3u8").exists()
+    assert not (path_old / ".suno_download.json").exists()
+    # Archive preservation only applies while the root path remains managed.
+    assert library.state["clips"] == {}
+    assert new_sentinel.exists()
+
+
 # ── async_load / reconcile guards ───────────────────────────────
 
 
