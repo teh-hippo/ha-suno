@@ -46,7 +46,13 @@ from .filesystem import (
 from .m3u8 import _write_m3u8_playlists
 from .metadata import _album_for_clip, _manifest_album_for_clip, _with_image
 from .paths import _clip_path, _safe_name, _video_clip_path
-from .planning import _add_clip, _clip_entry, build_desired
+from .planning import (
+    _add_clip,
+    _apply_clip_metadata,
+    _clip_entry,
+    _set_manifest_album,
+    build_desired,
+)
 from .reconciliation import _reconcile_disk as _reconcile_disk_fn
 from .reconciliation import _reconcile_manifest as _reconcile_manifest_fn
 from .source_modes import (
@@ -83,14 +89,6 @@ def _build_download_summary(
 
 def _is_empty_suno_library(data: SunoData) -> bool:
     return not data.clips and not data.liked_clips and not data.playlists and not data.playlist_clips
-
-
-def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
-    """Store the inherited album marker, or remove it when not needed."""
-    if album is None:
-        entry.pop("album", None)
-    else:
-        entry["album"] = album
 
 
 class DownloadedLibrary:
@@ -539,8 +537,8 @@ class DownloadedLibrary:
     ) -> int:
         """Re-tag existing files; queue missing/failed targets for re-download.
 
-        Mutates ``clips_state`` (refreshing ``meta_hash`` on success or clearing
-        ``path``/``meta_hash`` when the target is missing) and appends to
+        Mutates ``clips_state`` (refreshing denormalised metadata on success or
+        clearing ``path``/``meta_hash`` when the target is missing) and appends to
         ``to_download`` when a target needs to be re-fetched. Increments
         ``self._errors`` for retag failures other than missing targets.
         Returns the number of successfully retagged files.
@@ -554,9 +552,29 @@ class DownloadedLibrary:
             target = base / existing["path"]
             result = await self._retag_clip(item, target)
             if result is RetagResult.OK:
-                existing["meta_hash"] = clip_meta_hash(item.clip)
-                existing["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
-                _set_manifest_album(existing, _manifest_album_for_clip(item.clip, self._clip_index))
+                try:
+                    stat = await self.hass.async_add_executor_job(target.stat)
+                except FileNotFoundError:
+                    _LOGGER.info(
+                        "Re-tag target missing after re-tag, re-downloading: %s",
+                        existing["path"],
+                    )
+                    existing["path"] = ""
+                    existing.pop("meta_hash", None)
+                    _set_manifest_album(existing, None)
+                    to_download.append(item)
+                    retag_missing += 1
+                    continue
+                except OSError:
+                    _LOGGER.exception("Failed to stat re-tagged file %s", target)
+                    self._errors += 1
+                    continue
+                _apply_clip_metadata(
+                    existing,
+                    item.clip,
+                    stat.st_size,
+                    album=_manifest_album_for_clip(item.clip, self._clip_index),
+                )
                 retagged += 1
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
@@ -614,7 +632,6 @@ class DownloadedLibrary:
                     options,
                     album=_manifest_album_for_clip(item.clip, self._clip_index),
                 )
-                clips_state[item.clip.id]["embedded_art_hash"] = image_url_hash(selected_image_url(item.clip))
                 await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                 downloaded += 1
             else:
