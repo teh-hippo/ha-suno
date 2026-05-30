@@ -251,12 +251,14 @@ def clip_meta_hash(clip: SunoClip) -> str:
     Path-affecting fields (display_name) are deliberately excluded; path
     changes are detected by comparing ``_clip_path()`` against the stored
     path. This hash only tracks fields that affect file *content* (tags,
-    cover art, lineage, LYRICS, comment, and SUNO_STYLE_SUMMARY metadata).
+    cover art, lineage, LYRICS, comment, SUNO_STYLE_SUMMARY, and SUNO_HANDLE
+    metadata).
     """
     return hashlib.md5(  # noqa: S324
         (
             f"{clip.title}|{clip.tags}|{selected_image_url(clip)}|{clip.video_cover_url}|"
-            f"{clip.root_ancestor_id}|{clip.lineage_status}|{clip.album_title}|{clip.prompt}|{clip.gpt_description_prompt}"
+            f"{clip.root_ancestor_id}|{clip.lineage_status}|{clip.album_title}|{clip.prompt}|"
+            f"{clip.gpt_description_prompt}|{clip.handle}"
         ).encode()
     ).hexdigest()[:12]
 
