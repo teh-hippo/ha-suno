@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Any
 
 import aiohttp
@@ -50,6 +51,11 @@ from .const import (
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
     CONF_VIDEO_ART_MODE,
+    CONF_VIDEO_FFMPEG_EXTRA_ARGS,
+    CONF_VIDEO_LOSSLESS,
+    CONF_VIDEO_MAX_FPS,
+    CONF_VIDEO_MAX_WIDTH,
+    CONF_VIDEO_QUALITY,
     DEFAULT_ALL_PLAYLISTS,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_CREATE_PLAYLISTS,
@@ -61,6 +67,11 @@ from .const import (
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
+    DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS,
+    DEFAULT_VIDEO_LOSSLESS,
+    DEFAULT_VIDEO_MAX_FPS,
+    DEFAULT_VIDEO_MAX_WIDTH,
+    DEFAULT_VIDEO_QUALITY,
     DOMAIN,
     DOWNLOAD_MODE_ARCHIVE,
     DOWNLOAD_MODE_CACHE,
@@ -101,6 +112,27 @@ def _mode_selector() -> SelectSelector:
     return SelectSelector(SelectSelectorConfig(options=MODE_OPTIONS, mode=SelectSelectorMode.DROPDOWN))
 
 
+def _clean_library_input(user_input: dict[str, Any], errors: dict[str, str]) -> dict[str, Any]:
+    """Strip and validate advanced library options."""
+    cleaned_input = {**user_input}
+    if CONF_VIDEO_FFMPEG_EXTRA_ARGS not in cleaned_input:
+        return cleaned_input
+
+    value = cleaned_input[CONF_VIDEO_FFMPEG_EXTRA_ARGS]
+    if not isinstance(value, str):
+        errors[CONF_VIDEO_FFMPEG_EXTRA_ARGS] = "invalid_ffmpeg_args"
+        return cleaned_input
+
+    extra_args = value.strip()
+    if extra_args:
+        try:
+            shlex.split(extra_args)
+        except ValueError:
+            errors[CONF_VIDEO_FFMPEG_EXTRA_ARGS] = "invalid_ffmpeg_args"
+    cleaned_input[CONF_VIDEO_FFMPEG_EXTRA_ARGS] = extra_args
+    return cleaned_input
+
+
 def _library_schema(opts: dict[str, Any]) -> vol.Schema:
     """Build schema for the Library options page."""
     schema: dict[Any, Any] = {
@@ -134,6 +166,43 @@ def _library_schema(opts: dict[str, Any]) -> vol.Schema:
                 default=opts.get(CONF_VIDEO_ART_MODE, VIDEO_ART_OFF),
             )
         ] = SelectSelector(SelectSelectorConfig(options=VIDEO_ART_OPTIONS, mode=SelectSelectorMode.DROPDOWN))
+        schema[
+            vol.Optional(
+                CONF_VIDEO_QUALITY,
+                default=opts.get(CONF_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY),
+            )
+        ] = NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=100,
+                step=1,
+                mode=NumberSelectorMode.SLIDER,
+            )
+        )
+        schema[
+            vol.Optional(
+                CONF_VIDEO_LOSSLESS,
+                default=opts.get(CONF_VIDEO_LOSSLESS, DEFAULT_VIDEO_LOSSLESS),
+            )
+        ] = BooleanSelector()
+        schema[
+            vol.Optional(
+                CONF_VIDEO_MAX_FPS,
+                default=opts.get(CONF_VIDEO_MAX_FPS, DEFAULT_VIDEO_MAX_FPS),
+            )
+        ] = NumberSelector(NumberSelectorConfig(min=0, max=60, step=1))
+        schema[
+            vol.Optional(
+                CONF_VIDEO_MAX_WIDTH,
+                default=opts.get(CONF_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_MAX_WIDTH),
+            )
+        ] = NumberSelector(NumberSelectorConfig(min=0, max=4000, step=1))
+        schema[
+            vol.Optional(
+                CONF_VIDEO_FFMPEG_EXTRA_ARGS,
+                default=opts.get(CONF_VIDEO_FFMPEG_EXTRA_ARGS, DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS),
+            )
+        ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
     schema[
         vol.Required(
             CONF_CACHE_MAX_SIZE,
@@ -186,6 +255,12 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_SHOW_MY_SONGS: True,
                         CONF_DOWNLOAD_PATH: "",
                         CONF_CREATE_PLAYLISTS: True,
+                        CONF_VIDEO_ART_MODE: VIDEO_ART_OFF,
+                        CONF_VIDEO_QUALITY: DEFAULT_VIDEO_QUALITY,
+                        CONF_VIDEO_LOSSLESS: DEFAULT_VIDEO_LOSSLESS,
+                        CONF_VIDEO_MAX_FPS: DEFAULT_VIDEO_MAX_FPS,
+                        CONF_VIDEO_MAX_WIDTH: DEFAULT_VIDEO_MAX_WIDTH,
+                        CONF_VIDEO_FFMPEG_EXTRA_ARGS: DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS,
                         CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
                         CONF_QUALITY_LIKED: QUALITY_HIGH,
                         CONF_QUALITY_PLAYLISTS: QUALITY_HIGH,
@@ -266,11 +341,15 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         if not entry:
             return self.async_abort(reason="unknown")
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_update_reload_and_abort(entry, options={**entry.options, **user_input})
+            cleaned_input = _clean_library_input(user_input, errors)
+            if not errors:
+                return self.async_update_reload_and_abort(entry, options={**entry.options, **cleaned_input})
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=_library_schema(dict(entry.options)),
+            errors=errors,
         )
 
     @staticmethod
@@ -304,13 +383,16 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         """Step 1: Library — content toggles, download path, cache."""
         errors: dict[str, str] = {}
         if user_input is not None:
+            cleaned_input = user_input
             path = user_input.get(CONF_DOWNLOAD_PATH, "")
             if path and not await self._validate_download_path(path):
                 errors[CONF_DOWNLOAD_PATH] = "invalid_download_path"
             elif path and self._check_download_path_conflict(path):
                 errors[CONF_DOWNLOAD_PATH] = "download_path_conflict"
             if not errors:
-                self._options = {**self.config_entry.options, **user_input}
+                cleaned_input = _clean_library_input(user_input, errors)
+            if not errors:
+                self._options = {**self.config_entry.options, **cleaned_input}
                 return await self._next_content_step()
         return self.async_show_form(
             step_id="init",

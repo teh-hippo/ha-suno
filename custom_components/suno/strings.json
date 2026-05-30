@@ -25,7 +25,12 @@
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "video_art_mode": "Animated cover art",
-          "cache_max_size_mb": "Maximum cache size"
+          "cache_max_size_mb": "Maximum cache size",
+          "video_quality": "Video WebP quality",
+          "video_lossless": "Use lossless video WebP",
+          "video_max_fps": "Maximum video WebP FPS",
+          "video_max_width": "Maximum video WebP width",
+          "video_ffmpeg_extra_args": "Advanced ffmpeg override arguments"
         },
         "data_description": {
           "show_playlists": "Include your Suno playlists in the media browser and sync.",
@@ -34,14 +39,20 @@
           "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "video_art_mode": "How to handle animated cover art videos. Off: skip. Download: save MP4. Convert: produce animated WebP only. Both: keep MP4 and produce WebP.",
-          "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
+          "cache_max_size_mb": "Maximum disk space for cached audio (MB).",
+          "video_quality": "Lossy WebP quality from 0 to 100. Ignored when lossless video WebP is enabled.",
+          "video_lossless": "Encode animated WebP artwork losslessly. This can create very large files.",
+          "video_max_fps": "Cap animated WebP frame rate. Use 0 to preserve the source frame rate.",
+          "video_max_width": "Cap animated WebP width in pixels. Use 0 to preserve the source width.",
+          "video_ffmpeg_extra_args": "Advanced trusted-user escape hatch. Tokens are parsed with shlex and replace generated codec/filter options, so quality, lossless, FPS, and width settings are ignored while this is set. The integration keeps the primary input and final output paths. ffmpeg flags can still read or write other paths."
         }
       }
     },
     "error": {
       "invalid_cookie": "Could not authenticate.  Check your cookie is correct and not expired.",
       "cannot_connect": "Could not connect to Suno.  Check your network connection.",
-      "unknown": "An unexpected error occurred."
+      "unknown": "An unexpected error occurred.",
+      "invalid_ffmpeg_args": "Advanced ffmpeg arguments could not be parsed. Check quoting."
     },
     "abort": {
       "already_configured": "This Suno account is already configured.",
@@ -61,7 +72,12 @@
           "download_path": "Sync directory",
           "create_playlists": "Create playlist files",
           "video_art_mode": "Animated cover art",
-          "cache_max_size_mb": "Maximum cache size"
+          "cache_max_size_mb": "Maximum cache size",
+          "video_quality": "Video WebP quality",
+          "video_lossless": "Use lossless video WebP",
+          "video_max_fps": "Maximum video WebP FPS",
+          "video_max_width": "Maximum video WebP width",
+          "video_ffmpeg_extra_args": "Advanced ffmpeg override arguments"
         },
         "data_description": {
           "show_playlists": "Include your Suno playlists in the media browser and sync.",
@@ -70,7 +86,12 @@
           "download_path": "Directory for downloaded library files.",
           "create_playlists": "Save playlist files alongside your music for other apps.",
           "video_art_mode": "How to handle animated cover art videos. Off: skip. Download: save MP4. Convert: produce animated WebP only. Both: keep MP4 and produce WebP.",
-          "cache_max_size_mb": "Maximum disk space for cached audio (MB)."
+          "cache_max_size_mb": "Maximum disk space for cached audio (MB).",
+          "video_quality": "Lossy WebP quality from 0 to 100. Ignored when lossless video WebP is enabled.",
+          "video_lossless": "Encode animated WebP artwork losslessly. This can create very large files.",
+          "video_max_fps": "Cap animated WebP frame rate. Use 0 to preserve the source frame rate.",
+          "video_max_width": "Cap animated WebP width in pixels. Use 0 to preserve the source width.",
+          "video_ffmpeg_extra_args": "Advanced trusted-user escape hatch. Tokens are parsed with shlex and replace generated codec/filter options, so quality, lossless, FPS, and width settings are ignored while this is set. The integration keeps the primary input and final output paths. ffmpeg flags can still read or write other paths."
         }
       },
       "playlists": {
@@ -123,7 +144,8 @@
     },
     "error": {
       "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission.",
-      "download_path_conflict": "This sync directory is already in use by another Suno account."
+      "download_path_conflict": "This sync directory is already in use by another Suno account.",
+      "invalid_ffmpeg_args": "Advanced ffmpeg arguments could not be parsed. Check quoting."
     }
   },
   "entity": {

@@ -56,7 +56,7 @@ from .source_modes import (
     _source_preserves_files,
 )
 from .storage import HomeAssistantDownloadedLibraryStorage, InMemoryDownloadedLibraryStorage
-from .video_art import convert_mp4_to_webp
+from .video_art import VideoArtSettings, convert_mp4_to_webp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,6 +106,7 @@ class DownloadedLibrary:
         status_callback: Any | None = None,
         download_path: str = "",
         video_art_mode: str = VIDEO_ART_OFF,
+        video_art_settings: VideoArtSettings | None = None,
     ) -> None:
         self.hass = hass
         self._storage = storage
@@ -115,6 +116,7 @@ class DownloadedLibrary:
         self._state: dict[str, Any] = {"clips": {}, "last_download": None}
         self._download_path = download_path
         self._video_art_mode = video_art_mode
+        self._video_art_settings = video_art_settings or VideoArtSettings()
         self._ffmpeg_binary: str = ""
         self._running = False
         self._errors = self._pending = 0
@@ -149,6 +151,14 @@ class DownloadedLibrary:
     @video_art_mode.setter
     def video_art_mode(self, value: str) -> None:
         self._video_art_mode = value
+
+    @property
+    def video_art_settings(self) -> VideoArtSettings:
+        return self._video_art_settings
+
+    @video_art_settings.setter
+    def video_art_settings(self, value: VideoArtSettings) -> None:
+        self._video_art_settings = value
 
     @property
     def download_videos(self) -> bool:
@@ -647,6 +657,8 @@ class DownloadedLibrary:
         if mode == VIDEO_ART_OFF or not self._audio:
             return 0
         videos_processed = 0
+        current_settings = self._video_art_settings.as_storage()
+
         for item in desired:
             entry = clips_state.get(item.clip.id)
             if not entry or not entry.get("path"):
@@ -674,8 +686,18 @@ class DownloadedLibrary:
             if mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH) and self._ffmpeg_binary:
                 webp_target = mp4_target.parent / "cover.webp"
                 webp_exists = await self.hass.async_add_executor_job(webp_target.exists)
-                if needs_download or not webp_exists:
-                    await convert_mp4_to_webp(self.hass, self._ffmpeg_binary, mp4_target, webp_target)
+                stored_settings = entry.get("video_art_settings")
+                needs_conversion = needs_download or not webp_exists or stored_settings != current_settings
+                if needs_conversion:
+                    converted = await convert_mp4_to_webp(
+                        self.hass,
+                        self._ffmpeg_binary,
+                        mp4_target,
+                        webp_target,
+                        self._video_art_settings,
+                    )
+                    if converted:
+                        entry["video_art_settings"] = current_settings
 
             # In convert mode, remove the MP4 after successful WebP generation
             if mode == VIDEO_ART_CONVERT and self._ffmpeg_binary:
