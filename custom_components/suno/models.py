@@ -94,6 +94,9 @@ class SunoClip:
             edited_clip_id=metadata.get("edited_clip_id", ""),
             is_remix=bool(metadata.get("is_remix", False)),
             history=metadata.get("history"),
+            root_ancestor_id=raw.get("root_ancestor_id", ""),
+            lineage_status=raw.get("lineage_status", ""),
+            album_title=raw.get("album_title", ""),
         )
 
     def to_track_metadata(
