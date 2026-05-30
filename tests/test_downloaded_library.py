@@ -2931,6 +2931,180 @@ async def test_all_three_modes_coexist(hass: HomeAssistant, tmp_path: Path) -> N
     assert "old-liked" in clips  # archive: kept
 
 
+async def test_async_reconcile_removes_clips_when_playlist_disappears(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A playlist removed from suno_library deletes its mirror-mode clips and m3u8.
+
+    Clips also tracked under a surviving playlist or ``liked`` are preserved with
+    their source lists trimmed to drop the gone playlist tag. Sidecars
+    (cover.jpg, .cover_hash, .mp4) for the deleted clip are cleaned, the empty
+    album directory is removed, and the ``.m3u8`` file for the gone playlist is
+    rewritten away while the surviving playlist's ``.m3u8`` stays.
+    """
+    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
+    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
+
+    sync_dir = tmp_path / "downloads"
+    sync_dir.mkdir()
+
+    only_clip = _clip("clip-only-rmv-0000-0000-0000-000000000000", title="OnlyInRemoved")
+    shared_clip = _clip("clip-shared-0000-0000-0000-000000000000", title="SharedAcross")
+    liked_clip = _clip("clip-also-liked-0000-0000-0000-00000000", title="AlsoLiked")
+
+    only_rel = _clip_path(only_clip, QUALITY_HIGH)
+    shared_rel = _clip_path(shared_clip, QUALITY_HIGH)
+    liked_rel = _clip_path(liked_clip, QUALITY_HIGH)
+
+    for rel in (only_rel, shared_rel, liked_rel):
+        target = sync_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    only_target = sync_dir / only_rel
+    (only_target.parent / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0fake")
+    (only_target.parent / ".cover_hash").write_text("hashvalue")
+    only_target.with_suffix(".mp4").write_bytes(b"\x00\x00\x00\x1cftypisom")
+
+    (sync_dir / "Removed Playlist.m3u8").write_text("#EXTM3U\nstale\n", encoding="utf-8")
+    (sync_dir / "Kept Playlist.m3u8").write_text("#EXTM3U\nstale\n", encoding="utf-8")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                only_clip.id: {
+                    "path": only_rel,
+                    "sources": ["playlist:pl-removed"],
+                    "source_modes": {"playlist:pl-removed": DOWNLOAD_MODE_MIRROR},
+                    "size": 54,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(only_clip),
+                },
+                shared_clip.id: {
+                    "path": shared_rel,
+                    "sources": ["playlist:pl-removed", "playlist:pl-kept"],
+                    "source_modes": {
+                        "playlist:pl-removed": DOWNLOAD_MODE_MIRROR,
+                        "playlist:pl-kept": DOWNLOAD_MODE_MIRROR,
+                    },
+                    "size": 54,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(shared_clip),
+                },
+                liked_clip.id: {
+                    "path": liked_rel,
+                    "sources": ["liked", "playlist:pl-removed"],
+                    "source_modes": {
+                        "liked": DOWNLOAD_MODE_MIRROR,
+                        "playlist:pl-removed": DOWNLOAD_MODE_MIRROR,
+                    },
+                    "size": 54,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(liked_clip),
+                },
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    suno_data = SunoData(
+        liked_clips=[liked_clip],
+        playlists=[SunoPlaylist(id="pl-kept", name="Kept Playlist", image_url=None, num_clips=1)],
+        playlist_clips={"pl-kept": [shared_clip]},
+    )
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_SHOW_MY_SONGS: False,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR,
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_CREATE_PLAYLISTS: True,
+        },
+        suno_data,
+    )
+
+    only_dir = (sync_dir / only_rel).parent
+    assert not (sync_dir / only_rel).exists()
+    assert not (only_dir / "cover.jpg").exists()
+    assert not (only_dir / ".cover_hash").exists()
+    assert not only_target.with_suffix(".mp4").exists()
+    assert not only_dir.exists()
+    assert only_clip.id not in library.state["clips"]
+
+    assert (sync_dir / shared_rel).exists()
+    assert shared_clip.id in library.state["clips"]
+    assert library.state["clips"][shared_clip.id]["sources"] == ["playlist:pl-kept"]
+
+    assert (sync_dir / liked_rel).exists()
+    assert liked_clip.id in library.state["clips"]
+    assert library.state["clips"][liked_clip.id]["sources"] == ["liked"]
+
+    assert not (sync_dir / "Removed Playlist.m3u8").exists()
+    assert (sync_dir / "Kept Playlist.m3u8").exists()
+    assert (sync_dir / "Liked Songs.m3u8").exists()
+
+
+async def test_async_reconcile_preserves_archive_playlist_clip_when_playlist_disappears(
+    hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Archive-mode playlist clip survives even when its only playlist disappears."""
+    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
+
+    sync_dir = tmp_path / "downloads"
+    sync_dir.mkdir()
+
+    archived_clip = _clip("clip-arch-rmv-0000-0000-0000-00000000000", title="ArchivedOrphan")
+    rel = _clip_path(archived_clip, QUALITY_HIGH)
+    target = sync_dir / rel
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                archived_clip.id: {
+                    "path": rel,
+                    "sources": ["playlist:pl-removed"],
+                    "source_modes": {"playlist:pl-removed": DOWNLOAD_MODE_ARCHIVE},
+                    "size": target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(archived_clip),
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    suno_data = SunoData(
+        playlists=[SunoPlaylist(id="pl-kept", name="Kept Playlist", image_url=None, num_clips=0)],
+        playlist_clips={"pl-kept": []},
+    )
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: False,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_SHOW_MY_SONGS: False,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_ARCHIVE,
+        },
+        suno_data,
+    )
+
+    assert target.exists()
+    assert archived_clip.id in library.state["clips"]
+    assert library.state["clips"][archived_clip.id]["sources"] == ["playlist:pl-removed"]
+
+
 # ── Album from root ancestor ────────────────────────────────────
 
 
