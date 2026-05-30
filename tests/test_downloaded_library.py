@@ -49,7 +49,7 @@ from custom_components.suno.downloaded_library import (
     _write_m3u8_playlists,
 )
 from custom_components.suno.downloaded_library.planning import _apply_clip_metadata
-from custom_components.suno.models import SunoClip, SunoData, TrackMetadata
+from custom_components.suno.models import SunoClip, SunoData, TrackMetadata, image_url_hash
 
 
 def _clip(clip_id: str, title: str = "Song") -> SunoClip:
@@ -1827,8 +1827,6 @@ async def test_cover_jpg_written_on_download(hass: HomeAssistant, tmp_path: Path
 
 async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path: Path) -> None:
     """.cover_hash file is written alongside cover.jpg."""
-    import hashlib
-
     audio = _FakeAudio()
     library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=audio)
     await library.async_load()
@@ -1862,14 +1860,12 @@ async def test_cover_hash_written_alongside_cover(hass: HomeAssistant, tmp_path:
     rel_path = _clip_path(clip, "high")
     hash_path = (tmp_path / "mirror" / rel_path).parent / ".cover_hash"
     assert hash_path.exists()
-    expected_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-    assert hash_path.read_text().strip() == expected_hash
+    expected_hash = image_url_hash(image_url)
+    assert hash_path.read_text() == f"{clip.id}={expected_hash}\n"
 
 
 async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path: Path) -> None:
     """Cover art is refreshed when image URL hash differs from stored .cover_hash."""
-    import hashlib
-
     clip_id = "clip-refresh-000-0000-0000-000000000000"
     new_image_url = "https://cdn2.suno.ai/new_image.jpeg"
     clip = _clip_with_display(clip_id, "Refresh Song", image_url=new_image_url)
@@ -1932,15 +1928,13 @@ async def test_cover_art_refreshed_on_hash_change(hass: HomeAssistant, tmp_path:
         )
 
     assert cover_path.read_bytes() == new_image_data
-    expected_hash = hashlib.md5(new_image_url.encode()).hexdigest()[:12]  # noqa: S324
-    assert hash_path.read_text().strip() == expected_hash
+    expected_hash = image_url_hash(new_image_url)
+    assert hash_path.read_text() == f"{clip_id}={expected_hash}\n"
     mock_fetch.assert_called()
 
 
 async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tmp_path: Path) -> None:
     """Cover art is NOT re-fetched when .cover_hash matches current image URL."""
-    import hashlib
-
     clip_id = "clip-cached-000-0000-0000-000000000000"
     image_url = "https://cdn2.suno.ai/same_image.jpeg"
     clip = _clip_with_display(clip_id, "Cached Song", image_url=image_url)
@@ -1955,8 +1949,8 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
     hash_path = target.parent / ".cover_hash"
     existing_image = b"existing_cover_data"
     cover_path.write_bytes(existing_image)
-    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-    hash_path.write_text(url_hash)
+    url_hash = image_url_hash(image_url)
+    hash_path.write_text(f"{clip_id}={url_hash}\n")
 
     storage = InMemoryDownloadedLibraryStorage(
         {
@@ -2005,6 +1999,61 @@ async def test_cover_art_not_refetched_when_hash_matches(hass: HomeAssistant, tm
 
     mock_fetch.assert_not_called()
     assert cover_path.read_bytes() == existing_image
+
+
+async def test_sync_cover_art_hash_map_prevents_variant_pingpong(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Variant clips sharing a folder keep independent cover hashes."""
+    clips = [
+        _clip_with_display(
+            "35c9d94c-b9de-4f79-811f-4a660d9eee18",
+            "Bowser vs. the Snakes",
+            display_name="Remaster Bot",
+            image_url="https://cdn.suno.ai/bowser-v1.jpg",
+        ),
+        _clip_with_display(
+            "abd02826-d376-48f3-a7e0-b14f363b16ec",
+            "Bowser vs. the Snakes",
+            display_name="Remaster Bot",
+            image_url="https://cdn.suno.ai/bowser-v2.jpg",
+        ),
+        _clip_with_display(
+            "fa7e0b14-f363-416e-8bec-abd02826d376",
+            "Bowser vs. the Snakes",
+            display_name="Remaster Bot",
+            image_url="https://cdn.suno.ai/bowser-v3.jpg",
+        ),
+    ]
+    sync_dir = tmp_path / "mirror"
+    clips_state: dict[str, dict[str, object]] = {}
+    desired: list[DownloadItem] = []
+    for clip in clips:
+        rel_path = _clip_path(clip, "high")
+        target = sync_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fLaC" + b"\x00" * 50)
+        clips_state[clip.id] = {"path": rel_path}
+        desired.append(DownloadItem(clip=clip, sources=["liked"], quality="high"))
+
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
+
+    with (
+        patch("custom_components.suno.downloaded_library.async_get_clientsession"),
+        patch(
+            "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
+            new_callable=AsyncMock,
+            return_value=b"cover-bytes",
+        ) as mock_fetch,
+    ):
+        first_count = await library._sync_cover_art(sync_dir, desired, clips_state)
+        second_count = await library._sync_cover_art(sync_dir, desired, clips_state)
+
+    assert first_count == 3
+    assert second_count == 0
+    assert mock_fetch.await_count == 3
+    hash_path = (sync_dir / _clip_path(clips[0], "high")).parent / ".cover_hash"
+    assert hash_path.read_text() == "".join(
+        f"{clip.id}={image_url_hash(clip.image_url or '')}\n" for clip in sorted(clips, key=lambda item: item.id)
+    )
 
 
 # ── Engine-direct helper tests (relocated from test_download.py) ─
@@ -2611,6 +2660,7 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
     from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
+    clip_id = "clip-sidecar"
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
     cover = tmp_path / "cover.jpg"
@@ -2622,34 +2672,113 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
         new_callable=AsyncMock,
         return_value=b"\xff\xd8\xff" + b"\x00" * 100,
     ):
-        result = await _update_cover_art(hass, session, "https://x/y.jpg", cover, hash_path, track_path=track)
+        result = await _update_cover_art(
+            hass,
+            session,
+            "https://x/y.jpg",
+            cover,
+            hash_path,
+            clip_id=clip_id,
+            track_path=track,
+        )
 
     assert result is True
     assert cover.exists()
+    assert hash_path.read_text() == f"{clip_id}={image_url_hash('https://x/y.jpg')}\n"
     track_jpg = track.with_suffix(".jpg")
     assert track_jpg.exists()
     assert track_jpg.read_bytes() == cover.read_bytes()
 
 
-async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Hash-match path still backfills track sidecar if it's missing."""
-    import hashlib
-
+async def test_update_cover_art_writes_hash_map_once_for_single_clip(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A single clip writes one hash-map entry and skips the next sync."""
     from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
+    clip_id = "clip-single"
+    image_url = "https://x/single.jpg"
+    cover = tmp_path / "cover.jpg"
+    hash_path = tmp_path / ".cover_hash"
+    session = AsyncMock()
+
+    with patch(
+        "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
+        new_callable=AsyncMock,
+        return_value=b"\xff\xd8\xff" + b"\x00" * 100,
+    ) as mock_fetch:
+        first = await _update_cover_art(hass, session, image_url, cover, hash_path, clip_id=clip_id)
+        second = await _update_cover_art(hass, session, image_url, cover, hash_path, clip_id=clip_id)
+
+    assert first is True
+    assert second is False
+    assert mock_fetch.await_count == 1
+    assert hash_path.read_text() == f"{clip_id}={image_url_hash(image_url)}\n"
+
+
+async def test_update_cover_art_migrates_legacy_bare_hash_on_fetch(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A legacy bare hash is replaced by the current clip's map entry."""
+    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
+
+    clip_id = "clip-legacy"
+    image_url = "https://x/legacy.jpg"
+    cover = tmp_path / "cover.jpg"
+    hash_path = tmp_path / ".cover_hash"
+    hash_path.write_text(f"{image_url_hash(image_url)}\n")
+    session = AsyncMock()
+
+    with patch(
+        "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
+        new_callable=AsyncMock,
+        return_value=b"\xff\xd8\xff" + b"\x00" * 100,
+    ) as mock_fetch:
+        result = await _update_cover_art(hass, session, image_url, cover, hash_path, clip_id=clip_id)
+
+    assert result is True
+    assert mock_fetch.await_count == 1
+    assert hash_path.read_text() == f"{clip_id}={image_url_hash(image_url)}\n"
+
+
+async def test_update_cover_art_fetch_failure_leaves_hash_file_untouched(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Failed image fetches do not rewrite existing hash-map contents."""
+    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
+
+    clip_id = "clip-failure"
+    image_url = "https://x/failure.jpg"
+    cover = tmp_path / "cover.jpg"
+    hash_path = tmp_path / ".cover_hash"
+    original_hashes = "other-clip=111111111111\n"
+    hash_path.write_text(original_hashes)
+    session = AsyncMock()
+
+    with patch(
+        "custom_components.suno.downloaded_library.cover_art.fetch_album_art",
+        new_callable=AsyncMock,
+        return_value=b"",
+    ):
+        result = await _update_cover_art(hass, session, image_url, cover, hash_path, clip_id=clip_id)
+
+    assert result is False
+    assert hash_path.read_text() == original_hashes
+    assert not cover.exists()
+
+
+async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Hash-match path still backfills track sidecar if it's missing."""
+    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
+
+    clip_id = "clip-backfill"
     track = tmp_path / "Foo.flac"
     track.write_bytes(b"fLaC")
     cover = tmp_path / "cover.jpg"
     cover.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
     hash_path = tmp_path / ".cover_hash"
     image_url = "https://x/y.jpg"
-    url_hash = hashlib.md5(image_url.encode()).hexdigest()[:12]  # noqa: S324
-    hash_path.write_text(url_hash)
+    url_hash = image_url_hash(image_url)
+    hash_path.write_text(f"{clip_id}={url_hash}\n")
     track_jpg = track.with_suffix(".jpg")
     assert not track_jpg.exists()
 
     session = AsyncMock()
-    result = await _update_cover_art(hass, session, image_url, cover, hash_path, track_path=track)
+    result = await _update_cover_art(hass, session, image_url, cover, hash_path, clip_id=clip_id, track_path=track)
 
     assert result is False
     assert track_jpg.exists()
@@ -4621,7 +4750,7 @@ async def test_retag_uses_validated_cover_jpg_without_network_fetch(hass: HomeAs
     target.write_bytes(b"fLaC" + b"\x00" * 50)
     cover_bytes = b"\xff\xd8\xffmock_jpeg_bytes_from_disk"
     (target.parent / "cover.jpg").write_bytes(cover_bytes)
-    (target.parent / ".cover_hash").write_text(image_url_hash(selected_image_url(clip)))
+    (target.parent / ".cover_hash").write_text(f"{clip.id}={image_url_hash(selected_image_url(clip))}\n")
 
     storage = InMemoryDownloadedLibraryStorage(
         {
@@ -4649,6 +4778,24 @@ async def test_retag_uses_validated_cover_jpg_without_network_fetch(hass: HomeAs
     _retag_target, retag_meta = audio.retag_calls[0]
     assert retag_meta.image_data == cover_bytes, "must use validated cover.jpg bytes"
     assert audio.image_fetches == [], "must not network-fetch when cover.jpg is validated"
+
+
+async def test_read_validated_cover_requires_matching_clip_entry(hass: HomeAssistant, tmp_path: Path) -> None:
+    """cover.jpg is valid only when the current clip owns the stored hash."""
+    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
+    image_url = "https://cdn1.suno.ai/specific-cover.jpg"
+    cover_bytes = b"\xff\xd8\xffcurrent_clip_cover"
+    (tmp_path / "cover.jpg").write_bytes(cover_bytes)
+    hash_path = tmp_path / ".cover_hash"
+    hash_path.write_text(
+        f"clip-a={image_url_hash(image_url)}\nclip-b={image_url_hash('https://cdn1.suno.ai/other-cover.jpg')}\n"
+    )
+
+    assert (await library._read_validated_cover(tmp_path, image_url, clip_id="clip-a")) == cover_bytes
+
+    hash_path.write_text(f"clip-b={image_url_hash(image_url)}\n")
+
+    assert await library._read_validated_cover(tmp_path, image_url, clip_id="clip-a") is None
 
 
 async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAssistant, tmp_path: Path) -> None:

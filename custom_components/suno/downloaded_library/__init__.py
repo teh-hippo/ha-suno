@@ -36,7 +36,7 @@ from .contracts import (
     RenderedAudio,
     RetagResult,
 )
-from .cover_art import _update_cover_art
+from .cover_art import _parse_cover_hashes, _update_cover_art
 from .filesystem import (
     _cleanup_empty_dirs,
     _delete_file,
@@ -661,6 +661,7 @@ class DownloadedLibrary:
                 image_url,
                 target.parent / "cover.jpg",
                 target.parent / ".cover_hash",
+                clip_id=item.clip.id,
                 track_path=target,
             ):
                 covers_fixed += 1
@@ -862,6 +863,7 @@ class DownloadedLibrary:
                     image_url,
                     target.parent / "cover.jpg",
                     target.parent / ".cover_hash",
+                    clip_id=clip.id,
                     track_path=target,
                 )
 
@@ -908,7 +910,7 @@ class DownloadedLibrary:
         image_url = selected_image_url(item.clip)
         image_data: bytes | None = None
         if image_url:
-            image_data = await self._read_validated_cover(target.parent, image_url)
+            image_data = await self._read_validated_cover(target.parent, image_url, clip_id=item.clip.id)
             if image_data is None:
                 image_data = await self._audio.fetch_image(image_url)
             if image_data is None:
@@ -926,8 +928,8 @@ class DownloadedLibrary:
             return RetagResult.FAILED
         return RetagResult.OK if ok else RetagResult.FAILED
 
-    async def _read_validated_cover(self, folder: Path, image_url: str) -> bytes | None:
-        """Return ``cover.jpg`` bytes only if ``.cover_hash`` matches ``image_url``."""
+    async def _read_validated_cover(self, folder: Path, image_url: str, *, clip_id: str) -> bytes | None:
+        """Return ``cover.jpg`` bytes only if ``.cover_hash`` matches this clip."""
         if not image_url:
             return None
         expected = image_url_hash(image_url)
@@ -938,10 +940,10 @@ class DownloadedLibrary:
 
         def _read() -> bytes | None:
             try:
-                stored = hash_path.read_text().strip()
+                stored_hashes = _parse_cover_hashes(hash_path.read_text())
             except OSError:
                 return None
-            if stored != expected:
+            if stored_hashes.get(clip_id) != expected:
                 return None
             try:
                 data = cover_path.read_bytes()
