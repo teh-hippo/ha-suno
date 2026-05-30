@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v6.3.4 (2026-05-30)
+
+### Bug Fixes
+
+- **downloaded_library**: Split clip-mirror vs file-state manifest reconcile
+  ([`76a577d`](https://github.com/teh-hippo/ha-suno/commit/76a577d6fa37b88d1fc9ea87ca0067c5bdc37f28))
+
+
 ## v6.3.3 (2026-05-30)
 
 ### Bug Fixes
