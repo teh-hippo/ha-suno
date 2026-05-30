@@ -85,21 +85,45 @@ def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
 def _apply_clip_metadata(
     entry: dict[str, Any],
     clip: SunoClip,
-    file_size: int,
     *,
     album: str | None = None,
 ) -> None:
-    """Refresh manifest fields that mirror mutable clip metadata and file bytes."""
+    """Refresh manifest fields that mirror the SunoClip and nothing else.
+
+    These fields have no dependency on the on-disk file. Safe to call any
+    time we have a fresh clip — including the per-sync reconcile in
+    ``_plan_actions`` that heals records whose denormalised metadata
+    drifted in a prior code generation.
+
+    File-mirror fields (``size``, ``embedded_art_hash``) belong to
+    ``_apply_file_state`` and MUST NOT be written without a verified
+    file change. Writing them on an unchanged file would falsely claim
+    the file matches current Suno bytes when it might not.
+    """
     entry["title"] = clip.title
     entry["created"] = clip.created_at[:10] if clip.created_at else None
-    entry["size"] = file_size
     entry["meta_hash"] = clip_meta_hash(clip)
+    _set_manifest_album(entry, album)
+
+
+def _apply_file_state(
+    entry: dict[str, Any],
+    clip: SunoClip,
+    file_size: int,
+) -> None:
+    """Refresh manifest fields that mirror the on-disk file bytes.
+
+    Call ONLY after a verified file write (download or successful
+    retag). ``embedded_art_hash`` claims the file contains the current
+    Suno art; writing it without a corresponding file change makes the
+    manifest lie about reality.
+    """
+    entry["size"] = file_size
     embedded_art_hash = image_url_hash(selected_image_url(clip))
     if embedded_art_hash:
         entry["embedded_art_hash"] = embedded_art_hash
     else:
         entry.pop("embedded_art_hash", None)
-    _set_manifest_album(entry, album)
 
 
 def _clip_entry(
@@ -117,12 +141,8 @@ def _clip_entry(
         "source_modes": _source_modes_for(item.sources, options),
         "quality": item.quality,
     }
-    _apply_clip_metadata(
-        entry,
-        item.clip,
-        file_size,
-        album=album,
-    )
+    _apply_clip_metadata(entry, item.clip, album=album)
+    _apply_file_state(entry, item.clip, file_size)
     return entry
 
 
