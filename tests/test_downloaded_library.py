@@ -3287,6 +3287,66 @@ async def test_async_reconcile_renames_m3u8_when_playlist_renamed(hass: HomeAssi
     assert entry["path"] == rel
 
 
+async def test_async_reconcile_removes_m3u8_when_create_playlists_disabled(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Disabling generated playlists removes existing M3U8 files only."""
+    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
+    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
+
+    sync_dir = tmp_path / "downloads"
+    sync_dir.mkdir()
+
+    clip = _clip("clip-toggle-0000-0000-0000-000000000000", title="OnlyClip")
+    rel = _clip_path(clip, QUALITY_HIGH)
+    target = sync_dir / rel
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"fLaC" + b"\x00" * 50)
+
+    playlist = sync_dir / "MyPlaylist.m3u8"
+    playlist.write_text("#EXTM3U\n#PLAYLIST:MyPlaylist\n", encoding="utf-8")
+
+    storage = InMemoryDownloadedLibraryStorage(
+        {
+            "clips": {
+                clip.id: {
+                    "path": rel,
+                    "sources": ["playlist:pl-toggle"],
+                    "source_modes": {"playlist:pl-toggle": DOWNLOAD_MODE_MIRROR},
+                    "size": target.stat().st_size,
+                    "quality": QUALITY_HIGH,
+                    "meta_hash": clip_meta_hash(clip),
+                }
+            },
+            "last_download": None,
+        }
+    )
+    library = DownloadedLibrary(hass, storage, audio=_FakeAudio())
+    await library.async_load()
+
+    suno_data = SunoData(
+        playlists=[SunoPlaylist(id="pl-toggle", name="MyPlaylist", image_url=None, num_clips=1)],
+        playlist_clips={"pl-toggle": [clip]},
+    )
+
+    await library.async_reconcile(
+        {
+            CONF_DOWNLOAD_PATH: str(sync_dir),
+            CONF_SHOW_LIKED: False,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_SHOW_MY_SONGS: False,
+            CONF_ALL_PLAYLISTS: True,
+            CONF_PLAYLISTS: [],
+            CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR,
+            CONF_CREATE_PLAYLISTS: False,
+        },
+        suno_data,
+    )
+
+    assert not playlist.exists()
+    assert target.exists()
+    assert clip.id in library.state["clips"]
+    assert library.state["clips"][clip.id]["path"] == rel
+
+
 # ── Album from root ancestor ────────────────────────────────────
 
 

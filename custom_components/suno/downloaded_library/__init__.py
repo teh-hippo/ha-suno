@@ -691,6 +691,8 @@ class DownloadedLibrary:
             await self.hass.async_add_executor_job(
                 _write_m3u8_playlists, base, clips_state, plan.items, plan.source_to_name, plan.playlist_order
             )
+        else:
+            await self._delete_generated_playlists(base)
 
     async def _move_sidecars(self, base: Path, clip: SunoClip, old_file: Path, new_file: Path) -> None:
         old_video = old_file.with_suffix(".mp4")
