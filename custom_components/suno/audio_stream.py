@@ -6,9 +6,16 @@ import asyncio
 import logging
 import os
 import tempfile
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from .audio_metadata import build_id3_header, fix_flac_cover_type, fix_flac_total_samples, skip_existing_id3
+from .audio_metadata import (
+    FFMPEG_METADATA_FIELDS,
+    build_id3_header,
+    fix_flac_cover_type,
+    fix_flac_total_samples,
+    skip_existing_id3,
+)
 from .const import DOWNLOAD_FFMPEG_TIMEOUT
 from .models import TrackMetadata
 
@@ -45,22 +52,10 @@ async def wav_to_flac(
             "-metadata",
             f"artist={meta.artist}",
             "-metadata",
-            f"album={meta.album or meta.title}",
+            f"album={meta.album}",
         ]
-        optional = [
-            ("albumartist", meta.album_artist),
-            ("date", meta.date),
-            ("LYRICS", meta.lyrics),
-            ("comment", meta.comment),
-            ("SUNO_STYLE", meta.suno_style),
-            ("SUNO_STYLE_SUMMARY", meta.suno_style_summary),
-            ("SUNO_MODEL", meta.suno_model),
-            ("SUNO_HANDLE", meta.suno_handle),
-            ("SUNO_PARENT", meta.suno_parent),
-            ("SUNO_LINEAGE", meta.suno_lineage),
-        ]
-        for key, val in optional:
-            cmd.extend(["-metadata", f"{key}={val}"])
+        for key, attr in FFMPEG_METADATA_FIELDS:
+            cmd.extend(["-metadata", f"{key}={getattr(meta, attr)}"])
         args.extend(cmd + ["-f", "flac", "pipe:1"])
 
         proc = await asyncio.create_subprocess_exec(
@@ -128,23 +123,6 @@ async def download_as_mp3(
         _LOGGER.exception("Failed to download MP3 from %s", audio_url)
         return None
 
-    if not meta.album:
-        meta = TrackMetadata(
-            title=meta.title,
-            artist=meta.artist,
-            album=meta.title,
-            album_artist=meta.album_artist,
-            date=meta.date,
-            lyrics=meta.lyrics,
-            comment=meta.comment,
-            image_data=meta.image_data,
-            suno_style=meta.suno_style,
-            suno_style_summary=meta.suno_style_summary,
-            suno_model=meta.suno_model,
-            suno_handle=meta.suno_handle,
-            suno_parent=meta.suno_parent,
-            suno_lineage=meta.suno_lineage,
-        )
     header = build_id3_header(meta)
     body = skip_existing_id3(raw)
     return header + body
@@ -193,37 +171,5 @@ async def download_and_transcode_to_flac(
     finally:
         upstream.close()
     if meta.image_data is None and image_url:
-        meta = TrackMetadata(
-            title=meta.title,
-            artist=meta.artist,
-            album=meta.album,
-            album_artist=meta.album_artist,
-            date=meta.date,
-            lyrics=meta.lyrics,
-            comment=meta.comment,
-            image_data=await fetch_album_art(session, image_url),
-            suno_style=meta.suno_style,
-            suno_style_summary=meta.suno_style_summary,
-            suno_model=meta.suno_model,
-            suno_handle=meta.suno_handle,
-            suno_parent=meta.suno_parent,
-            suno_lineage=meta.suno_lineage,
-        )
-    if not meta.album:
-        meta = TrackMetadata(
-            title=meta.title,
-            artist=meta.artist,
-            album=meta.title,
-            album_artist=meta.album_artist,
-            date=meta.date,
-            lyrics=meta.lyrics,
-            comment=meta.comment,
-            image_data=meta.image_data,
-            suno_style=meta.suno_style,
-            suno_style_summary=meta.suno_style_summary,
-            suno_model=meta.suno_model,
-            suno_handle=meta.suno_handle,
-            suno_parent=meta.suno_parent,
-            suno_lineage=meta.suno_lineage,
-        )
+        meta = replace(meta, image_data=await fetch_album_art(session, image_url))
     return await wav_to_flac(ffmpeg_binary, wav_data, meta, duration=duration)

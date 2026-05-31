@@ -6,9 +6,16 @@ import asyncio
 import logging
 import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
-from .audio_metadata import build_id3_header, extract_apic, fix_flac_cover_type, skip_existing_id3
+from .audio_metadata import (
+    FFMPEG_METADATA_FIELDS,
+    build_id3_header,
+    extract_apic,
+    fix_flac_cover_type,
+    skip_existing_id3,
+)
 from .const import DOWNLOAD_FFMPEG_TIMEOUT
 from .models import TrackMetadata
 
@@ -30,44 +37,13 @@ def retag_mp3(path: os.PathLike[str], meta: TrackMetadata) -> bool:
         return False
 
     if meta.image_data is None:
-        existing_art = extract_apic(raw)
-        if existing_art:
-            meta = TrackMetadata(
-                title=meta.title,
-                artist=meta.artist,
-                album=meta.album,
-                album_artist=meta.album_artist,
-                date=meta.date,
-                lyrics=meta.lyrics,
-                comment=meta.comment,
-                image_data=existing_art,
-                suno_style=meta.suno_style,
-                suno_style_summary=meta.suno_style_summary,
-                suno_model=meta.suno_model,
-                suno_handle=meta.suno_handle,
-                suno_parent=meta.suno_parent,
-                suno_lineage=meta.suno_lineage,
-            )
+        if existing_art := extract_apic(raw):
+            meta = replace(meta, image_data=existing_art)
         else:
             cover = file_path.parent / "cover.jpg"
             if cover.is_file():
                 try:
-                    meta = TrackMetadata(
-                        title=meta.title,
-                        artist=meta.artist,
-                        album=meta.album,
-                        album_artist=meta.album_artist,
-                        date=meta.date,
-                        lyrics=meta.lyrics,
-                        comment=meta.comment,
-                        image_data=cover.read_bytes(),
-                        suno_style=meta.suno_style,
-                        suno_style_summary=meta.suno_style_summary,
-                        suno_model=meta.suno_model,
-                        suno_handle=meta.suno_handle,
-                        suno_parent=meta.suno_parent,
-                        suno_lineage=meta.suno_lineage,
-                    )
+                    meta = replace(meta, image_data=cover.read_bytes())
                 except OSError:
                     pass
 
@@ -125,20 +101,8 @@ async def retag_flac(
             "-metadata",
             f"album={meta.album}",
         ]
-        optional = [
-            ("albumartist", meta.album_artist),
-            ("date", meta.date),
-            ("LYRICS", meta.lyrics),
-            ("comment", meta.comment),
-            ("SUNO_STYLE", meta.suno_style),
-            ("SUNO_STYLE_SUMMARY", meta.suno_style_summary),
-            ("SUNO_MODEL", meta.suno_model),
-            ("SUNO_HANDLE", meta.suno_handle),
-            ("SUNO_PARENT", meta.suno_parent),
-            ("SUNO_LINEAGE", meta.suno_lineage),
-        ]
-        for key, val in optional:
-            cmd.extend(["-metadata", f"{key}={val}"])
+        for key, attr in FFMPEG_METADATA_FIELDS:
+            cmd.extend(["-metadata", f"{key}={getattr(meta, attr)}"])
 
         tmp_out = file_path.with_suffix(".retag.tmp")
         args.extend(cmd + ["-f", "flac", str(tmp_out)])

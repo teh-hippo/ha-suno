@@ -13,6 +13,27 @@ from .models import TrackMetadata
 _FLAC_PICTURE_TYPE = 6
 _FLAC_COVER_FRONT = 3
 
+# Shared field tables — single source of truth for which TrackMetadata
+# attributes get written into audio container metadata. Adding a new
+# field means touching this module and TrackMetadata only, never the
+# transcode or retag layers.
+_SUNO_TXXX_FIELDS: tuple[tuple[str, str], ...] = (
+    ("SUNO_STYLE", "suno_style"),
+    ("SUNO_STYLE_SUMMARY", "suno_style_summary"),
+    ("SUNO_MODEL", "suno_model"),
+    ("SUNO_HANDLE", "suno_handle"),
+    ("SUNO_PARENT", "suno_parent"),
+    ("SUNO_LINEAGE", "suno_lineage"),
+)
+
+FFMPEG_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
+    ("albumartist", "album_artist"),
+    ("date", "date"),
+    ("LYRICS", "lyrics"),
+    ("comment", "comment"),
+    *_SUNO_TXXX_FIELDS,
+)
+
 
 def build_id3_header(meta: TrackMetadata) -> bytes:
     """Build a minimal ID3v2.4 header with metadata frames."""
@@ -32,16 +53,8 @@ def build_id3_header(meta: TrackMetadata) -> bytes:
     if meta.lyrics:
         uslt_body = b"\x03" + b"eng" + b"\x00" + meta.lyrics.encode("utf-8")
         frames += b"USLT" + len(uslt_body).to_bytes(4, "big") + b"\x00\x00" + uslt_body
-    custom_fields = [
-        ("SUNO_STYLE", meta.suno_style),
-        ("SUNO_STYLE_SUMMARY", meta.suno_style_summary),
-        ("SUNO_MODEL", meta.suno_model),
-        ("SUNO_HANDLE", meta.suno_handle),
-        ("SUNO_PARENT", meta.suno_parent),
-        ("SUNO_LINEAGE", meta.suno_lineage),
-    ]
-    for desc, value in custom_fields:
-        if value:
+    for desc, attr in _SUNO_TXXX_FIELDS:
+        if value := getattr(meta, attr):
             txxx_body = b"\x03" + desc.encode("utf-8") + b"\x00" + value.encode("utf-8")
             frames += b"TXXX" + len(txxx_body).to_bytes(4, "big") + b"\x00\x00" + txxx_body
     if meta.image_data:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any
 
 from aiohttp import ClientResponse, web
@@ -15,7 +16,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .audio_metadata import build_id3_header, skip_existing_id3
 from .audio_stream import fetch_album_art
 from .const import CDN_BASE_URL
-from .models import SunoClip, TrackMetadata, clip_meta_hash
+from .models import SunoClip, TrackMetadata, clip_meta_hash, selected_image_url
 from .runtime import HomeAssistantRuntime, iter_entry_runtimes
 
 _LOGGER = logging.getLogger(__name__)
@@ -110,29 +111,11 @@ class SunoMediaProxyView(HomeAssistantView):
         meta_hash: str = "",
     ) -> web.StreamResponse:
         """Stream MP3 with ID3 header injection and optional caching."""
-        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
-        if meta.image_data is None and clip:
-            image_url = clip.image_large_url or clip.image_url or clip.video_cover_url
-            if image_url:
-                session = async_get_clientsession(self.hass)
-                image_data = await fetch_album_art(session, image_url)
-                if image_data:
-                    meta = TrackMetadata(
-                        title=meta.title,
-                        artist=meta.artist,
-                        album=meta.album,
-                        album_artist=meta.album_artist,
-                        date=meta.date,
-                        lyrics=meta.lyrics,
-                        comment=meta.comment,
-                        image_data=image_data,
-                        suno_style=meta.suno_style,
-                        suno_style_summary=meta.suno_style_summary,
-                        suno_model=meta.suno_model,
-                        suno_handle=meta.suno_handle,
-                        suno_parent=meta.suno_parent,
-                        suno_lineage=meta.suno_lineage,
-                    )
+        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist)
+        if meta.image_data is None and clip and (image_url := selected_image_url(clip)):
+            session = async_get_clientsession(self.hass)
+            if image_data := await fetch_album_art(session, image_url):
+                meta = replace(meta, image_data=image_data)
         id3_header = build_id3_header(meta)
         cache_buf = bytearray(id3_header) if runtime is not None else None
         response = web.StreamResponse(
@@ -179,7 +162,7 @@ class SunoMediaProxyView(HomeAssistantView):
         if key in self._inflight:
             try:
                 result = await asyncio.wait_for(asyncio.shield(self._inflight[key]), timeout=150)
-            except TimeoutError, Exception:
+            except Exception:
                 result = None
             if result is not None:
                 return web.Response(body=result, content_type=content_type)
@@ -209,12 +192,12 @@ class SunoMediaProxyView(HomeAssistantView):
         """Execute the full WAV-to-FLAC pipeline."""
         if not isinstance(runtime, HomeAssistantRuntime):
             return None
-        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist, album=title)
+        meta = clip.to_track_metadata(title, artist) if clip else TrackMetadata(title=title, artist=artist)
         return await runtime.async_render_hq_audio(
             clip_id,
             meta,
             duration=clip.duration if clip else 0.0,
-            image_url=clip.image_large_url or clip.image_url or clip.video_cover_url if clip else None,
+            image_url=(selected_image_url(clip) or None) if clip else None,
             session=async_get_clientsession(self.hass),
             ffmpeg_binary=get_ffmpeg_manager(self.hass).binary,
         )

@@ -60,6 +60,21 @@ class SunoClip:
 
     @classmethod
     def from_api_response(cls, raw: dict[str, Any]) -> SunoClip:
+        """Construct a SunoClip from a Suno API response payload.
+
+        The API returns a *nested* shape: clip-level fields like ``id``,
+        ``title``, ``audio_url``, and the lineage fields
+        (``root_ancestor_id``, ``lineage_status``, ``album_title``)
+        live at the top of ``raw``, while content metadata like
+        ``tags``, ``duration``, and ``prompt`` live under
+        ``raw["metadata"]``. The lineage fields were added at top level
+        in v6.3.1.
+
+        This is distinct from :func:`_safe_clip`, which reads every
+        field from a *flat* dict because that's the on-disk persistence
+        shape. Any new clip field that needs to round-trip through both
+        API parsing AND persistence must be added in both call sites.
+        """
         metadata = raw.get("metadata") or {}
         clip_id = raw.get("id", "")
         audio_url = raw.get("audio_url", "")
@@ -220,15 +235,29 @@ class TrackMetadata:
     suno_parent: str = ""
     suno_lineage: str = ""
 
+    def __post_init__(self) -> None:
+        """Default album to title when album is empty but title is set.
+
+        Centralises the "album = title" fallback that previously lived in
+        four separate sites (proxy.py track construction, audio_stream
+        download_as_mp3 / download_and_transcode_to_flac reconstructions,
+        and TrackMetadata constructions inside the proxy). Callers that
+        want album to stay empty must pass title="" too.
+        """
+        if not self.album and self.title:
+            self.album = self.title
+
 
 def selected_image_url(clip: SunoClip) -> str:
     """Pick the embedded album art URL for a clip.
 
-    Single source of truth so the download path, the cover.jpg sync path,
-    the retag path, and the meta-hash that detects "needs retag" all use
-    the same URL. Mismatch caused embedded art to drift from cover.jpg
-    when Suno regenerated covers under the legacy ``image_url`` namespace
-    only.
+    Single source of truth for "which CDN URL holds this clip's cover
+    art". Every consumer (download path, ``cover.jpg`` sidecar sync,
+    retag path, ``clip_meta_hash``, and the meta-hash that detects
+    "needs retag") must go through this helper so an art URL change
+    flows uniformly through all detection paths. Returns "" when no
+    URL is available; callers needing ``None`` semantics can do
+    ``selected_image_url(clip) or None``.
     """
     return clip.image_large_url or clip.image_url or clip.video_cover_url or ""
 
@@ -251,11 +280,30 @@ def video_url_hash(video_url: str) -> str:
 def clip_meta_hash(clip: SunoClip) -> str:
     """Short hash of clip metadata for content change detection.
 
-    Path-affecting fields (display_name) are deliberately excluded; path
-    changes are detected by comparing ``_clip_path()`` against the stored
-    path. This hash only tracks fields that affect file *content* (tags,
-    cover art, lineage, LYRICS, comment, SUNO_STYLE_SUMMARY, and SUNO_HANDLE
-    metadata).
+    Covers everything that affects file *content* (tags, lineage,
+    LYRICS, comment, SUNO_STYLE_SUMMARY, SUNO_HANDLE) AND the art URL
+    via :func:`selected_image_url`. The art URL is intentionally
+    included here even though the engine also tracks it separately as
+    ``embedded_art_hash`` — the two checks have different semantics:
+
+    - ``meta_hash`` answers "do the clip's text/art *inputs* differ
+      from what we used to generate the file?". A mismatch means we
+      should re-tag.
+    - ``embedded_art_hash`` answers "does the file *currently on disk*
+      contain the art bytes Suno is now serving?". A mismatch means the
+      file is stale even if its tags are correct (e.g. cover URL
+      regenerated between two reconciles).
+
+    Both checks can trigger a retag for the same root cause (the cover
+    URL changed) but they're not redundant: they catch the regression
+    at different points in the manifest lifecycle.
+
+    Path-affecting fields like ``display_name`` are deliberately
+    excluded; path changes are detected by comparing the rendered path
+    against the stored ``path``. ``title`` *is* in the hash because we
+    want a title change to trigger both a rename AND a retag — the
+    rename is handled by ``_migrate_renamed_paths`` and the retag by
+    the meta-hash mismatch here.
     """
     return hashlib.md5(  # noqa: S324
         (
