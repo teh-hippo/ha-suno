@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v6.3.6 (2026-05-31)
+
+### Refactoring
+
+- Consolidate metadata flow band-aids
+  ([`40e68b9`](https://github.com/teh-hippo/ha-suno/commit/40e68b9919bfa2a55f475c21b2c6ed273d004135))
+
+### Testing
+
+- Hoist imports, consolidate clip helpers, cover audio_adapter
+  ([`fb0f74d`](https://github.com/teh-hippo/ha-suno/commit/fb0f74d83ebdd8417da101d0d406056a46274b89))
+
+- Ruff isort fix for test_downloaded_library imports
+  ([`e25ec7a`](https://github.com/teh-hippo/ha-suno/commit/e25ec7a36f72776d9ce30dff289c44e3fd6e79b7))
+
+
 ## v6.3.5 (2026-05-31)
 
 ### Bug Fixes
