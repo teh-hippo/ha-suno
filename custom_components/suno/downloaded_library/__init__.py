@@ -17,6 +17,7 @@ from ..const import (
     CONF_CREATE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
     DOWNLOAD_MODE_ARCHIVE,
+    MAX_VIDEO_CONVERT_ATTEMPTS,
     QUALITY_HIGH,
     VIDEO_ART_BOTH,
     VIDEO_ART_CONVERT,
@@ -708,7 +709,16 @@ class DownloadedLibrary:
                 webp_target = mp4_target.parent / "cover.webp"
                 webp_exists = await self.hass.async_add_executor_job(webp_target.exists)
                 stored_settings = entry.get("video_art_settings")
-                needs_conversion = needs_download or not webp_exists or stored_settings != current_settings
+                failed_record = entry.get("video_art_failed")
+                already_exhausted = (
+                    isinstance(failed_record, dict)
+                    and failed_record.get("settings") == current_settings
+                    and failed_record.get("url_hash") == current_hash
+                    and int(failed_record.get("attempts", 0)) >= MAX_VIDEO_CONVERT_ATTEMPTS
+                )
+                needs_conversion = (
+                    needs_download or not webp_exists or stored_settings != current_settings
+                ) and not already_exhausted
                 if needs_conversion:
                     converted = await convert_mp4_to_webp(
                         self.hass,
@@ -719,6 +729,20 @@ class DownloadedLibrary:
                     )
                     if converted:
                         entry["video_art_settings"] = current_settings
+                        entry.pop("video_art_failed", None)
+                    else:
+                        prev_attempts = 0
+                        if (
+                            isinstance(failed_record, dict)
+                            and failed_record.get("settings") == current_settings
+                            and failed_record.get("url_hash") == current_hash
+                        ):
+                            prev_attempts = int(failed_record.get("attempts", 0))
+                        entry["video_art_failed"] = {
+                            "settings": current_settings,
+                            "url_hash": current_hash,
+                            "attempts": prev_attempts + 1,
+                        }
 
             # In convert mode, remove the MP4 after successful WebP generation
             if mode == VIDEO_ART_CONVERT and self._ffmpeg_binary:

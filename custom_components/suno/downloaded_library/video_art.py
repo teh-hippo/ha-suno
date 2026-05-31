@@ -20,6 +20,7 @@ from ..const import (
     DEFAULT_VIDEO_MAX_WIDTH,
     DEFAULT_VIDEO_QUALITY,
     DOWNLOAD_FFMPEG_TIMEOUT,
+    VIDEO_FFMPEG_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,9 +73,9 @@ def _build_webp_options(settings: VideoArtSettings) -> list[str]:
     args = ["-c:v", "libwebp_anim"]
 
     if settings.video_lossless:
-        args.extend(["-lossless", "1", "-compression_level", "6"])
+        args.extend(["-lossless", "1", "-compression_level", "0"])
     else:
-        args.extend(["-quality", str(settings.video_quality), "-compression_level", "6"])
+        args.extend(["-quality", str(settings.video_quality), "-compression_level", "0"])
 
     filters: list[str] = []
     if settings.video_max_fps > 0:
@@ -171,7 +172,7 @@ async def convert_mp4_to_webp(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_FFMPEG_TIMEOUT)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=VIDEO_FFMPEG_TIMEOUT)
     except TimeoutError:
         _LOGGER.warning("Timed out converting video artwork %s", mp4_path.name)
         if proc is not None:
