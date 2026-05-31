@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ..const import VIDEO_ART_BOTH, VIDEO_ART_CONVERT, VIDEO_ART_DOWNLOAD
+from .contracts import ManifestEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,17 +21,17 @@ _LOGGER = logging.getLogger(__name__)
 async def _reconcile_disk(
     hass: HomeAssistant,
     base: Path,
-    clips_state: dict[str, Any],
+    clips_state: dict[str, ManifestEntry],
     video_art_mode: str = VIDEO_ART_BOTH,
 ) -> int:
     """Remove orphaned audio and video files not tracked in download state."""
-    known_paths = {entry["path"] for entry in clips_state.values() if entry.get("path")}
+    known_paths = {entry.path for entry in clips_state.values() if entry.path}
     keep_mp4 = video_art_mode in (VIDEO_ART_DOWNLOAD, VIDEO_ART_BOTH)
     keep_webp = video_art_mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH)
     for entry in clips_state.values():
-        if not entry.get("path"):
+        if not entry.path:
             continue
-        clip_path = Path(entry["path"])
+        clip_path = Path(entry.path)
         if keep_mp4:
             known_paths.add(str(clip_path.with_suffix(".mp4")))
         if keep_webp:
@@ -68,7 +68,7 @@ async def _reconcile_disk(
     return await hass.async_add_executor_job(_scan_and_remove, base, known_paths)
 
 
-async def _reconcile_manifest(hass: HomeAssistant, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
+async def _reconcile_manifest(hass: HomeAssistant, base: Path, clips_state: dict[str, ManifestEntry]) -> int:
     """Clear manifest paths whose files are missing or empty on disk."""
 
     def _check_paths(rel_paths: list[tuple[str, str]]) -> set[str]:
@@ -82,16 +82,13 @@ async def _reconcile_manifest(hass: HomeAssistant, base: Path, clips_state: dict
                 missing.add(clip_id)
         return missing
 
-    rel_paths: list[tuple[str, str]] = [
-        (cid, entry["path"]) for cid, entry in clips_state.items() if isinstance(entry, dict) and entry.get("path")
-    ]
+    rel_paths: list[tuple[str, str]] = [(cid, entry.path) for cid, entry in clips_state.items() if entry.path]
     if not rel_paths:
         return 0
     missing = await hass.async_add_executor_job(_check_paths, rel_paths)
     for cid in missing:
         entry = clips_state.get(cid)
-        if not entry:
+        if entry is None:
             continue
-        entry["path"] = ""
-        entry.pop("meta_hash", None)
+        entry.clear_for_redownload()
     return len(missing)

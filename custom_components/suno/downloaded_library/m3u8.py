@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
-from .contracts import DownloadItem
+from .contracts import DownloadItem, ManifestEntry
 from .paths import _safe_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def _write_m3u8_playlists(
     base: Path,
-    clips_state: dict[str, Any],
+    clips_state: dict[str, ManifestEntry],
     desired: list[DownloadItem],
     source_to_name: dict[str, str] | None = None,
     playlist_order: dict[str, list[str]] | None = None,
@@ -32,10 +31,10 @@ def _write_m3u8_playlists(
     track_info: dict[str, tuple[str, str, int]] = {}
     for item in desired:
         entry = clips_state.get(item.clip.id)
-        if not entry or not entry.get("path"):
+        if entry is None or not entry.path:
             continue
-        abs_path = str(base / entry["path"])
-        title = entry.get("title") or item.clip.title or "Untitled"
+        abs_path = str(base / entry.path)
+        title = entry.title or item.clip.title or "Untitled"
         title = title.replace("\n", " ").replace("\r", "")
         duration = int(item.clip.duration) if item.clip.duration else -1
         track_info[item.clip.id] = (abs_path, title, duration)

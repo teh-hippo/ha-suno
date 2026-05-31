@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -32,9 +33,11 @@ from .contracts import (
     DesiredDownloadPlan,
     DownloadedLibraryAudio,
     DownloadedLibraryCache,
+    DownloadedLibraryState,
     DownloadedLibraryStatus,
     DownloadedLibraryStorage,
     DownloadItem,
+    ManifestEntry,
     RenderedAudio,
     RetagResult,
 )
@@ -48,15 +51,7 @@ from .filesystem import (
 from .m3u8 import _write_m3u8_playlists
 from .metadata import _album_for_clip, _manifest_album_for_clip
 from .paths import _clip_path, _safe_name, _video_clip_path
-from .planning import (
-    _add_clip,
-    _apply_clip_metadata,
-    _apply_file_state,
-    _clear_for_redownload,
-    _clip_entry,
-    _needs_retag,
-    build_desired,
-)
+from .planning import _add_clip, build_desired
 from .reconciliation import _reconcile_disk as _reconcile_disk_fn
 from .reconciliation import _reconcile_manifest as _reconcile_manifest_fn
 from .source_modes import (
@@ -115,28 +110,32 @@ class DownloadedLibrary:
         self._audio = audio
         self._cache = cache or NullDownloadedLibraryCache()
         self._status_callback = status_callback
-        self._state: dict[str, Any] = {"clips": {}, "last_download": None}
+        self._state: DownloadedLibraryState = DownloadedLibraryState()
         self._download_path = download_path
         self._video_art_mode = video_art_mode
         self._video_art_settings = video_art_settings or VideoArtSettings()
-        self._ffmpeg_binary: str = ""
+        self.ffmpeg_binary: str = ""
         self._running = False
-        self._errors = self._pending = 0
+        self.errors = self.pending = 0
         self._last_result = ""
-        self._clip_index: dict[str, SunoClip] = {}
+        self.clip_index: dict[str, SunoClip] = {}
 
     @property
     def storage(self) -> DownloadedLibraryStorage:
         return self._storage
 
     @property
-    def state(self) -> dict[str, Any]:
+    def state(self) -> DownloadedLibraryState:
         return self._state
 
     @state.setter
-    def state(self, value: dict[str, Any]) -> None:
+    def state(self, value: DownloadedLibraryState | dict[str, Any]) -> None:
+        # Accept legacy dict shape for backward-compatibility (tests, persisted
+        # state); auto-convert at the seam so the rest of the engine is typed.
+        if not isinstance(value, DownloadedLibraryState):
+            value = DownloadedLibraryState.from_dict(value)
         self._state = value
-        self._last_result = value.get("last_result", self._last_result)
+        self._last_result = value.last_result or self._last_result
 
     @property
     def download_path(self) -> str:
@@ -173,14 +172,6 @@ class DownloadedLibrary:
         self._video_art_mode = VIDEO_ART_DOWNLOAD if value else VIDEO_ART_OFF
 
     @property
-    def ffmpeg_binary(self) -> str:
-        return self._ffmpeg_binary
-
-    @ffmpeg_binary.setter
-    def ffmpeg_binary(self, value: str) -> None:
-        self._ffmpeg_binary = value
-
-    @property
     def audio(self) -> DownloadedLibraryAudio | None:
         return self._audio
 
@@ -205,56 +196,31 @@ class DownloadedLibrary:
         self._running = value
 
     @property
-    def errors(self) -> int:
-        return self._errors
-
-    @errors.setter
-    def errors(self, value: int) -> None:
-        self._errors = value
-
-    @property
-    def pending(self) -> int:
-        return self._pending
-
-    @pending.setter
-    def pending(self, value: int) -> None:
-        self._pending = value
-
-    @property
     def last_result(self) -> str:
         return self._last_result
 
     @last_result.setter
     def last_result(self, value: str) -> None:
         self._last_result = value
-
-    @property
-    def clip_index(self) -> dict[str, SunoClip]:
-        return self._clip_index
-
-    @clip_index.setter
-    def clip_index(self, value: dict[str, SunoClip]) -> None:
-        self._clip_index = value
+        self._state.last_result = value
 
     @property
     def last_download(self) -> str | None:
-        return self._state.get("last_download") or self._state.get("last_sync")
+        return self._state.last_download
 
     @property
     def total_files(self) -> int:
-        return len(self._state.get("clips", {}))
+        return len(self._state.clips)
 
     @property
     def library_size_mb(self) -> float:
-        return round(sum(int(e.get("size", 0)) for e in self._state.get("clips", {}).values()) / 1048576, 1)
+        return round(sum(entry.size for entry in self._state.clips.values()) / 1048576, 1)
 
     @property
     def source_breakdown(self) -> dict[str, int]:
-        from collections import Counter  # noqa: PLC0415
-
         counts: Counter[str] = Counter()
-        for entry in self._state.get("clips", {}).values():
-            for src in entry.get("sources", []):
+        for entry in self._state.clips.values():
+            for src in entry.sources:
                 counts[src] += 1
         return dict(counts)
 
@@ -262,8 +228,8 @@ class DownloadedLibrary:
     def status(self) -> DownloadedLibraryStatus:
         return DownloadedLibraryStatus(
             running=self._running,
-            pending=self._pending,
-            errors=self._errors,
+            pending=self.pending,
+            errors=self.errors,
             last_result=self._last_result,
             last_download=self.last_download,
             file_count=self.total_files,
@@ -273,18 +239,20 @@ class DownloadedLibrary:
 
     async def async_load(self) -> None:
         """Load persisted Downloaded Library state."""
-        if (data := await self._storage.async_load()) and isinstance(data, dict):
-            self.state = data
+        data = await self._storage.async_load()
+        if data and isinstance(data, dict):
+            self.state = DownloadedLibraryState.from_dict(data)
 
     def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return a downloaded file path if it exists and matches metadata."""
         if not self._download_path:
             return None
-        if not (entry := self._state.get("clips", {}).get(clip_id)):
+        entry = self._state.clips.get(clip_id)
+        if entry is None:
             return None
-        if meta_hash and entry.get("meta_hash") and entry["meta_hash"] != meta_hash:
+        if meta_hash and entry.meta_hash and entry.meta_hash != meta_hash:
             return None
-        path = Path(self._download_path) / str(entry["path"])
+        path = Path(self._download_path) / entry.path
         return path if path.is_file() else None
 
     async def async_reconcile(
@@ -306,7 +274,7 @@ class DownloadedLibrary:
             return
         self._download_path = str(download_path)
         self._running = True
-        self._errors = self._pending = 0
+        self.errors = self.pending = 0
         self._publish_status()
         try:
             await self._run_download(
@@ -323,7 +291,7 @@ class DownloadedLibrary:
             raise
         except Exception:
             _LOGGER.exception("Download failed")
-            self._errors += 1
+            self.errors += 1
         finally:
             self._running = False
             self._publish_status()
@@ -346,14 +314,14 @@ class DownloadedLibrary:
         base = Path(download_path)
         if not allow_destructive and _is_empty_suno_library(suno_library):
             self._last_result = "Waiting for Library Refresh"
-            self._pending = 0
+            self.pending = 0
             _LOGGER.info("Skipping destructive Downloaded Library reconciliation until Library Refresh completes")
             return
 
-        self._state.pop("trash", None)
+        self._state.extras.pop("trash", None)
         plan = desired_plan or self.build_desired(options, suno_library)
-        self._clip_index = {item.clip.id: item.clip for item in plan.items}
-        clips_state = dict(self._state.get("clips", {}))
+        self.clip_index = {item.clip.id: item.clip for item in plan.items}
+        clips_state: dict[str, ManifestEntry] = dict(self._state.clips)
 
         missing_on_disk = await self._reconcile_manifest(base, clips_state)
         if missing_on_disk:
@@ -363,7 +331,7 @@ class DownloadedLibrary:
         migrated = await self._migrate_renamed_paths(base, plan.items, clips_state, to_retag)
         if migrated:
             _LOGGER.info("Renamed %d files", migrated)
-            self._state["clips"] = clips_state
+            self._state.clips = clips_state
             await self._save_state(base)
 
         to_download, old_paths_after_download, to_delete, seen_ids = self._plan_actions(
@@ -375,7 +343,7 @@ class DownloadedLibrary:
             allow_destructive=allow_destructive,
         )
 
-        self._pending = len(to_download)
+        self.pending = len(to_download)
         self._publish_status()
         _LOGGER.info(
             "Sync: %d to download, %d to re-tag, %d to remove, %d current",
@@ -388,8 +356,8 @@ class DownloadedLibrary:
             await self.hass.async_add_executor_job(base.mkdir, 0o755, True, True)
         except OSError:
             _LOGGER.error("Cannot create download directory: %s", download_path)
-            self._errors += 1
-            self._pending = 0
+            self.errors += 1
+            self.pending = 0
             return
 
         label = "Initial sync" if initial else "Syncing"
@@ -420,21 +388,21 @@ class DownloadedLibrary:
             to_download_count=len(to_download),
         )
 
-        stored_video_art_mode = self._state.get("video_art_mode")
+        stored_video_art_mode = self._state.video_art_mode
         video_art_mode_changed = stored_video_art_mode is not None and stored_video_art_mode != self._video_art_mode
         if allow_destructive and (downloaded or to_delete or migrated or force or video_art_mode_changed):
             orphans = await self._reconcile_disk(base, clips_state)
             if orphans:
                 _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
         if allow_destructive and stored_video_art_mode != self._video_art_mode:
-            self._state["video_art_mode"] = self._video_art_mode
+            self._state.video_art_mode = self._video_art_mode
             await self._save_state(base)
 
     async def _migrate_renamed_paths(
         self,
         base: Path,
         desired: list[DownloadItem],
-        clips_state: dict[str, Any],
+        clips_state: dict[str, ManifestEntry],
         to_retag: list[DownloadItem],
     ) -> int:
         """Rename existing files whose target path changed (e.g. retitled clips).
@@ -448,8 +416,8 @@ class DownloadedLibrary:
             if item.clip.id not in clips_state:
                 continue
             existing = clips_state[item.clip.id]
-            old_path = existing.get("path", "")
-            new_path = _clip_path(item.clip, existing.get("quality", item.quality))
+            old_path = existing.path
+            new_path = _clip_path(item.clip, existing.quality or item.quality)
             if old_path and old_path != new_path:
                 old_file = base / old_path
                 new_file = base / new_path
@@ -457,7 +425,7 @@ class DownloadedLibrary:
                     if await self.hass.async_add_executor_job(old_file.exists):
                         await self.hass.async_add_executor_job(new_file.parent.mkdir, 0o755, True, True)
                         await self.hass.async_add_executor_job(old_file.rename, new_file)
-                        existing["path"] = new_path
+                        existing.path = new_path
                         migrated += 1
                         to_retag.append(item)
                         _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
@@ -465,14 +433,14 @@ class DownloadedLibrary:
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
-                    _clear_for_redownload(existing)
+                    existing.clear_for_redownload()
         return migrated
 
     def _plan_actions(
         self,
         options: Mapping[str, Any],
         plan: DesiredDownloadPlan,
-        clips_state: dict[str, Any],
+        clips_state: dict[str, ManifestEntry],
         to_retag: list[DownloadItem],
         *,
         force: bool,
@@ -492,34 +460,31 @@ class DownloadedLibrary:
         for item in plan.items:
             seen_ids.add(item.clip.id)
             existing = clips_state.get(item.clip.id)
-            if item.clip.id not in clips_state or force or not (existing and existing.get("path")):
+            if existing is None or force or not existing.path:
                 to_download.append(item)
                 continue
-            existing = clips_state[item.clip.id]
-            existing_quality = existing.get("quality", QUALITY_HIGH)
+            existing_quality = existing.quality or QUALITY_HIGH
             if existing_quality != item.quality:
-                if old_path := existing.get("path"):
-                    old_paths_after_download[item.clip.id] = str(old_path)
+                if existing.path:
+                    old_paths_after_download[item.clip.id] = existing.path
                 to_download.append(item)
             else:
-                existing["sources"] = item.sources
-                existing["source_modes"] = _source_modes_for(item.sources, options)
-                resolved_album = _manifest_album_for_clip(item.clip, self._clip_index)
-                retag_reason = _needs_retag(existing, item.clip, resolved_album)
+                existing.sources = list(item.sources)
+                existing.source_modes = _source_modes_for(item.sources, options)
+                resolved_album = _manifest_album_for_clip(item.clip, self.clip_index)
+                retag_reason = existing.needs_retag(item.clip, resolved_album)
                 if retag_reason is not None:
                     _LOGGER.debug("Retag queued for %s: %s", item.clip.id, retag_reason)
                     to_retag.append(item)
                 else:
-                    _apply_clip_metadata(existing, item.clip, album=resolved_album)
+                    existing.apply_clip_metadata(item.clip, album=resolved_album)
 
         to_delete: list[str] = []
         if allow_destructive:
-            for cid in clips_state:
+            for cid, entry in clips_state.items():
                 if cid in seen_ids or cid in plan.preserved_ids:
                     continue
-                entry = clips_state[cid]
-                sources = entry.get("sources", [])
-                if all(not _source_preserves_files(src, options) for src in sources):
+                if all(not _source_preserves_files(src, options) for src in entry.sources):
                     to_delete.append(cid)
 
         return to_download, old_paths_after_download, to_delete, seen_ids
@@ -528,7 +493,7 @@ class DownloadedLibrary:
         self,
         base: Path,
         to_retag: list[DownloadItem],
-        clips_state: dict[str, Any],
+        clips_state: dict[str, ManifestEntry],
         to_download: list[DownloadItem],
     ) -> int:
         """Re-tag existing files; queue missing/failed targets for re-download.
@@ -536,16 +501,16 @@ class DownloadedLibrary:
         Mutates ``clips_state`` (refreshing denormalised metadata on success or
         clearing ``path``/``meta_hash`` when the target is missing) and appends to
         ``to_download`` when a target needs to be re-fetched. Increments
-        ``self._errors`` for retag failures other than missing targets.
+        ``self.errors`` for retag failures other than missing targets.
         Returns the number of successfully retagged files.
         """
         retagged = 0
         retag_missing = 0
         for item in to_retag:
             existing = clips_state.get(item.clip.id)
-            if not existing or not existing.get("path"):
+            if existing is None or not existing.path:
                 continue
-            target = base / existing["path"]
+            target = base / existing.path
             result = await self._retag_clip(item, target)
             if result is RetagResult.OK:
                 try:
@@ -553,31 +518,30 @@ class DownloadedLibrary:
                 except FileNotFoundError:
                     _LOGGER.info(
                         "Re-tag target missing after re-tag, re-downloading: %s",
-                        existing["path"],
+                        existing.path,
                     )
-                    _clear_for_redownload(existing)
+                    existing.clear_for_redownload()
                     to_download.append(item)
                     retag_missing += 1
                     continue
                 except OSError:
                     _LOGGER.exception("Failed to stat re-tagged file %s", target)
-                    self._errors += 1
+                    self.errors += 1
                     continue
-                _apply_clip_metadata(
-                    existing,
+                existing.apply_clip_metadata(
                     item.clip,
-                    album=_manifest_album_for_clip(item.clip, self._clip_index),
+                    album=_manifest_album_for_clip(item.clip, self.clip_index),
                 )
-                _apply_file_state(existing, item.clip, stat.st_size)
+                existing.apply_file_state(item.clip, stat.st_size)
                 retagged += 1
-                _LOGGER.debug("Re-tagged: %s", existing["path"])
+                _LOGGER.debug("Re-tagged: %s", existing.path)
             elif result is RetagResult.MISSING:
-                _LOGGER.info("Re-tag target missing, re-downloading: %s", existing["path"])
-                _clear_for_redownload(existing)
+                _LOGGER.info("Re-tag target missing, re-downloading: %s", existing.path)
+                existing.clear_for_redownload()
                 to_download.append(item)
                 retag_missing += 1
             else:
-                self._errors += 1
+                self.errors += 1
         if retagged:
             _LOGGER.info("Re-tagged %d files", retagged)
         if retag_missing:
@@ -589,7 +553,7 @@ class DownloadedLibrary:
         options: Mapping[str, Any],
         base: Path,
         to_download: list[DownloadItem],
-        clips_state: dict[str, Any],
+        clips_state: dict[str, ManifestEntry],
         old_paths_after_download: dict[str, str],
         *,
         force: bool,
@@ -606,47 +570,49 @@ class DownloadedLibrary:
                 if stat.st_size == 0:
                     _LOGGER.warning("Empty file on disk, re-downloading: %s", rel_path)
                 else:
-                    clips_state[item.clip.id] = _clip_entry(
+                    clips_state[item.clip.id] = ManifestEntry.create(
                         item,
                         rel_path,
                         stat.st_size,
                         options,
-                        album=_manifest_album_for_clip(item.clip, self._clip_index),
+                        album=_manifest_album_for_clip(item.clip, self.clip_index),
                     )
                     await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                     reconciled += 1
                     continue
             if (file_size := await self._download_clip(item, base, rel_path, force=force)) is not None:
-                clips_state[item.clip.id] = _clip_entry(
+                clips_state[item.clip.id] = ManifestEntry.create(
                     item,
                     rel_path,
                     file_size,
                     options,
-                    album=_manifest_album_for_clip(item.clip, self._clip_index),
+                    album=_manifest_album_for_clip(item.clip, self.clip_index),
                 )
                 await self._delete_replaced_quality(base, old_paths_after_download, item, rel_path)
                 downloaded += 1
             else:
-                self._errors += 1
-            self._pending = max(0, len(to_download) - downloaded - reconciled)
-            self._last_result = f"{label} ({self._pending} remaining)" if self._pending > 0 else label
+                self.errors += 1
+            self.pending = max(0, len(to_download) - downloaded - reconciled)
+            self._last_result = f"{label} ({self.pending} remaining)" if self.pending > 0 else label
             self._publish_status()
         if reconciled:
             _LOGGER.info("Reconciled %d files already on disk", reconciled)
         return downloaded, reconciled
 
-    async def _sync_cover_art(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, Any]) -> int:
+    async def _sync_cover_art(
+        self, base: Path, desired: list[DownloadItem], clips_state: dict[str, ManifestEntry]
+    ) -> int:
         """Refresh cover.jpg + .cover_hash for every desired clip already on disk."""
         session = async_get_clientsession(self.hass)
         covers_fixed = 0
         for item in desired:
             entry = clips_state.get(item.clip.id)
-            if not entry or not entry.get("path"):
+            if entry is None or not entry.path:
                 continue
             image_url = selected_image_url(item.clip) or None
             if not image_url:
                 continue
-            target = base / entry["path"]
+            target = base / entry.path
             if await _update_cover_art(
                 self.hass,
                 session,
@@ -661,7 +627,7 @@ class DownloadedLibrary:
             _LOGGER.info("Updated %d cover.jpg files", covers_fixed)
         return covers_fixed
 
-    async def _sync_videos(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, Any]) -> int:
+    async def _sync_videos(self, base: Path, desired: list[DownloadItem], clips_state: dict[str, ManifestEntry]) -> int:
         """Download video cover art and optionally convert to animated WebP."""
         mode = self._video_art_mode
         if mode == VIDEO_ART_OFF or not self._audio:
@@ -671,12 +637,12 @@ class DownloadedLibrary:
 
         for item in desired:
             entry = clips_state.get(item.clip.id)
-            if not entry or not entry.get("path"):
+            if entry is None or not entry.path:
                 continue
             if not item.clip.video_cover_url:
                 continue
             current_hash = video_url_hash(item.clip.video_cover_url)
-            stored_hash = entry.get("video_url_hash", "")
+            stored_hash = entry.video_url_hash
             mp4_target = base / _video_clip_path(item.clip)
             mp4_exists = await self.hass.async_add_executor_job(mp4_target.exists)
 
@@ -687,17 +653,17 @@ class DownloadedLibrary:
                 await self._audio.download_video(item.clip.video_cover_url, mp4_target)
                 mp4_exists = await self.hass.async_add_executor_job(mp4_target.exists)
                 if mp4_exists:
-                    entry["video_url_hash"] = current_hash
+                    entry.video_url_hash = current_hash
 
             if not mp4_exists:
                 continue
 
             # Handle WebP conversion for convert/both modes
-            if mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH) and self._ffmpeg_binary:
+            if mode in (VIDEO_ART_CONVERT, VIDEO_ART_BOTH) and self.ffmpeg_binary:
                 webp_target = mp4_target.parent / "cover.webp"
                 webp_exists = await self.hass.async_add_executor_job(webp_target.exists)
-                stored_settings = entry.get("video_art_settings")
-                failed_record = entry.get("video_art_failed")
+                stored_settings = entry.video_art_settings
+                failed_record = entry.video_art_failed
                 already_exhausted = (
                     isinstance(failed_record, dict)
                     and failed_record.get("settings") == current_settings
@@ -710,14 +676,14 @@ class DownloadedLibrary:
                 if needs_conversion:
                     converted = await convert_mp4_to_webp(
                         self.hass,
-                        self._ffmpeg_binary,
+                        self.ffmpeg_binary,
                         mp4_target,
                         webp_target,
                         self._video_art_settings,
                     )
                     if converted:
-                        entry["video_art_settings"] = current_settings
-                        entry.pop("video_art_failed", None)
+                        entry.video_art_settings = current_settings
+                        entry.video_art_failed = None
                     else:
                         prev_attempts = 0
                         if (
@@ -726,14 +692,14 @@ class DownloadedLibrary:
                             and failed_record.get("url_hash") == current_hash
                         ):
                             prev_attempts = int(failed_record.get("attempts", 0))
-                        entry["video_art_failed"] = {
+                        entry.video_art_failed = {
                             "settings": current_settings,
                             "url_hash": current_hash,
                             "attempts": prev_attempts + 1,
                         }
 
             # In convert mode, remove the MP4 after successful WebP generation
-            if mode == VIDEO_ART_CONVERT and self._ffmpeg_binary:
+            if mode == VIDEO_ART_CONVERT and self.ffmpeg_binary:
                 webp_target = mp4_target.parent / "cover.webp"
                 if await self.hass.async_add_executor_job(webp_target.exists):
                     await self.hass.async_add_executor_job(mp4_target.unlink, True)
@@ -743,17 +709,20 @@ class DownloadedLibrary:
             _LOGGER.info("Processed %d video cover art files (mode=%s)", videos_processed, mode)
         return videos_processed
 
-    async def _prune_removed_entries(self, base: Path, to_delete: list[str], clips_state: dict[str, Any]) -> None:
+    async def _prune_removed_entries(
+        self, base: Path, to_delete: list[str], clips_state: dict[str, ManifestEntry]
+    ) -> None:
         """Drop deleted entries from manifest and clean their files + sidecars."""
         for clip_id in to_delete:
-            if (entry := clips_state.pop(clip_id, None)) and entry.get("path"):
-                await _delete_file(self.hass, base, entry["path"])
-                await self._delete_sidecars(base, str(entry["path"]))
+            entry = clips_state.pop(clip_id, None)
+            if entry is not None and entry.path:
+                await _delete_file(self.hass, base, entry.path)
+                await self._delete_sidecars(base, entry.path)
 
     async def _finalize_state(
         self,
         base: Path,
-        clips_state: dict[str, Any],
+        clips_state: dict[str, ManifestEntry],
         plan: DesiredDownloadPlan,
         options: Mapping[str, Any],
         *,
@@ -765,14 +734,14 @@ class DownloadedLibrary:
         to_download_count: int,
     ) -> None:
         """Commit manifest, last_result, and timestamp; write m3u8 playlists."""
-        self._state["clips"] = clips_state
-        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
-        self._pending = max(0, to_download_count - downloaded - reconciled)
-        if self._pending > 0:
-            self._last_result = f"Syncing ({self._pending} remaining)"
+        self._state.clips = clips_state
+        self._state.last_download = datetime.now(tz=UTC).isoformat()
+        self.pending = max(0, to_download_count - downloaded - reconciled)
+        if self.pending > 0:
+            self._last_result = f"Syncing ({self.pending} remaining)"
         else:
             self._last_result = _build_download_summary(downloaded, removed, 0, migrated, retagged)
-        self._state["last_result"] = self._last_result
+        self._state.last_result = self._last_result
         await self._save_state(base)
 
         if options.get(CONF_CREATE_PLAYLISTS):
@@ -832,9 +801,9 @@ class DownloadedLibrary:
 
     def build_desired(self, options: Mapping[str, Any], suno_library: SunoData) -> DesiredDownloadPlan:
         """Build the desired Downloaded Library records from a Suno Library."""
-        return build_desired(options, suno_library, self._state.get("clips", {}))
+        return build_desired(options, suno_library, self._state.clips)
 
-    async def _reconcile_disk(self, base: Path, clips_state: dict[str, Any]) -> int:
+    async def _reconcile_disk(self, base: Path, clips_state: dict[str, ManifestEntry]) -> int:
         """Remove orphaned audio and video files not tracked in download state."""
         return await _reconcile_disk_fn(self.hass, base, clips_state, self._video_art_mode)
 
@@ -857,7 +826,7 @@ class DownloadedLibrary:
                 return int(stat.st_size)
 
         _LOGGER.info("Downloading: %s (%s)", clip.title, item.quality)
-        album_title = _album_for_clip(clip, self._clip_index)
+        album_title = _album_for_clip(clip, self.clip_index)
         image_url = selected_image_url(clip) or None
         image_data = await self._audio.fetch_image(image_url) if image_url else None
         meta = replace(clip.to_track_metadata(album=album_title), image_data=image_data)
@@ -897,7 +866,7 @@ class DownloadedLibrary:
             _LOGGER.exception("Failed to download %s", clip.id)
             return None
 
-    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, dict[str, Any]]) -> int:
+    async def _reconcile_manifest(self, base: Path, clips_state: dict[str, ManifestEntry]) -> int:
         """Clear manifest paths whose files are missing or empty on disk."""
         return await _reconcile_manifest_fn(self.hass, base, clips_state)
 
@@ -933,7 +902,7 @@ class DownloadedLibrary:
                 return RetagResult.FAILED
 
         meta = replace(
-            item.clip.to_track_metadata(album=_album_for_clip(item.clip, self._clip_index)),
+            item.clip.to_track_metadata(album=_album_for_clip(item.clip, self.clip_index)),
             image_data=image_data,
         )
         try:
@@ -979,34 +948,31 @@ class DownloadedLibrary:
 
         self._download_path = str(download_path)
         base = Path(str(download_path))
-        clips_state = dict(self._state.get("clips", {}))
+        clips_state: dict[str, ManifestEntry] = dict(self._state.clips)
         removed = 0
         preserved = 0
 
         for clip_id, entry in list(clips_state.items()):
-            if not isinstance(entry, dict):
-                clips_state.pop(clip_id, None)
-                continue
-            sources = [str(source) for source in entry.get("sources", [])]
+            sources = list(entry.sources)
             source_modes = _entry_source_modes(entry, sources, previous_options)
             archive_sources = [source for source in sources if source_modes.get(source) == DOWNLOAD_MODE_ARCHIVE]
             if archive_sources or (sources and not source_modes):
                 preserved_sources = archive_sources or sources
-                entry["sources"] = preserved_sources
-                entry["source_modes"] = {
+                entry.sources = preserved_sources
+                entry.source_modes = {
                     source: source_modes.get(source, DOWNLOAD_MODE_ARCHIVE) for source in preserved_sources
                 }
                 preserved += 1
                 continue
 
             clips_state.pop(clip_id, None)
-            if entry.get("path"):
-                await self._delete_clip_artifacts(base, str(entry["path"]))
+            if entry.path:
+                await self._delete_clip_artifacts(base, entry.path)
             removed += 1
 
         await self._delete_generated_playlists(base)
-        self._state["clips"] = clips_state
-        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
+        self._state.clips = clips_state
+        self._state.last_download = datetime.now(tz=UTC).isoformat()
         if removed and preserved:
             self._last_result = f"Downloads disabled: {removed} removed, {preserved} archived"
         elif removed:
@@ -1015,7 +981,7 @@ class DownloadedLibrary:
             self._last_result = f"Downloads disabled: {preserved} archived"
         else:
             self._last_result = "Downloads disabled"
-        self._state["last_result"] = self._last_result
+        self._state.last_result = self._last_result
         await self._save_state(base)
         self._publish_status()
 
@@ -1025,25 +991,22 @@ class DownloadedLibrary:
             return
 
         base = Path(old_path)
-        clips_state = dict(self._state.get("clips", {}))
+        clips_state: dict[str, ManifestEntry] = dict(self._state.clips)
         removed = 0
 
         for clip_id, entry in list(clips_state.items()):
             clips_state.pop(clip_id, None)
             removed += 1
-            if not isinstance(entry, dict):
-                continue
-            rel_path = entry.get("path")
-            if rel_path:
-                await self._delete_clip_artifacts(base, str(rel_path))
+            if entry.path:
+                await self._delete_clip_artifacts(base, entry.path)
 
         await self._delete_generated_playlists(base)
         await _delete_file(self.hass, base, _MANIFEST_FILENAME)
-        self._state["clips"] = clips_state
-        self._state["last_download"] = datetime.now(tz=UTC).isoformat()
+        self._state.clips = clips_state
+        self._state.last_download = datetime.now(tz=UTC).isoformat()
         self._last_result = f"Download path changed: {removed} removed" if removed else "Download path changed"
-        self._state["last_result"] = self._last_result
-        await self._storage.async_save(self._state)
+        self._state.last_result = self._last_result
+        await self._storage.async_save(self._state.to_dict())
         self._publish_status()
 
     async def _delete_clip_artifacts(self, base: Path, rel_path: str) -> None:
@@ -1079,7 +1042,8 @@ class DownloadedLibrary:
         await self.hass.async_add_executor_job(_cleanup, download_path)
 
     async def _save_state(self, base: Path) -> None:
-        await self._storage.async_save(self._state)
+        payload = self._state.to_dict()
+        await self._storage.async_save(payload)
 
         def _write_manifest(b: Path, state: dict[str, Any]) -> None:
             try:
@@ -1087,20 +1051,22 @@ class DownloadedLibrary:
             except OSError:
                 _LOGGER.warning("Failed to write manifest file", exc_info=True)
 
-        await self.hass.async_add_executor_job(_write_manifest, base, self._state)
+        await self.hass.async_add_executor_job(_write_manifest, base, payload)
 
 
 __all__ = [
     "DesiredDownloadPlan",
     "DownloadItem",
+    "DownloadedLibrary",
     "DownloadedLibraryAudio",
     "DownloadedLibraryCache",
-    "DownloadedLibrary",
+    "DownloadedLibraryState",
     "DownloadedLibraryStatus",
     "DownloadedLibraryStorage",
     "HomeAssistantDownloadedLibraryAudio",
     "HomeAssistantDownloadedLibraryStorage",
     "InMemoryDownloadedLibraryStorage",
+    "ManifestEntry",
     "NullDownloadedLibraryCache",
     "RenderedAudio",
     "RetagResult",
