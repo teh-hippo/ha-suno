@@ -27,6 +27,44 @@ class SunoUser:
     display_name: str
 
 
+_API_TOP_LEVEL: tuple[tuple[str, str], ...] = (
+    # SunoClip field, raw API key. Lineage fields (root_ancestor_id,
+    # lineage_status, album_title) and the legacy display_name/handle
+    # fields live at the top of the API response, alongside id/title.
+    ("is_liked", "is_liked"),
+    ("status", "status"),
+    ("created_at", "created_at"),
+    ("lyrics", "lyrics"),
+    ("model_name", "model_name"),
+    ("major_model_version", "major_model_version"),
+    ("display_name", "display_name"),
+    ("handle", "handle"),
+    ("root_ancestor_id", "root_ancestor_id"),
+    ("lineage_status", "lineage_status"),
+    ("album_title", "album_title"),
+)
+
+_API_TOP_LEVEL_CDN_URL: tuple[tuple[str, str], ...] = (
+    # Same as _API_TOP_LEVEL, but values pass through _fix_cdn_url to
+    # rewrite cdn2.suno.ai → cdn1.suno.ai.
+    ("image_url", "image_url"),
+    ("image_large_url", "image_large_url"),
+    ("video_url", "video_url"),
+    ("video_cover_url", "video_cover_url"),
+)
+
+_API_METADATA: tuple[tuple[str, str], ...] = (
+    # SunoClip field, raw["metadata"] key. Content fields (tags, prompt,
+    # has_vocal, lyrics-derived) live under the "metadata" sub-dict in
+    # the API response shape.
+    ("tags", "tags"),
+    ("clip_type", "type"),
+    ("prompt", "prompt"),
+    ("gpt_description_prompt", "gpt_description_prompt"),
+    ("edited_clip_id", "edited_clip_id"),
+)
+
+
 @dataclass(slots=True)
 class SunoClip:
     id: str
@@ -70,10 +108,15 @@ class SunoClip:
         ``raw["metadata"]``. The lineage fields were added at top level
         in v6.3.1.
 
+        Field routing is declared in the module-level tables
+        (``_API_TOP_LEVEL``, ``_API_TOP_LEVEL_CDN_URL``,
+        ``_API_METADATA``) so adding a new clip field requires one new
+        entry in the right table, not a five-place hand-rolled edit
+        like the v6.3.1 lineage fix had to do.
+
         This is distinct from :func:`_safe_clip`, which reads every
         field from a *flat* dict because that's the on-disk persistence
-        shape. Any new clip field that needs to round-trip through both
-        API parsing AND persistence must be added in both call sites.
+        shape.
         """
         metadata = raw.get("metadata") or {}
         clip_id = raw.get("id", "")
@@ -83,36 +126,25 @@ class SunoClip:
         # CDN URL which is permanent.
         if audio_url and "audiopipe" in audio_url and clip_id:
             audio_url = f"{CDN_BASE_URL}/{clip_id}.mp3"
-        return cls(
-            id=clip_id,
-            title=raw.get("title", "Untitled"),
-            audio_url=audio_url,
-            image_url=_fix_cdn_url(raw.get("image_url")),
-            image_large_url=_fix_cdn_url(raw.get("image_large_url")),
-            is_liked=raw.get("is_liked", False),
-            status=raw.get("status", "unknown"),
-            created_at=raw.get("created_at", ""),
-            tags=metadata.get("tags", ""),
-            duration=metadata.get("duration") or 0.0,
-            clip_type=metadata.get("type", ""),
-            has_vocal=metadata.get("has_vocal", False),
-            lyrics=raw.get("lyrics", ""),
-            prompt=metadata.get("prompt", ""),
-            gpt_description_prompt=metadata.get("gpt_description_prompt", ""),
-            video_url=_fix_cdn_url(raw.get("video_url")),
-            video_is_stale=metadata.get("video_is_stale"),
-            video_cover_url=_fix_cdn_url(raw.get("video_cover_url")),
-            model_name=raw.get("model_name", ""),
-            major_model_version=raw.get("major_model_version", ""),
-            display_name=raw.get("display_name", ""),
-            handle=raw.get("handle", ""),
-            edited_clip_id=metadata.get("edited_clip_id", ""),
-            is_remix=bool(metadata.get("is_remix", False)),
-            history=metadata.get("history"),
-            root_ancestor_id=raw.get("root_ancestor_id", ""),
-            lineage_status=raw.get("lineage_status", ""),
-            album_title=raw.get("album_title", ""),
-        )
+        kwargs: dict[str, Any] = {
+            "id": clip_id,
+            "title": raw.get("title", "Untitled"),
+            "audio_url": audio_url,
+            "duration": metadata.get("duration") or 0.0,
+            "has_vocal": metadata.get("has_vocal", False),
+            "video_is_stale": metadata.get("video_is_stale"),
+            "is_remix": bool(metadata.get("is_remix", False)),
+            "history": metadata.get("history"),
+        }
+        for field_name, raw_key in _API_TOP_LEVEL:
+            kwargs[field_name] = raw.get(raw_key, "" if field_name != "is_liked" else False)
+        kwargs["status"] = raw.get("status", "unknown")
+        kwargs["is_liked"] = raw.get("is_liked", False)
+        for field_name, raw_key in _API_TOP_LEVEL_CDN_URL:
+            kwargs[field_name] = _fix_cdn_url(raw.get(raw_key))
+        for field_name, raw_key in _API_METADATA:
+            kwargs[field_name] = metadata.get(raw_key, "")
+        return cls(**kwargs)
 
     def to_track_metadata(
         self,
@@ -350,7 +382,7 @@ def _safe_playlists(raw_list: list[dict[str, Any]]) -> list[SunoPlaylist]:
     return result
 
 
-@dataclass
+@dataclass(slots=True)
 class SunoData:
     """Aggregate Suno Library snapshot used across the integration."""
 

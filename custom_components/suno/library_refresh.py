@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Protocol
 
 from homeassistant.core import HomeAssistant
@@ -266,7 +266,7 @@ class LibraryRefresh:
         except SunoConnectionError as err:
             _LOGGER.warning("Cannot reach Suno during Library Refresh, preserving previous library: %s", err)
             stale_sections.update(("clips", "liked_clips", "playlists", "playlist_clips", "credits"))
-            return _with_stale_sections(previous, stale_sections)
+            return replace(previous, stale_sections=tuple(sorted(stale_sections)))
 
         clips_result, liked_result, playlists_result, credits_result = await asyncio.gather(
             self._source.get_all_songs(),
@@ -520,19 +520,6 @@ def _payload_from_data(data: SunoData) -> dict[str, Any]:
         "playlists": [asdict(p) for p in data.playlists],
         "playlist_clips": {pid: [asdict(c) for c in pclips] for pid, pclips in data.playlist_clips.items()},
     }
-
-
-def _with_stale_sections(data: SunoData, stale_sections: set[str]) -> SunoData:
-    return SunoData(
-        clips=data.clips,
-        liked_clips=data.liked_clips,
-        playlists=data.playlists,
-        playlist_clips=data.playlist_clips,
-        credits=data.credits,
-        stale_sections=tuple(sorted(stale_sections)),
-        hidden_pending_remix_count=data.hidden_pending_remix_count,
-        unavailable_lineage_count=data.unavailable_lineage_count,
-    )
 
 
 def _build_clip_index(data: SunoData) -> dict[str, SunoClip]:

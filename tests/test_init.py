@@ -361,7 +361,7 @@ async def test_force_download_refreshes_library_before_reconcile(
     coordinator.data = SunoData()
     coordinator.data_version = 2
     coordinator._refresh_task = None
-    coordinator._async_fetch_remote_data = AsyncMock(return_value=fresh_data)
+    coordinator.async_fetch_remote = AsyncMock(return_value=fresh_data)
     coordinator.async_set_updated_data = MagicMock()
 
     entry = make_entry(options={CONF_DOWNLOAD_PATH: str(tmp_path)})
@@ -382,7 +382,7 @@ async def test_force_download_refreshes_library_before_reconcile(
     with patch.object(engine, "async_reconcile", new_callable=AsyncMock) as reconcile:
         await runtime.async_force_download()
 
-    coordinator._async_fetch_remote_data.assert_awaited_once()
+    coordinator.async_fetch_remote.assert_awaited_once()
     coordinator.async_set_updated_data.assert_called_once_with(fresh_data)
     reconcile.assert_awaited_once()
     assert reconcile.await_args.args[1] is fresh_data

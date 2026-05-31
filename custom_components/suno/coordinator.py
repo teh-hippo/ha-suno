@@ -83,6 +83,17 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
     def _ancestor_task(self) -> asyncio.Task[None] | None:
         return None
 
+    @property
+    def pending_initial_refresh(self) -> bool:
+        """True while the first remote-fetch task is in flight.
+
+        Public surface for ``HomeAssistantRuntime`` to gate destructive
+        reconciliation on an empty initial library; replaces the
+        previous ``getattr(coordinator, "_refresh_task", None)`` access.
+        """
+        task = self.library_refresh.refresh_task
+        return task is not None and not task.done()
+
     async def async_load_stored_data(self) -> SunoData | None:
         """Load the Stored Library through the Library Refresh seam."""
         data = await self.library_refresh.async_load_stored_library()
@@ -107,8 +118,14 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             self.library_refresh.current_data = SunoData()
         return await self.library_refresh.async_update()
 
-    async def _async_fetch_remote_data(self) -> SunoData:
-        """Fetch one remote Library Refresh snapshot for tests and manual callers."""
+    async def async_fetch_remote(self) -> SunoData:
+        """Fetch one remote Library Refresh snapshot.
+
+        Public entry point used by ``HomeAssistantRuntime`` when the user
+        forces a download and we need the freshest library before
+        reconciling. Replaces the previous ``_async_fetch_remote_data``
+        private-method call with ``# noqa: SLF001``.
+        """
         try:
             snapshot = await self.library_refresh.async_refresh_once()
         except SunoAuthError as err:
@@ -121,6 +138,10 @@ class SunoCoordinator(DataUpdateCoordinator[SunoData]):
             ) from err
         self._sync_identity(snapshot.identity)
         return snapshot.data
+
+    # Compatibility alias so existing tests that call the underscore-prefixed
+    # name continue to work; new code uses ``async_fetch_remote``.
+    _async_fetch_remote_data = async_fetch_remote
 
     def _schedule_remote_refresh(self) -> None:
         """Compatibility wrapper for the Library Refresh scheduler."""

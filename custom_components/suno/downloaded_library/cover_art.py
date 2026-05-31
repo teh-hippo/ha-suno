@@ -11,37 +11,6 @@ from ..audio_stream import fetch_album_art
 from ..models import image_url_hash
 from .filesystem import _write_file, _write_track_sidecar
 
-_LEGACY_COVER_HASH_KEY = ""
-
-
-def _parse_cover_hashes(raw: str) -> dict[str, str]:
-    """Parse .cover_hash contents, including the legacy single-hash format.
-
-    Kept as a free function for backwards compatibility with existing
-    callers and tests. New code should prefer :class:`CoverHashFile`,
-    which owns parse / serialise / get / set / legacy-migration in one
-    place.
-    """
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    if len(lines) == 1 and "=" not in lines[0]:
-        return {_LEGACY_COVER_HASH_KEY: lines[0]}
-
-    hashes: dict[str, str] = {}
-    for line in lines:
-        if "=" not in line:
-            continue
-        clip_id, hash_value = line.split("=", 1)
-        clip_id = clip_id.strip()
-        hash_value = hash_value.strip()
-        if clip_id and hash_value:
-            hashes[clip_id] = hash_value
-    return hashes
-
-
-def _serialise_cover_hashes(hashes: dict[str, str]) -> str:
-    """Serialise .cover_hash contents with deterministic ordering."""
-    return "".join(f"{clip_id}={hashes[clip_id]}\n" for clip_id in sorted(hashes) if clip_id != _LEGACY_COVER_HASH_KEY)
-
 
 class CoverHashFile:
     """Owns parse / serialise / get / set / legacy-migration for ``.cover_hash``.
@@ -53,6 +22,8 @@ class CoverHashFile:
     per-clip dict format.
     """
 
+    _LEGACY_KEY = ""
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._cache: dict[str, str] | None = None
@@ -61,9 +32,34 @@ class CoverHashFile:
     def path(self) -> Path:
         return self._path
 
+    @staticmethod
+    def _parse(raw: str) -> dict[str, str]:
+        """Parse ``.cover_hash`` contents, including the legacy single-hash format."""
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        if len(lines) == 1 and "=" not in lines[0]:
+            return {CoverHashFile._LEGACY_KEY: lines[0]}
+
+        hashes: dict[str, str] = {}
+        for line in lines:
+            if "=" not in line:
+                continue
+            clip_id, hash_value = line.split("=", 1)
+            clip_id = clip_id.strip()
+            hash_value = hash_value.strip()
+            if clip_id and hash_value:
+                hashes[clip_id] = hash_value
+        return hashes
+
+    @staticmethod
+    def _serialise(hashes: dict[str, str]) -> str:
+        """Serialise ``.cover_hash`` contents with deterministic ordering."""
+        return "".join(
+            f"{clip_id}={hashes[clip_id]}\n" for clip_id in sorted(hashes) if clip_id != CoverHashFile._LEGACY_KEY
+        )
+
     def _read_sync(self) -> dict[str, str]:
         try:
-            return _parse_cover_hashes(self._path.read_text())
+            return self._parse(self._path.read_text())
         except OSError:
             return {}
 
@@ -78,8 +74,8 @@ class CoverHashFile:
         if self._cache is None:
             self._cache = await hass.async_add_executor_job(self._read_sync)
         self._cache[clip_id] = hash_value
-        self._cache.pop(_LEGACY_COVER_HASH_KEY, None)
-        serialised = _serialise_cover_hashes(self._cache).encode()
+        self._cache.pop(self._LEGACY_KEY, None)
+        serialised = self._serialise(self._cache).encode()
         await _write_file(hass, self._path, serialised)
 
 

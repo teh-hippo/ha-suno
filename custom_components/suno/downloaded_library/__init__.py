@@ -50,13 +50,12 @@ from .filesystem import (
 )
 from .m3u8 import _write_m3u8_playlists
 from .metadata import _album_for_clip, _manifest_album_for_clip
-from .paths import _clip_path, _safe_name, _video_clip_path
-from .planning import _add_clip, build_desired
+from .paths import _clip_path, _video_clip_path
+from .planning import build_desired
 from .reconciliation import _reconcile_disk as _reconcile_disk_fn
 from .reconciliation import _reconcile_manifest as _reconcile_manifest_fn
 from .source_modes import (
     _entry_source_modes,
-    _get_source_mode,
     _source_modes_for,
     _source_preserves_files,
 )
@@ -1071,14 +1070,4 @@ __all__ = [
     "RenderedAudio",
     "RetagResult",
     "SunoCacheDownloadedLibraryAdapter",
-    "_add_clip",
-    "_album_for_clip",
-    "_build_download_summary",
-    "_clip_path",
-    "_get_source_mode",
-    "_safe_name",
-    "_source_preserves_files",
-    "_video_clip_path",
-    "_write_file",
-    "_write_m3u8_playlists",
 ]

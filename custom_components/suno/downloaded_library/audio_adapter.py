@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.core import HomeAssistant
@@ -72,25 +73,35 @@ class HomeAssistantDownloadedLibraryAudio:
                 if resp.status != 200:
                     _LOGGER.debug("Video download failed for %s: %d", video_url, resp.status)
                     return
+                # Buffer the whole response in memory then write in ONE
+                # executor call. Previous per-chunk-write approach round-
+                # tripped to the executor on every 256 KB chunk (~40 calls
+                # for a 10 MB video); current single-shot write keeps
+                # executor pressure proportional to file count, not size.
+                buf = bytearray()
+                try:
+                    async for chunk in resp.content.iter_chunked(256 * 1024):
+                        buf.extend(chunk)
+                except asyncio.CancelledError:
+                    raise
                 tmp_path = target.with_suffix(".mp4.tmp")
                 try:
-                    total = 0
-
-                    def _open_tmp() -> Any:
-                        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-                        return open(tmp_path, "wb")  # noqa: SIM115
-
-                    fh = await self._hass.async_add_executor_job(_open_tmp)
-                    try:
-                        async for chunk in resp.content.iter_chunked(256 * 1024):
-                            await self._hass.async_add_executor_job(fh.write, chunk)
-                            total += len(chunk)
-                    finally:
-                        await self._hass.async_add_executor_job(fh.close)
-                    await self._hass.async_add_executor_job(os.replace, str(tmp_path), str(target))
-                    _LOGGER.info("Downloaded video: %s (%d bytes)", target.name, total)
-                except BaseException:
+                    await self._hass.async_add_executor_job(_write_video_atomically, tmp_path, target, bytes(buf))
+                    _LOGGER.info("Downloaded video: %s (%d bytes)", target.name, len(buf))
+                except asyncio.CancelledError:
                     await self._hass.async_add_executor_job(tmp_path.unlink, True)
                     raise
+                except OSError:
+                    _LOGGER.warning("Failed to persist downloaded video: %s", target)
+                    await self._hass.async_add_executor_job(tmp_path.unlink, True)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             _LOGGER.debug("Failed to download video from %s", video_url)
+
+
+def _write_video_atomically(tmp_path: Path, target: Path, data: bytes) -> None:
+    """Write video bytes via a single ``.tmp`` then ``os.replace``."""
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_bytes(data)
+    os.replace(str(tmp_path), str(target))

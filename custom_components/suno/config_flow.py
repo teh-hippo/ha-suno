@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -513,11 +514,9 @@ class SunoOptionsFlow(OptionsFlowWithReload):
 
     def _check_download_path_conflict(self, path: str) -> bool:
         """Check if another config entry already uses this download path."""
-        from pathlib import Path as _Path
-
         if not path:
             return False
-        resolved = _Path(path).resolve()
+        resolved = Path(path).resolve()
         current_entry_id = getattr(self, "config_entry", None)
         current_id = current_entry_id.entry_id if current_entry_id else None
 
@@ -525,17 +524,16 @@ class SunoOptionsFlow(OptionsFlowWithReload):
             if entry.entry_id == current_id:
                 continue
             other_path = entry.options.get(CONF_DOWNLOAD_PATH)
-            if other_path and _Path(other_path).resolve() == resolved:
+            if other_path and Path(other_path).resolve() == resolved:
                 return True
         return False
 
     async def _validate_download_path(self, path: str) -> bool:
         """Check that the download path is writable."""
-        from pathlib import Path as _Path
 
         def _check(p: str) -> bool:
             try:
-                target = _Path(p).resolve()
+                target = Path(p).resolve()
                 target.mkdir(parents=True, exist_ok=True)
                 test_file = target / ".suno_write_test"
                 test_file.touch()
