@@ -13,7 +13,7 @@ from custom_components.suno.audio_metadata import (
     extract_apic,
     skip_existing_id3,
 )
-from custom_components.suno.models import TrackMetadata
+from custom_components.suno.models import SunoClip, TrackMetadata
 from custom_components.suno.proxy import (
     SunoMediaProxyView,
 )
@@ -988,8 +988,6 @@ async def test_hq_cancelled_error_reraised(hass: HomeAssistant, mock_suno_client
 
 async def test_mp3_connection_reset_handled(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """ConnectionResetError during MP3 streaming should be caught gracefully."""
-
-    from custom_components.suno.models import SunoClip
 
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):

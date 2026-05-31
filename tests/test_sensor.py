@@ -13,6 +13,7 @@ from custom_components.suno.models import SunoCredits, SunoData
 from custom_components.suno.runtime import HomeAssistantRuntime
 from custom_components.suno.sensor import (
     _SYNC_SENSORS,
+    SunoCacheSizeSensor,
     SunoDownloadStatusSensor,
     _library_files_breakdown,
     _parse_last_sync,
@@ -367,7 +368,6 @@ async def test_no_cached_files_entity(hass: HomeAssistant, mock_suno_client: Asy
 
 def test_cache_size_sensor_exposes_cached_files_attr() -> None:
     """When cache is present, extra_state_attributes includes cached_files."""
-    from custom_components.suno.sensor import SunoCacheSizeSensor
 
     mock_cache = MagicMock()
     mock_cache.file_count = 42
@@ -387,7 +387,6 @@ def test_cache_size_sensor_exposes_cached_files_attr() -> None:
 
 async def test_cache_size_sensor_async_update() -> None:
     """async_update calls cache.async_size_mb() and updates native value."""
-    from custom_components.suno.sensor import SunoCacheSizeSensor
 
     mock_cache = AsyncMock()
     mock_cache.async_size_mb = AsyncMock(return_value=12.3)

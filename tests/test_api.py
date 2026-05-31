@@ -17,6 +17,7 @@ from custom_components.suno.auth import (
     _decode_jwt_exp,
     _normalise_token,
 )
+from custom_components.suno.const import MAX_PAGES
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
 from custom_components.suno.models import (
     SunoClip,
@@ -1200,7 +1201,6 @@ async def test_get_wav_url_missing_key() -> None:
 
 async def test_paginate_feed_stops_at_max_pages() -> None:
     """Pagination loop stops at MAX_PAGES even when has_more is always True."""
-    from custom_components.suno.const import MAX_PAGES
 
     session = AsyncMock()
     client = _make_authed_client(session)

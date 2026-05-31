@@ -14,11 +14,17 @@ from custom_components.suno.const import (
     CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
+    DOMAIN,
     DOWNLOAD_MODE_CACHE,
     DOWNLOAD_MODE_MIRROR,
 )
+from custom_components.suno.downloaded_library import (
+    DownloadedLibrary,
+    InMemoryDownloadedLibraryStorage,
+)
 from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
-from custom_components.suno.runtime import HomeAssistantRuntime
+from custom_components.suno.models import SunoClip, SunoData
+from custom_components.suno.runtime import _SERVICE_DOWNLOAD, HomeAssistantRuntime
 
 from .conftest import make_entry, patch_suno_setup, setup_entry
 
@@ -201,7 +207,6 @@ async def test_setup_entry_generic_error_with_stored_data(hass: HomeAssistant, m
 
 async def test_rate_limiter_shared_across_entries(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """Rate limiter is the same instance for all config entries."""
-    from custom_components.suno.const import DOMAIN
 
     entry_a = make_entry(unique_id="user-a")
     entry_b = make_entry(unique_id="user-b")
@@ -335,11 +340,6 @@ async def test_force_download_refreshes_library_before_reconcile(
     hass: HomeAssistant, tmp_path: Path, mock_suno_client: AsyncMock
 ) -> None:
     """async_force_download refreshes the Suno Library before forcing reconciliation."""
-    from custom_components.suno.downloaded_library import (
-        DownloadedLibrary,
-        InMemoryDownloadedLibraryStorage,
-    )
-    from custom_components.suno.models import SunoClip, SunoData
 
     clip = SunoClip(
         id="clip-force-0000-0000-0000-000000000000",
@@ -397,8 +397,6 @@ class TestServiceLifecycle:
 
     def test_service_not_removed_while_other_entries_remain(self) -> None:
         """Service removal callback should keep the service when other entries exist."""
-        from custom_components.suno.const import DOMAIN
-        from custom_components.suno.runtime import _SERVICE_DOWNLOAD
 
         hass = MagicMock()
         entry = MagicMock()
@@ -419,8 +417,6 @@ class TestServiceLifecycle:
 
     def test_service_removed_when_last_entry_unloads(self) -> None:
         """Service removal callback should remove the service when no entries remain."""
-        from custom_components.suno.const import DOMAIN
-        from custom_components.suno.runtime import _SERVICE_DOWNLOAD
 
         hass = MagicMock()
         entry = MagicMock()
