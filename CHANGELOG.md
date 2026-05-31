@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v6.3.7 (2026-05-31)
+
+### Refactoring
+
+- Clear residual band-aids across models, runtime, and coordinator
+  ([`4ac0b4a`](https://github.com/teh-hippo/ha-suno/commit/4ac0b4ae4a2960a36e7de94deb77b50dc994ea14))
+
+- Type the engine end-to-end with ManifestEntry + DownloadedLibraryState
+  ([`cb3a574`](https://github.com/teh-hippo/ha-suno/commit/cb3a574910375dfd77f00039de0edabdabdff7df))
+
+### Testing
+
+- Close coverage gaps in cache_adapter, filesystem, audio_adapter
+  ([`2a04014`](https://github.com/teh-hippo/ha-suno/commit/2a040145bfd54983cd52dff3c4aa1cc311e1a290))
+
+- Convert 16 TestXxx classes to free functions + split mega-files
+  ([`516e06a`](https://github.com/teh-hippo/ha-suno/commit/516e06a3680fa8d9ae8a49ec88f313f7dba4e80f))
+
+
 ## v6.3.6 (2026-05-31)
 
 ### Refactoring
