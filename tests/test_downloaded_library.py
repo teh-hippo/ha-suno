@@ -65,8 +65,8 @@ from custom_components.suno.models import (
     selected_image_url,
 )
 
-
 from .conftest import make_clip
+
 
 # Backwards-compat shim: existing tests call _clip(...) positionally.
 # New tests should import make_clip from conftest directly.
