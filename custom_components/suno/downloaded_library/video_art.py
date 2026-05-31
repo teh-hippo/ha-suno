@@ -8,18 +8,29 @@ import logging
 import os
 import shlex
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ..const import (
+    CONF_DOWNLOAD_VIDEOS,
+    CONF_VIDEO_ART_MODE,
+    CONF_VIDEO_FFMPEG_EXTRA_ARGS,
+    CONF_VIDEO_LOSSLESS,
+    CONF_VIDEO_MAX_FPS,
+    CONF_VIDEO_MAX_WIDTH,
+    CONF_VIDEO_QUALITY,
     DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS,
     DEFAULT_VIDEO_LOSSLESS,
     DEFAULT_VIDEO_MAX_FPS,
     DEFAULT_VIDEO_MAX_WIDTH,
     DEFAULT_VIDEO_QUALITY,
     DOWNLOAD_FFMPEG_TIMEOUT,
+    VIDEO_ART_DOWNLOAD,
+    VIDEO_ART_OFF,
     VIDEO_FFMPEG_TIMEOUT,
 )
 
@@ -34,6 +45,39 @@ def _ensure_parent(path: Path) -> None:
 
 def _unlink_missing_ok(path: Path) -> None:
     path.unlink(missing_ok=True)
+
+
+def _bounded_int(options: Mapping[str, Any], key: str, default: int, *, min_value: int, max_value: int) -> int:
+    """Clamp an integer option to a closed [min_value, max_value] range."""
+    value = options.get(key, default)
+    try:
+        parsed = int(value)
+    except TypeError, ValueError:
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+def _bool_option(options: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = options.get(key, default)
+    return value if isinstance(value, bool) else default
+
+
+def _str_option(options: Mapping[str, Any], key: str, default: str) -> str:
+    value = options.get(key, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def resolve_video_art_mode(options: Mapping[str, Any]) -> str:
+    """Resolve the configured video-art mode from a Home Assistant options blob.
+
+    Migrates the legacy boolean ``download_videos`` option to the
+    current ``video_art_mode`` enum when only the legacy key is set.
+    """
+    if CONF_VIDEO_ART_MODE in options:
+        return str(options[CONF_VIDEO_ART_MODE])
+    if options.get(CONF_DOWNLOAD_VIDEOS, False):
+        return VIDEO_ART_DOWNLOAD
+    return VIDEO_ART_OFF
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +107,26 @@ class VideoArtSettings:
     def as_storage(self) -> dict[str, bool | int | str]:
         """Return a stable serialisable representation for conversion state."""
         return asdict(self)
+
+    @classmethod
+    def from_options(cls, options: Mapping[str, Any]) -> VideoArtSettings:
+        """Build conversion settings from a Home Assistant options blob.
+
+        Bounds each numeric option to its valid range (video_quality
+        0-100, video_max_fps 0-60, video_max_width 0-4000); non-int
+        values fall back to the defaults rather than raising. Co-located
+        with the settings dataclass so option layout and bounds are
+        documented in one place.
+        """
+        return cls(
+            video_quality=_bounded_int(options, CONF_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY, min_value=0, max_value=100),
+            video_lossless=_bool_option(options, CONF_VIDEO_LOSSLESS, DEFAULT_VIDEO_LOSSLESS),
+            video_max_fps=_bounded_int(options, CONF_VIDEO_MAX_FPS, DEFAULT_VIDEO_MAX_FPS, min_value=0, max_value=60),
+            video_max_width=_bounded_int(
+                options, CONF_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_MAX_WIDTH, min_value=0, max_value=4000
+            ),
+            video_ffmpeg_extra_args=_str_option(options, CONF_VIDEO_FFMPEG_EXTRA_ARGS, DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS),
+        )
 
 
 def _build_webp_options(settings: VideoArtSettings) -> list[str]:

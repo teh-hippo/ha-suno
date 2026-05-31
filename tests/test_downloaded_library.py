@@ -42,18 +42,15 @@ from custom_components.suno.downloaded_library import (
     ManifestEntry,
     RenderedAudio,
     RetagResult,
-    _add_clip,
-    _album_for_clip,
     _build_download_summary,
-    _clip_path,
-    _get_source_mode,
-    _safe_name,
-    _source_preserves_files,
-    _video_clip_path,
-    _write_file,
-    _write_m3u8_playlists,
 )
 from custom_components.suno.downloaded_library.cover_art import _update_cover_art
+from custom_components.suno.downloaded_library.filesystem import _write_file
+from custom_components.suno.downloaded_library.m3u8 import _write_m3u8_playlists
+from custom_components.suno.downloaded_library.metadata import _album_for_clip
+from custom_components.suno.downloaded_library.paths import _clip_path, _safe_name, _video_clip_path
+from custom_components.suno.downloaded_library.planning import _add_clip
+from custom_components.suno.downloaded_library.source_modes import _get_source_mode, _source_preserves_files
 from custom_components.suno.downloaded_library.video_art import VideoArtSettings
 from custom_components.suno.models import (
     SunoClip,

@@ -26,29 +26,17 @@ from .const import (
     CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
     CONF_DOWNLOAD_PATH,
-    CONF_DOWNLOAD_VIDEOS,
     CONF_QUALITY_LIKED,
     CONF_QUALITY_PLAYLISTS,
     CONF_SHOW_LIKED,
     CONF_SHOW_MY_SONGS,
     CONF_SHOW_PLAYLISTS,
-    CONF_VIDEO_ART_MODE,
-    CONF_VIDEO_FFMPEG_EXTRA_ARGS,
-    CONF_VIDEO_LOSSLESS,
-    CONF_VIDEO_MAX_FPS,
-    CONF_VIDEO_MAX_WIDTH,
-    CONF_VIDEO_QUALITY,
     DEFAULT_CACHE_MAX_SIZE,
     DEFAULT_DOWNLOAD_MODE,
     DEFAULT_DOWNLOAD_MODE_MY_SONGS,
     DEFAULT_SHOW_LIKED,
     DEFAULT_SHOW_MY_SONGS,
     DEFAULT_SHOW_PLAYLISTS,
-    DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS,
-    DEFAULT_VIDEO_LOSSLESS,
-    DEFAULT_VIDEO_MAX_FPS,
-    DEFAULT_VIDEO_MAX_WIDTH,
-    DEFAULT_VIDEO_QUALITY,
     DOMAIN,
     DOWNLOAD_MODE_CACHE,
     QUALITY_HIGH,
@@ -56,7 +44,6 @@ from .const import (
     VIDEO_ART_BOTH,
     VIDEO_ART_CONVERT,
     VIDEO_ART_DOWNLOAD,
-    VIDEO_ART_OFF,
 )
 from .coordinator import SunoCoordinator
 from .downloaded_library import (
@@ -66,7 +53,7 @@ from .downloaded_library import (
     HomeAssistantDownloadedLibraryStorage,
     SunoCacheDownloadedLibraryAdapter,
 )
-from .downloaded_library.video_art import VideoArtSettings, probe_libwebp_anim
+from .downloaded_library.video_art import VideoArtSettings, probe_libwebp_anim, resolve_video_art_mode
 from .exceptions import SunoAuthError, SunoConnectionError
 from .models import SunoClip, SunoData, SunoUser, TrackMetadata
 from .rate_limit import SunoRateLimiter
@@ -74,33 +61,6 @@ from .rate_limit import SunoRateLimiter
 _LOGGER = logging.getLogger(__name__)
 
 _SERVICE_DOWNLOAD = "download_library"
-
-
-def _bounded_int_option(
-    options: Mapping[str, Any],
-    key: str,
-    default: int,
-    *,
-    min_value: int,
-    max_value: int,
-) -> int:
-    value = options.get(key, default)
-    try:
-        parsed = int(value)
-    except TypeError, ValueError:
-        return default
-    return max(min_value, min(max_value, parsed))
-
-
-def _bool_option(options: Mapping[str, Any], key: str, default: bool) -> bool:
-    value = options.get(key, default)
-    return value if isinstance(value, bool) else default
-
-
-def _str_option(options: Mapping[str, Any], key: str, default: str) -> str:
-    value = options.get(key, default)
-    return value.strip() if isinstance(value, str) else default
-
 
 _DOWNLOAD_SECTIONS = (
     (CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED, CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
@@ -304,7 +264,7 @@ class HomeAssistantRuntime:
         coordinator = self.coordinator
         if force:
             try:
-                data = await coordinator._async_fetch_remote_data()  # noqa: SLF001
+                data = await coordinator.async_fetch_remote()
             except Exception:
                 _LOGGER.warning("Library Refresh before forced download failed", exc_info=True)
             else:
@@ -318,8 +278,7 @@ class HomeAssistantRuntime:
         if not _is_empty_suno_library(data):
             return True
         coordinator = self.coordinator
-        refresh_task = getattr(coordinator, "_refresh_task", None)
-        return not (coordinator.data_version <= 1 and refresh_task is not None and not refresh_task.done())
+        return not (coordinator.data_version <= 1 and coordinator.pending_initial_refresh)
 
     def get_downloaded_path(self, clip_id: str, meta_hash: str = "") -> Path | None:
         """Return a fresh downloaded file path for a clip if one exists."""
@@ -465,7 +424,7 @@ class HomeAssistantRuntime:
                 _LOGGER.warning("ffmpeg lacks libwebp_anim encoder; degrading video art mode to 'download'")
                 video_mode = VIDEO_ART_DOWNLOAD
         engine.video_art_mode = video_mode
-        engine.video_art_settings = self._resolve_video_art_settings(entry)
+        engine.video_art_settings = VideoArtSettings.from_options(entry.options)
         await engine.async_load()
         if download_path := entry.options.get(CONF_DOWNLOAD_PATH, ""):
             await engine.cleanup_tmp_files(download_path)
@@ -485,47 +444,7 @@ class HomeAssistantRuntime:
     @staticmethod
     def _resolve_video_art_mode(entry: ConfigEntry[Any]) -> str:
         """Resolve video_art_mode from options, migrating legacy download_videos bool."""
-        opts = entry.options
-        if CONF_VIDEO_ART_MODE in opts:
-            return str(opts[CONF_VIDEO_ART_MODE])
-        # Migrate legacy boolean
-        if opts.get(CONF_DOWNLOAD_VIDEOS, False):
-            return VIDEO_ART_DOWNLOAD
-        return VIDEO_ART_OFF
-
-    @staticmethod
-    def _resolve_video_art_settings(entry: ConfigEntry[Any]) -> VideoArtSettings:
-        """Resolve bounded animated WebP conversion settings from options."""
-        opts = entry.options
-        return VideoArtSettings(
-            video_quality=_bounded_int_option(
-                opts,
-                CONF_VIDEO_QUALITY,
-                DEFAULT_VIDEO_QUALITY,
-                min_value=0,
-                max_value=100,
-            ),
-            video_lossless=_bool_option(opts, CONF_VIDEO_LOSSLESS, DEFAULT_VIDEO_LOSSLESS),
-            video_max_fps=_bounded_int_option(
-                opts,
-                CONF_VIDEO_MAX_FPS,
-                DEFAULT_VIDEO_MAX_FPS,
-                min_value=0,
-                max_value=60,
-            ),
-            video_max_width=_bounded_int_option(
-                opts,
-                CONF_VIDEO_MAX_WIDTH,
-                DEFAULT_VIDEO_MAX_WIDTH,
-                min_value=0,
-                max_value=4000,
-            ),
-            video_ffmpeg_extra_args=_str_option(
-                opts,
-                CONF_VIDEO_FFMPEG_EXTRA_ARGS,
-                DEFAULT_VIDEO_FFMPEG_EXTRA_ARGS,
-            ),
-        )
+        return resolve_video_art_mode(entry.options)
 
     def _wire_downloaded_library_lifecycle(self) -> None:
         """Wire Home Assistant lifecycle hooks for the active Downloaded Library."""
