@@ -7,7 +7,7 @@ download mode (mirror / archive / cache) drawn from the integration options.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..const import (
     CONF_DOWNLOAD_MODE_LIKED,
@@ -17,6 +17,9 @@ from ..const import (
     DOWNLOAD_MODE_ARCHIVE,
     DOWNLOAD_MODE_MIRROR,
 )
+
+if TYPE_CHECKING:
+    from .contracts import ManifestEntry
 
 _SOURCE_MODE_KEYS: dict[str, str] = {
     "liked": CONF_DOWNLOAD_MODE_LIKED,
@@ -46,16 +49,12 @@ def _source_modes_for(sources: list[str], options: Mapping[str, Any]) -> dict[st
 
 
 def _entry_source_modes(
-    entry: Mapping[str, Any],
+    entry: ManifestEntry,
     sources: list[str],
     fallback_options: Mapping[str, Any] | None,
 ) -> dict[str, str]:
     """Return source mode metadata, inferring it from fallback options when absent."""
-    raw_modes = entry.get("source_modes")
-    if isinstance(raw_modes, dict):
-        modes = {str(source): str(mode) for source, mode in raw_modes.items()}
-    else:
-        modes = {}
+    modes = {str(source): str(mode) for source, mode in entry.source_modes.items()}
     if fallback_options is not None:
         for source in sources:
             modes.setdefault(source, _get_source_mode(source, fallback_options))

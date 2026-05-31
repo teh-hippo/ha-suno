@@ -44,6 +44,7 @@ from custom_components.suno.const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
+from custom_components.suno.downloaded_library.contracts import ManifestEntry
 from custom_components.suno.models import SunoClip, SunoCredits, SunoPlaylist
 
 MOCK_COOKIE = "__client=test-cookie-value; __client_uat=1234567890"
@@ -277,3 +278,19 @@ def sample_credits() -> SunoCredits:
         monthly_usage=1000,
         period="2026-03",
     )
+
+
+def make_entry_state(**kwargs: Any) -> ManifestEntry:
+    """Build a ManifestEntry for tests, accepting v6.3.6 dict-shape kwargs.
+
+    Centralises the conversion from the dict-shape entries the test
+    suite was written against to the typed ``ManifestEntry`` the Round
+    2 engine takes. Tests can pass legacy keys (``path``, ``meta_hash``,
+    ``embedded_art_hash``, etc.) unchanged.
+    """
+    return ManifestEntry.from_dict(kwargs)
+
+
+def make_clips_state(**clip_dicts: dict[str, Any]) -> dict[str, ManifestEntry]:
+    """Build a ``dict[clip_id, ManifestEntry]`` from dict-shape kwargs."""
+    return {clip_id: ManifestEntry.from_dict(d) for clip_id, d in clip_dicts.items()}

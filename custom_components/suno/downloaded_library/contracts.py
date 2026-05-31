@@ -6,6 +6,7 @@ in one module documents what the engine demands of its world.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -272,6 +273,97 @@ class ManifestEntry:
         if self.album == "":
             self.album = None
 
+    # ── Factory ─────────────────────────────────────────────────────
+
+    @classmethod
+    def create(
+        cls,
+        item: DownloadItem,
+        rel_path: str,
+        file_size: int,
+        options: Mapping[str, Any],
+        *,
+        album: str | None = None,
+    ) -> ManifestEntry:
+        """Build a fresh entry for a clip after a verified file write.
+
+        Combines identity/routing, clip-mirror, and file-mirror writes
+        into one construction so the only way to make a brand-new entry
+        is via the same code path that knows the file is on disk. The
+        ``source_modes`` mapping is resolved from ``options`` via the
+        same helper the engine uses for incremental updates.
+        """
+        from .source_modes import _source_modes_for  # noqa: PLC0415
+
+        entry = cls(
+            path=rel_path,
+            sources=list(item.sources),
+            source_modes=_source_modes_for(item.sources, options),
+            quality=item.quality,
+        )
+        entry.apply_clip_metadata(item.clip, album=album)
+        entry.apply_file_state(item.clip, file_size)
+        return entry
+
+
+@dataclass(slots=True)
+class DownloadedLibraryState:
+    """Typed in-memory representation of the top-level ``.suno_download.json`` payload.
+
+    Mirrors the four keys the engine writes today (``clips``,
+    ``last_download``, ``last_result``, ``video_art_mode``) and round-
+    trips through ``to_dict`` / ``from_dict`` to the same on-disk JSON
+    shape — no manifest migration required.
+
+    Unknown keys at the top level are preserved in ``extras`` so a
+    newer build's fields are not destroyed by an older build's load-
+    save cycle.
+    """
+
+    clips: dict[str, ManifestEntry] = field(default_factory=dict)
+    last_download: str | None = None
+    last_result: str = ""
+    video_art_mode: str | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
+
+    _KNOWN_FIELDS: ClassVar[frozenset[str]] = frozenset({"clips", "last_download", "last_result", "video_art_mode"})
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to the on-disk JSON payload shape.
+
+        Omits ``last_result`` and ``video_art_mode`` when they would
+        serialise to empty/None so the on-disk representation matches
+        what v6.3.6 wrote.
+        """
+        out: dict[str, Any] = {
+            "clips": {cid: entry.to_dict() for cid, entry in self.clips.items()},
+            "last_download": self.last_download,
+        }
+        if self.last_result:
+            out["last_result"] = self.last_result
+        if self.video_art_mode is not None:
+            out["video_art_mode"] = self.video_art_mode
+        out.update(self.extras)
+        return out
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any] | None) -> DownloadedLibraryState:
+        """Construct from a stored payload, preserving unknown keys."""
+        if not raw:
+            return cls()
+        raw_clips = raw.get("clips") or {}
+        clips = {
+            str(cid): ManifestEntry.from_dict(entry) for cid, entry in raw_clips.items() if isinstance(entry, dict)
+        }
+        extras = {k: v for k, v in raw.items() if k not in cls._KNOWN_FIELDS}
+        return cls(
+            clips=clips,
+            last_download=raw.get("last_download"),
+            last_result=str(raw.get("last_result") or ""),
+            video_art_mode=raw.get("video_art_mode"),
+            extras=extras,
+        )
+
 
 class DownloadedLibraryStorage(Protocol):
     """Persistence adapter for Downloaded Library state."""
@@ -312,6 +404,7 @@ __all__ = [
     "DownloadItem",
     "DownloadedLibraryAudio",
     "DownloadedLibraryCache",
+    "DownloadedLibraryState",
     "DownloadedLibraryStatus",
     "DownloadedLibraryStorage",
     "ManifestEntry",

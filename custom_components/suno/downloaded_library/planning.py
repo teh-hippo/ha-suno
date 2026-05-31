@@ -36,7 +36,7 @@ from ..const import (
 )
 from ..models import SunoClip, SunoData
 from .contracts import DesiredDownloadPlan, DownloadItem, ManifestEntry
-from .source_modes import _get_source_mode, _source_modes_for
+from .source_modes import _get_source_mode
 
 
 def _add_clip(clip_map: dict[str, DownloadItem], clip: SunoClip, source: str, quality: str) -> None:
@@ -54,117 +54,18 @@ def _add_clip(clip_map: dict[str, DownloadItem], clip: SunoClip, source: str, qu
 def _preserve_source(
     preserved: set[str],
     clip_map: dict[str, DownloadItem],
-    prev_clips: dict[str, Any],
+    prev_clips: Mapping[str, ManifestEntry],
     source: str,
 ) -> None:
     """Preserve a stale source without deleting or removing it from records."""
     for clip_id, entry in prev_clips.items():
-        if source not in entry.get("sources", []):
+        if source not in entry.sources:
             continue
         if clip_id in clip_map:
             if source not in clip_map[clip_id].sources:
                 clip_map[clip_id].sources.append(source)
         else:
             preserved.add(clip_id)
-
-
-def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
-    """Store the inherited album marker, or remove it when not needed.
-
-    Thin forwarder kept for tests and legacy call sites; new code should
-    set ``ManifestEntry.album`` directly (None = absent).
-    """
-    if album is None:
-        entry.pop("album", None)
-    else:
-        entry["album"] = album
-
-
-def _apply_clip_metadata(
-    entry: dict[str, Any],
-    clip: SunoClip,
-    *,
-    album: str | None = None,
-) -> None:
-    """Refresh clip-mirror manifest fields on a dict-shaped entry.
-
-    Thin forwarder around :meth:`ManifestEntry.apply_clip_metadata` so
-    test fixtures and any remaining dict-style call sites keep working
-    while engine internals use ``ManifestEntry`` directly.
-    """
-    me = ManifestEntry.from_dict(entry)
-    me.apply_clip_metadata(clip, album=album)
-    _replace_entry_dict(entry, me.to_dict())
-    if album is None:
-        entry.pop("album", None)
-
-
-def _apply_file_state(
-    entry: dict[str, Any],
-    clip: SunoClip,
-    file_size: int,
-) -> None:
-    """Refresh file-mirror manifest fields on a dict-shaped entry.
-
-    Thin forwarder around :meth:`ManifestEntry.apply_file_state` for the
-    same reason as :func:`_apply_clip_metadata`.
-    """
-    me = ManifestEntry.from_dict(entry)
-    me.apply_file_state(clip, file_size)
-    _replace_entry_dict(entry, me.to_dict())
-
-
-def _clip_entry(
-    item: DownloadItem,
-    rel_path: str,
-    file_size: int,
-    options: Mapping[str, Any],
-    *,
-    album: str | None = None,
-) -> dict[str, Any]:
-    """Build a stored Downloaded Library record for one clip (dict shape)."""
-    me = ManifestEntry(
-        path=rel_path,
-        sources=list(item.sources),
-        source_modes=_source_modes_for(item.sources, options),
-        quality=item.quality,
-    )
-    me.apply_clip_metadata(item.clip, album=album)
-    me.apply_file_state(item.clip, file_size)
-    return me.to_dict()
-
-
-def _replace_entry_dict(entry: dict[str, Any], new_dict: dict[str, Any]) -> None:
-    """Replace the contents of an entry dict in place."""
-    entry.clear()
-    entry.update(new_dict)
-
-
-def _clear_for_redownload(entry: dict[str, Any]) -> None:
-    """Reset every field whose meaning is "describes the file on disk".
-
-    Wraps :meth:`ManifestEntry.clear_for_redownload`. Closes the
-    v6.3.1–v6.3.4 leak where call sites manually cleared ``path`` +
-    ``meta_hash`` (+ sometimes ``album``) but forgot ``embedded_art_hash``,
-    leaving a stale art-hash sentinel that suppressed the next retag.
-    """
-    me = ManifestEntry.from_dict(entry)
-    me.clear_for_redownload()
-    _replace_entry_dict(entry, me.to_dict())
-
-
-def _needs_retag(
-    entry: dict[str, Any],
-    clip: SunoClip,
-    resolved_album: str | None,
-) -> str | None:
-    """Return the first reason an entry needs retagging, or None.
-
-    Wraps :meth:`ManifestEntry.needs_retag` for dict-shaped engine state.
-    Returns "meta" / "art" / "album" so reconcile logs can explain
-    themselves.
-    """
-    return ManifestEntry.from_dict(entry).needs_retag(clip, resolved_album)
 
 
 def _filter_my_songs(
@@ -209,7 +110,7 @@ def _filter_my_songs(
 def build_desired(
     options: Mapping[str, Any],
     suno_library: SunoData,
-    prev_clips: Mapping[str, Any],
+    prev_clips: Mapping[str, ManifestEntry],
 ) -> DesiredDownloadPlan:
     """Build the desired Downloaded Library records from a Suno Library."""
     clip_map: dict[str, DownloadItem] = {}
@@ -235,10 +136,7 @@ def build_desired(
         playlist_quality = options.get(CONF_QUALITY_PLAYLISTS, QUALITY_HIGH)
         if "playlists" in stale_sections or "playlist_clips" in stale_sections:
             stale_sources.update(
-                source
-                for entry in prev_clips.values()
-                for source in entry.get("sources", [])
-                if source.startswith("playlist:")
+                source for entry in prev_clips.values() for source in entry.sources if source.startswith("playlist:")
             )
         for playlist in suno_library.playlists:
             if not sync_all and playlist.id not in selected_ids:
@@ -268,6 +166,9 @@ def build_desired(
                 stale_sources.add("my_songs")
 
     for source in sorted(stale_sources):
-        _preserve_source(preserved, clip_map, dict(prev_clips), source)
+        _preserve_source(preserved, clip_map, prev_clips, source)
     preserved -= clip_map.keys()
     return DesiredDownloadPlan(list(clip_map.values()), preserved, source_to_name, playlist_order)
+
+
+__all__ = ["_add_clip", "_filter_my_songs", "_preserve_source", "build_desired"]
