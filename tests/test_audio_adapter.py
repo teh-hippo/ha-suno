@@ -166,3 +166,88 @@ async def test_download_video_skips_when_file_exists(hass: HomeAssistant, tmp_pa
     await adapter.download_video("https://x/video.mp4", existing)
 
     assert existing.read_bytes() == b"existing"
+
+
+# ── download_video happy path + error branches ────────────────────────
+
+
+class _FakeResponse:
+    """Async context manager that yields chunks via iter_chunked."""
+
+    def __init__(self, status: int, chunks: list[bytes]) -> None:
+        self.status = status
+        self.content = _FakeContent(chunks)
+
+    async def __aenter__(self) -> _FakeResponse:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakeContent:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def iter_chunked(self, _size: int):
+        for c in self._chunks:
+            yield c
+
+
+@pytest.mark.asyncio
+async def test_download_video_writes_atomically(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Successful download writes the full MP4 via .tmp + os.replace."""
+    target = tmp_path / "dir" / "video.mp4"
+    client = MagicMock()
+    adapter = HomeAssistantDownloadedLibraryAudio(hass, client)
+
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(return_value=_FakeResponse(200, [b"abc", b"def", b"ghi"]))
+
+    with patch(
+        "custom_components.suno.downloaded_library.audio_adapter.async_get_clientsession",
+        return_value=fake_session,
+    ):
+        await adapter.download_video("https://x/video.mp4", target)
+
+    assert target.read_bytes() == b"abcdefghi"
+    # No tmp file left behind
+    assert not target.with_suffix(".mp4.tmp").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_video_skips_non_200_response(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Non-200 responses log a debug line and return without writing."""
+    target = tmp_path / "video.mp4"
+    client = MagicMock()
+    adapter = HomeAssistantDownloadedLibraryAudio(hass, client)
+
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(return_value=_FakeResponse(404, []))
+
+    with patch(
+        "custom_components.suno.downloaded_library.audio_adapter.async_get_clientsession",
+        return_value=fake_session,
+    ):
+        await adapter.download_video("https://x/missing.mp4", target)
+
+    assert not target.exists()
+
+
+@pytest.mark.asyncio
+async def test_download_video_silences_network_exceptions(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A raised exception from session.get is logged and swallowed."""
+    target = tmp_path / "video.mp4"
+    client = MagicMock()
+    adapter = HomeAssistantDownloadedLibraryAudio(hass, client)
+
+    fake_session = MagicMock()
+    fake_session.get = MagicMock(side_effect=ConnectionError("dns fail"))
+
+    with patch(
+        "custom_components.suno.downloaded_library.audio_adapter.async_get_clientsession",
+        return_value=fake_session,
+    ):
+        await adapter.download_video("https://x/video.mp4", target)
+
+    assert not target.exists()
