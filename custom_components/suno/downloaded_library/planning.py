@@ -34,14 +34,8 @@ from ..const import (
     QUALITY_HIGH,
     QUALITY_STANDARD,
 )
-from ..models import (
-    SunoClip,
-    SunoData,
-    clip_meta_hash,
-    image_url_hash,
-    selected_image_url,
-)
-from .contracts import DesiredDownloadPlan, DownloadItem
+from ..models import SunoClip, SunoData
+from .contracts import DesiredDownloadPlan, DownloadItem, ManifestEntry
 from .source_modes import _get_source_mode, _source_modes_for
 
 
@@ -75,7 +69,11 @@ def _preserve_source(
 
 
 def _set_manifest_album(entry: dict[str, Any], album: str | None) -> None:
-    """Store the inherited album marker, or remove it when not needed."""
+    """Store the inherited album marker, or remove it when not needed.
+
+    Thin forwarder kept for tests and legacy call sites; new code should
+    set ``ManifestEntry.album`` directly (None = absent).
+    """
     if album is None:
         entry.pop("album", None)
     else:
@@ -88,22 +86,17 @@ def _apply_clip_metadata(
     *,
     album: str | None = None,
 ) -> None:
-    """Refresh manifest fields that mirror the SunoClip and nothing else.
+    """Refresh clip-mirror manifest fields on a dict-shaped entry.
 
-    These fields have no dependency on the on-disk file. Safe to call any
-    time we have a fresh clip — including the per-sync reconcile in
-    ``_plan_actions`` that heals records whose denormalised metadata
-    drifted in a prior code generation.
-
-    File-mirror fields (``size``, ``embedded_art_hash``) belong to
-    ``_apply_file_state`` and MUST NOT be written without a verified
-    file change. Writing them on an unchanged file would falsely claim
-    the file matches current Suno bytes when it might not.
+    Thin forwarder around :meth:`ManifestEntry.apply_clip_metadata` so
+    test fixtures and any remaining dict-style call sites keep working
+    while engine internals use ``ManifestEntry`` directly.
     """
-    entry["title"] = clip.title
-    entry["created"] = clip.created_at[:10] if clip.created_at else None
-    entry["meta_hash"] = clip_meta_hash(clip)
-    _set_manifest_album(entry, album)
+    me = ManifestEntry.from_dict(entry)
+    me.apply_clip_metadata(clip, album=album)
+    _replace_entry_dict(entry, me.to_dict())
+    if album is None:
+        entry.pop("album", None)
 
 
 def _apply_file_state(
@@ -111,19 +104,14 @@ def _apply_file_state(
     clip: SunoClip,
     file_size: int,
 ) -> None:
-    """Refresh manifest fields that mirror the on-disk file bytes.
+    """Refresh file-mirror manifest fields on a dict-shaped entry.
 
-    Call ONLY after a verified file write (download or successful
-    retag). ``embedded_art_hash`` claims the file contains the current
-    Suno art; writing it without a corresponding file change makes the
-    manifest lie about reality.
+    Thin forwarder around :meth:`ManifestEntry.apply_file_state` for the
+    same reason as :func:`_apply_clip_metadata`.
     """
-    entry["size"] = file_size
-    embedded_art_hash = image_url_hash(selected_image_url(clip))
-    if embedded_art_hash:
-        entry["embedded_art_hash"] = embedded_art_hash
-    else:
-        entry.pop("embedded_art_hash", None)
+    me = ManifestEntry.from_dict(entry)
+    me.apply_file_state(clip, file_size)
+    _replace_entry_dict(entry, me.to_dict())
 
 
 def _clip_entry(
@@ -134,16 +122,49 @@ def _clip_entry(
     *,
     album: str | None = None,
 ) -> dict[str, Any]:
-    """Build a stored Downloaded Library record for one clip."""
-    entry = {
-        "path": rel_path,
-        "sources": item.sources,
-        "source_modes": _source_modes_for(item.sources, options),
-        "quality": item.quality,
-    }
-    _apply_clip_metadata(entry, item.clip, album=album)
-    _apply_file_state(entry, item.clip, file_size)
-    return entry
+    """Build a stored Downloaded Library record for one clip (dict shape)."""
+    me = ManifestEntry(
+        path=rel_path,
+        sources=list(item.sources),
+        source_modes=_source_modes_for(item.sources, options),
+        quality=item.quality,
+    )
+    me.apply_clip_metadata(item.clip, album=album)
+    me.apply_file_state(item.clip, file_size)
+    return me.to_dict()
+
+
+def _replace_entry_dict(entry: dict[str, Any], new_dict: dict[str, Any]) -> None:
+    """Replace the contents of an entry dict in place."""
+    entry.clear()
+    entry.update(new_dict)
+
+
+def _clear_for_redownload(entry: dict[str, Any]) -> None:
+    """Reset every field whose meaning is "describes the file on disk".
+
+    Wraps :meth:`ManifestEntry.clear_for_redownload`. Closes the
+    v6.3.1–v6.3.4 leak where call sites manually cleared ``path`` +
+    ``meta_hash`` (+ sometimes ``album``) but forgot ``embedded_art_hash``,
+    leaving a stale art-hash sentinel that suppressed the next retag.
+    """
+    me = ManifestEntry.from_dict(entry)
+    me.clear_for_redownload()
+    _replace_entry_dict(entry, me.to_dict())
+
+
+def _needs_retag(
+    entry: dict[str, Any],
+    clip: SunoClip,
+    resolved_album: str | None,
+) -> str | None:
+    """Return the first reason an entry needs retagging, or None.
+
+    Wraps :meth:`ManifestEntry.needs_retag` for dict-shaped engine state.
+    Returns "meta" / "art" / "album" so reconcile logs can explain
+    themselves.
+    """
+    return ManifestEntry.from_dict(entry).needs_retag(clip, resolved_album)
 
 
 def _filter_my_songs(

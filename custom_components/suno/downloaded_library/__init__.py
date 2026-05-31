@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ from .contracts import (
     RenderedAudio,
     RetagResult,
 )
-from .cover_art import _parse_cover_hashes, _update_cover_art
+from .cover_art import CoverHashFile, _update_cover_art
 from .filesystem import (
     _cleanup_empty_dirs,
     _delete_file,
@@ -45,14 +46,15 @@ from .filesystem import (
     _write_file,
 )
 from .m3u8 import _write_m3u8_playlists
-from .metadata import _album_for_clip, _manifest_album_for_clip, _with_image
+from .metadata import _album_for_clip, _manifest_album_for_clip
 from .paths import _clip_path, _safe_name, _video_clip_path
 from .planning import (
     _add_clip,
     _apply_clip_metadata,
     _apply_file_state,
+    _clear_for_redownload,
     _clip_entry,
-    _set_manifest_album,
+    _needs_retag,
     build_desired,
 )
 from .reconciliation import _reconcile_disk as _reconcile_disk_fn
@@ -463,9 +465,7 @@ class DownloadedLibrary:
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
-                    existing["path"] = ""
-                    existing.pop("meta_hash", None)
-                    _set_manifest_album(existing, None)
+                    _clear_for_redownload(existing)
         return migrated
 
     def _plan_actions(
@@ -504,18 +504,10 @@ class DownloadedLibrary:
             else:
                 existing["sources"] = item.sources
                 existing["source_modes"] = _source_modes_for(item.sources, options)
-                old_hash = existing.get("meta_hash", "")
-                new_hash = clip_meta_hash(item.clip)
-                expected_art_hash = image_url_hash(selected_image_url(item.clip))
-                stored_art_hash = existing.get("embedded_art_hash", "")
                 resolved_album = _manifest_album_for_clip(item.clip, self._clip_index)
-                meta_changed = old_hash and new_hash != old_hash
-                art_stale = expected_art_hash and stored_art_hash != expected_art_hash
-                if resolved_album is None:
-                    album_changed = "album" in existing
-                else:
-                    album_changed = resolved_album != existing.get("album")
-                if meta_changed or art_stale or album_changed:
+                retag_reason = _needs_retag(existing, item.clip, resolved_album)
+                if retag_reason is not None:
+                    _LOGGER.debug("Retag queued for %s: %s", item.clip.id, retag_reason)
                     to_retag.append(item)
                 else:
                     _apply_clip_metadata(existing, item.clip, album=resolved_album)
@@ -563,9 +555,7 @@ class DownloadedLibrary:
                         "Re-tag target missing after re-tag, re-downloading: %s",
                         existing["path"],
                     )
-                    existing["path"] = ""
-                    existing.pop("meta_hash", None)
-                    _set_manifest_album(existing, None)
+                    _clear_for_redownload(existing)
                     to_download.append(item)
                     retag_missing += 1
                     continue
@@ -583,9 +573,7 @@ class DownloadedLibrary:
                 _LOGGER.debug("Re-tagged: %s", existing["path"])
             elif result is RetagResult.MISSING:
                 _LOGGER.info("Re-tag target missing, re-downloading: %s", existing["path"])
-                existing["path"] = ""
-                existing.pop("meta_hash", None)
-                _set_manifest_album(existing, None)
+                _clear_for_redownload(existing)
                 to_download.append(item)
                 retag_missing += 1
             else:
@@ -655,7 +643,7 @@ class DownloadedLibrary:
             entry = clips_state.get(item.clip.id)
             if not entry or not entry.get("path"):
                 continue
-            image_url = item.clip.image_large_url or item.clip.image_url or item.clip.video_cover_url or None
+            image_url = selected_image_url(item.clip) or None
             if not image_url:
                 continue
             target = base / entry["path"]
@@ -870,9 +858,9 @@ class DownloadedLibrary:
 
         _LOGGER.info("Downloading: %s (%s)", clip.title, item.quality)
         album_title = _album_for_clip(clip, self._clip_index)
-        image_url = clip.image_large_url or clip.image_url or clip.video_cover_url or None
+        image_url = selected_image_url(clip) or None
         image_data = await self._audio.fetch_image(image_url) if image_url else None
-        meta = _with_image(clip.to_track_metadata(album=album_title), image_data)
+        meta = replace(clip.to_track_metadata(album=album_title), image_data=image_data)
 
         try:
             rendered = await self._audio.render(clip, item.quality, meta, image_url)
@@ -944,9 +932,9 @@ class DownloadedLibrary:
                 _LOGGER.warning("Re-tag aborted, no current album art available: %s", target)
                 return RetagResult.FAILED
 
-        meta = _with_image(
+        meta = replace(
             item.clip.to_track_metadata(album=_album_for_clip(item.clip, self._clip_index)),
-            image_data,
+            image_data=image_data,
         )
         try:
             ok = await self._audio.retag(target, meta)
@@ -963,22 +951,19 @@ class DownloadedLibrary:
         if not expected:
             return None
         cover_path = folder / "cover.jpg"
-        hash_path = folder / ".cover_hash"
+        hash_file = CoverHashFile(folder / ".cover_hash")
 
-        def _read() -> bytes | None:
-            try:
-                stored_hashes = _parse_cover_hashes(hash_path.read_text())
-            except OSError:
-                return None
-            if stored_hashes.get(clip_id) != expected:
-                return None
+        if await hash_file.get(self.hass, clip_id) != expected:
+            return None
+
+        def _read_cover() -> bytes | None:
             try:
                 data = cover_path.read_bytes()
             except OSError:
                 return None
             return data or None
 
-        return await self.hass.async_add_executor_job(_read)
+        return await self.hass.async_add_executor_job(_read_cover)
 
     async def async_cleanup_disabled_downloads(
         self,
