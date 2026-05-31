@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -109,7 +110,7 @@ async def test_convert_args_default_is_lossy_q100_no_downsample(hass: HomeAssist
     assert "-lossless" not in cmd
     assert "-vf" not in cmd
     assert "libwebp_anim" in cmd
-    assert "-compression_level" in cmd and _arg_after(cmd, "-compression_level") == "6"
+    assert "-compression_level" in cmd and _arg_after(cmd, "-compression_level") == "0"
     assert "-loop" in cmd and _arg_after(cmd, "-loop") == "0"
     assert "-an" in cmd
 
@@ -119,7 +120,7 @@ async def test_convert_args_lossless_when_enabled(hass: HomeAssistant, tmp_path:
     cmd = await _capture_convert_args(hass, tmp_path, VideoArtSettings(video_lossless=True))
 
     assert "-lossless" in cmd and _arg_after(cmd, "-lossless") == "1"
-    assert "-compression_level" in cmd and _arg_after(cmd, "-compression_level") == "6"
+    assert "-compression_level" in cmd and _arg_after(cmd, "-compression_level") == "0"
     assert "-quality" not in cmd
 
 
@@ -267,3 +268,40 @@ async def test_convert_mp4_to_webp_timeout(hass: HomeAssistant, tmp_path: Path) 
 
     assert result is False
     mock_proc.kill.assert_called_once()
+
+
+async def test_convert_mp4_to_webp_uses_video_timeout(hass: HomeAssistant, tmp_path: Path) -> None:
+    """convert_mp4_to_webp uses VIDEO_FFMPEG_TIMEOUT, not the shared audio timeout."""
+    from custom_components.suno.const import DOWNLOAD_FFMPEG_TIMEOUT, VIDEO_FFMPEG_TIMEOUT
+    from custom_components.suno.downloaded_library import video_art as video_art_mod
+
+    mp4_path = tmp_path / "test.mp4"
+    mp4_path.write_bytes(b"\x00" * 100)
+    webp_path = tmp_path / "cover.webp"
+
+    mock_proc = AsyncMock()
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+    mock_proc.returncode = 0
+    mock_proc.kill = Mock()
+    mock_proc.wait = AsyncMock()
+
+    async def fake_subprocess(*args: object, **kwargs: object) -> AsyncMock:
+        (tmp_path / "cover.webp.tmp").write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+        return mock_proc
+
+    captured_timeouts: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def spy_wait_for(awaitable: object, timeout: float) -> object:
+        captured_timeouts.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    with (
+        patch("asyncio.create_subprocess_exec", side_effect=fake_subprocess),
+        patch.object(video_art_mod.asyncio, "wait_for", side_effect=spy_wait_for),
+    ):
+        result = await convert_mp4_to_webp(hass, "/usr/bin/ffmpeg", mp4_path, webp_path)
+
+    assert result is True
+    assert captured_timeouts == [VIDEO_FFMPEG_TIMEOUT]
+    assert VIDEO_FFMPEG_TIMEOUT > DOWNLOAD_FFMPEG_TIMEOUT

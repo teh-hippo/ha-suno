@@ -49,6 +49,7 @@ from custom_components.suno.downloaded_library import (
     _write_m3u8_playlists,
 )
 from custom_components.suno.downloaded_library.planning import _apply_clip_metadata, _apply_file_state
+from custom_components.suno.downloaded_library.video_art import VideoArtSettings
 from custom_components.suno.models import SunoClip, SunoData, TrackMetadata, image_url_hash
 
 
@@ -5014,3 +5015,163 @@ async def test_retag_aborts_when_image_url_set_but_no_bytes_available(hass: Home
 
     assert audio.retag_calls == [], "retag must not run without current art bytes"
     assert "embedded_art_hash" not in library.state["clips"][clip.id], "sentinel must not be set on failure"
+
+
+# ── Video art conversion retry-budget ────────────────────────────
+
+
+async def _build_convert_library(
+    hass: HomeAssistant,
+    tmp_path: Path,
+    *,
+    video_settings: VideoArtSettings | None = None,
+) -> tuple[DownloadedLibrary, SunoClip, Path]:
+    """Build a library wired for VIDEO_ART_BOTH with a fake ffmpeg binary."""
+    clip = _clip_with_display(
+        "clip-vfail-000-0000-0000-000000000000",
+        "Convert Fail Song",
+        display_name="artist",
+        video_cover_url="https://cdn1.suno.ai/video_gen_fail_processed_video.mp4",
+    )
+    sync_dir = tmp_path / "mirror"
+    library = DownloadedLibrary(
+        hass,
+        InMemoryDownloadedLibraryStorage(),
+        audio=_FakeAudio(),
+        video_art_mode=VIDEO_ART_BOTH,
+        video_art_settings=video_settings or VideoArtSettings(),
+    )
+    library.ffmpeg_binary = "/usr/bin/ffmpeg"
+    await library.async_load()
+    return library, clip, sync_dir
+
+
+async def test_video_convert_failure_records_failed_marker(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A failed convert_mp4_to_webp records video_art_failed with attempts=1."""
+    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    convert_mock = AsyncMock(return_value=False)
+
+    with patch(
+        "custom_components.suno.downloaded_library.convert_mp4_to_webp",
+        convert_mock,
+    ):
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    convert_mock.assert_awaited_once()
+    failed = library.state["clips"][clip.id].get("video_art_failed")
+    assert isinstance(failed, dict)
+    assert failed["attempts"] == 1
+    assert failed["url_hash"]
+    assert "video_max_fps" in failed["settings"]
+    assert "video_art_settings" not in library.state["clips"][clip.id]
+
+
+async def test_video_convert_skipped_after_max_attempts(hass: HomeAssistant, tmp_path: Path) -> None:
+    """After MAX_VIDEO_CONVERT_ATTEMPTS failures, conversion is skipped on next sync."""
+    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
+
+    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    convert_mock = AsyncMock(return_value=False)
+
+    with patch(
+        "custom_components.suno.downloaded_library.convert_mp4_to_webp",
+        convert_mock,
+    ):
+        for _ in range(MAX_VIDEO_CONVERT_ATTEMPTS):
+            await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS
+
+        # Next sync must NOT invoke convert_mp4_to_webp
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS
+
+    failed = library.state["clips"][clip.id]["video_art_failed"]
+    assert failed["attempts"] == MAX_VIDEO_CONVERT_ATTEMPTS
+
+
+async def test_video_convert_success_clears_failed_marker(hass: HomeAssistant, tmp_path: Path) -> None:
+    """A successful conversion removes the video_art_failed marker."""
+    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+
+    async def fail_then_succeed(
+        _hass: HomeAssistant,
+        _bin: str,
+        _mp4: Path,
+        webp: Path,
+        _settings: object,
+    ) -> bool:
+        if fail_then_succeed.calls == 0:  # type: ignore[attr-defined]
+            fail_then_succeed.calls += 1  # type: ignore[attr-defined]
+            return False
+        webp.write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+        return True
+
+    fail_then_succeed.calls = 0  # type: ignore[attr-defined]
+
+    with patch(
+        "custom_components.suno.downloaded_library.convert_mp4_to_webp",
+        side_effect=fail_then_succeed,
+    ):
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert "video_art_failed" in library.state["clips"][clip.id]
+
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+    entry = library.state["clips"][clip.id]
+    assert "video_art_failed" not in entry
+    assert entry["video_art_settings"]
+
+
+async def test_video_convert_settings_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changing video_art_settings causes a fresh attempt even after exhausted retries."""
+    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
+
+    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    convert_mock = AsyncMock(return_value=False)
+
+    with patch(
+        "custom_components.suno.downloaded_library.convert_mp4_to_webp",
+        convert_mock,
+    ):
+        for _ in range(MAX_VIDEO_CONVERT_ATTEMPTS):
+            await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+
+        # Sanity check: gate now closed
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS
+
+        # Change settings → gate must reopen
+        library.video_art_settings = VideoArtSettings(video_quality=85)
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS + 1
+
+
+async def test_video_convert_source_url_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Changing the source video URL causes a fresh attempt even after exhausted retries."""
+    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
+
+    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    convert_mock = AsyncMock(return_value=False)
+
+    with patch(
+        "custom_components.suno.downloaded_library.convert_mp4_to_webp",
+        convert_mock,
+    ):
+        for _ in range(MAX_VIDEO_CONVERT_ATTEMPTS):
+            await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS
+
+        # Sanity check: gate now closed
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS
+
+        # New video URL → gate must reopen (the new MP4 gets downloaded too)
+        new_clip = _clip_with_display(
+            clip.id,
+            clip.title,
+            display_name="artist",
+            video_cover_url="https://cdn1.suno.ai/video_gen_DIFFERENT_processed_video.mp4",
+        )
+        await library.async_reconcile(_options(sync_dir), SunoData(liked_clips=[new_clip]))
+        assert convert_mock.await_count == MAX_VIDEO_CONVERT_ATTEMPTS + 1
