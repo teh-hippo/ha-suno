@@ -9,6 +9,7 @@ from custom_components.suno.audio_metadata import (
     build_id3_header,
     extract_apic,
     fix_flac_cover_type,
+    fix_flac_total_samples,
     skip_existing_id3,
 )
 from custom_components.suno.audio_retag import retag_flac, retag_mp3
@@ -461,7 +462,6 @@ def test_clip_meta_hash_deterministic() -> None:
 
 def testfix_flac_total_samples_patches_streaminfo() -> None:
     """Correctly patches total_samples into STREAMINFO block."""
-    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     # Build a minimal valid FLAC header with STREAMINFO
     # STREAMINFO: 34 bytes
@@ -488,7 +488,6 @@ def testfix_flac_total_samples_patches_streaminfo() -> None:
 
 def testfix_flac_total_samples_zero_duration() -> None:
     """Duration 0 leaves data unchanged."""
-    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     data = b"fLaC" + b"\x00" * 40
     assert fix_flac_total_samples(data, 0.0) is data
@@ -496,7 +495,6 @@ def testfix_flac_total_samples_zero_duration() -> None:
 
 def testfix_flac_total_samples_not_flac() -> None:
     """Non-FLAC data is returned unchanged."""
-    from custom_components.suno.audio_metadata import fix_flac_total_samples
 
     data = b"NOT_FLAC" + b"\x00" * 40
     assert fix_flac_total_samples(data, 120.0) is data

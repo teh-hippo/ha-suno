@@ -165,6 +165,63 @@ async def _await_entry_refresh(hass: HomeAssistant, entry: ConfigEntry) -> None:
         unschedule_refresh()
 
 
+def make_clip(
+    clip_id: str = "clip-test-0000-0000-0000-000000000000",
+    *,
+    title: str = "Song",
+    created_at: str = "2026-03-15T10:00:00Z",
+    audio_url: str | None = None,
+    image_url: str = "",
+    image_large_url: str = "",
+    video_cover_url: str = "",
+    is_liked: bool = True,
+    status: str = "complete",
+    tags: str = "pop",
+    duration: float = 120.0,
+    clip_type: str = "gen",
+    has_vocal: bool = True,
+    display_name: str = "",
+    handle: str = "",
+    edited_clip_id: str = "",
+    is_remix: bool = False,
+    root_ancestor_id: str = "",
+    lineage_status: str = "",
+    album_title: str = "",
+    prompt: str = "",
+    gpt_description_prompt: str = "",
+) -> SunoClip:
+    """Build a SunoClip with sensible test defaults.
+
+    Centralises the per-test ``_clip`` / ``_make_clip`` helpers that
+    drifted across ``test_downloaded_library.py`` and
+    ``test_library_refresh.py``. Pass overrides via keyword.
+    """
+    return SunoClip(
+        id=clip_id,
+        title=title,
+        audio_url=audio_url if audio_url is not None else f"https://cdn1.suno.ai/{clip_id}.mp3",
+        image_url=image_url,
+        image_large_url=image_large_url,
+        video_cover_url=video_cover_url,
+        is_liked=is_liked,
+        status=status,
+        created_at=created_at,
+        tags=tags,
+        duration=duration,
+        clip_type=clip_type,
+        has_vocal=has_vocal,
+        display_name=display_name,
+        handle=handle,
+        edited_clip_id=edited_clip_id,
+        is_remix=is_remix,
+        root_ancestor_id=root_ancestor_id,
+        lineage_status=lineage_status,
+        album_title=album_title,
+        prompt=prompt,
+        gpt_description_prompt=gpt_description_prompt,
+    )
+
+
 def sample_clips(count: int = 2) -> list[SunoClip]:
     """Return sample clips for testing."""
     clips = [

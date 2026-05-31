@@ -271,7 +271,6 @@ class TestToTrackMetadataAlbumArtist:
     """Album artist propagation (Release 2: 2.11)."""
 
     def _make(self, display_name: str = "AmeonAI"):
-        from custom_components.suno.models import SunoClip
 
         return SunoClip(
             id="abc",

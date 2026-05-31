@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
 from custom_components.suno.coordinator import _MAX_PARENT_LOOKUPS_PER_CYCLE, SunoCoordinator
-from custom_components.suno.exceptions import SunoApiError, SunoAuthError
+from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoConnectionError
 from custom_components.suno.models import SunoClip, SunoData, SunoPlaylist
 
 from .conftest import (
@@ -302,7 +302,6 @@ async def test_playlist_clips_populated(hass: HomeAssistant, mock_suno_client: A
 
 async def test_playlist_clip_fetch_partial_failure(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
     """When one playlist fetch fails, other playlists still succeed."""
-    from custom_components.suno.models import SunoPlaylist
 
     mock_suno_client.get_playlists.return_value = [
         SunoPlaylist(id="pl-ok", name="Good", image_url="", num_clips=1),
@@ -1060,7 +1059,6 @@ async def test_update_connection_error_preserves_current_library(
     hass: HomeAssistant, mock_suno_client: AsyncMock
 ) -> None:
     """ensure_authenticated raising SunoConnectionError preserves current data."""
-    from custom_components.suno.exceptions import SunoConnectionError
 
     entry = make_entry()
     with patch_suno_setup(mock_suno_client):

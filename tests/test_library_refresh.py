@@ -19,6 +19,8 @@ from custom_components.suno.library_refresh import (
 )
 from custom_components.suno.models import SunoClip, SunoCredits, SunoPlaylist
 
+from .conftest import make_clip
+
 
 class FakeSunoLibraryAdapter:
     def __init__(
@@ -89,19 +91,11 @@ def _make_clip(
     lineage_status: str = "",
     album_title: str = "",
 ) -> SunoClip:
-    return SunoClip(
-        id=clip_id,
+    return make_clip(
+        clip_id,
         title=title,
-        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
-        image_url="",
-        image_large_url="",
-        is_liked=False,
-        status="complete",
         created_at="2026-01-01T00:00:00Z",
-        tags="pop",
-        duration=120.0,
-        clip_type="gen",
-        has_vocal=True,
+        is_liked=False,
         edited_clip_id=edited_clip_id,
         is_remix=is_remix,
         root_ancestor_id=root_ancestor_id,

@@ -9,6 +9,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
+from custom_components.suno.config_flow import SunoOptionsFlow
 from custom_components.suno.const import (
     CONF_ALL_PLAYLISTS,
     CONF_CACHE_MAX_SIZE,
@@ -583,7 +584,6 @@ async def test_dynamic_title_from_auth(hass: HomeAssistant, mock_setup_entry: As
 
 async def test_validate_download_path_permission_error(hass: HomeAssistant, tmp_path) -> None:
     """PermissionError during path validation returns False."""
-    from custom_components.suno.config_flow import SunoOptionsFlow
 
     flow = SunoOptionsFlow.__new__(SunoOptionsFlow)
     flow.hass = hass
@@ -598,7 +598,6 @@ async def test_validate_download_path_permission_error(hass: HomeAssistant, tmp_
 
 async def test_validate_download_path_oserror(hass: HomeAssistant, tmp_path) -> None:
     """OSError during path validation returns False."""
-    from custom_components.suno.config_flow import SunoOptionsFlow
 
     flow = SunoOptionsFlow.__new__(SunoOptionsFlow)
     flow.hass = hass

@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.suno.const import DOWNLOAD_FFMPEG_TIMEOUT, VIDEO_FFMPEG_TIMEOUT
+from custom_components.suno.downloaded_library import video_art as video_art_mod
 from custom_components.suno.downloaded_library.video_art import (
     VideoArtSettings,
     convert_mp4_to_webp,
@@ -272,8 +274,6 @@ async def test_convert_mp4_to_webp_timeout(hass: HomeAssistant, tmp_path: Path) 
 
 async def test_convert_mp4_to_webp_uses_video_timeout(hass: HomeAssistant, tmp_path: Path) -> None:
     """convert_mp4_to_webp uses VIDEO_FFMPEG_TIMEOUT, not the shared audio timeout."""
-    from custom_components.suno.const import DOWNLOAD_FFMPEG_TIMEOUT, VIDEO_FFMPEG_TIMEOUT
-    from custom_components.suno.downloaded_library import video_art as video_art_mod
 
     mp4_path = tmp_path / "test.mp4"
     mp4_path.write_bytes(b"\x00" * 100)

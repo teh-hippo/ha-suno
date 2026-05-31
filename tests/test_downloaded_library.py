@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.suno.const import (
     CONF_ALL_PLAYLISTS,
+    CONF_CREATE_PLAYLISTS,
     CONF_DOWNLOAD_MODE_LIKED,
     CONF_DOWNLOAD_MODE_MY_SONGS,
     CONF_DOWNLOAD_MODE_PLAYLISTS,
@@ -25,6 +26,7 @@ from custom_components.suno.const import (
     DOWNLOAD_MODE_ARCHIVE,
     DOWNLOAD_MODE_CACHE,
     DOWNLOAD_MODE_MIRROR,
+    MAX_VIDEO_CONVERT_ATTEMPTS,
     QUALITY_HIGH,
     QUALITY_STANDARD,
     VIDEO_ART_BOTH,
@@ -38,7 +40,9 @@ from custom_components.suno.downloaded_library import (
     DownloadItem,
     InMemoryDownloadedLibraryStorage,
     RenderedAudio,
+    RetagResult,
     _add_clip,
+    _album_for_clip,
     _build_download_summary,
     _clip_path,
     _get_source_mode,
@@ -48,25 +52,29 @@ from custom_components.suno.downloaded_library import (
     _write_file,
     _write_m3u8_playlists,
 )
+from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 from custom_components.suno.downloaded_library.planning import _apply_clip_metadata, _apply_file_state
 from custom_components.suno.downloaded_library.video_art import VideoArtSettings
-from custom_components.suno.models import SunoClip, SunoData, TrackMetadata, image_url_hash
+from custom_components.suno.models import (
+    SunoClip,
+    SunoData,
+    SunoPlaylist,
+    TrackMetadata,
+    clip_meta_hash,
+    image_url_hash,
+    selected_image_url,
+)
 
 
+from .conftest import make_clip
+
+# Backwards-compat shim: existing tests call _clip(...) positionally.
+# New tests should import make_clip from conftest directly.
 def _clip(clip_id: str, title: str = "Song") -> SunoClip:
-    return SunoClip(
-        id=clip_id,
+    return make_clip(
+        clip_id,
         title=title,
         audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
-        image_url="",
-        image_large_url="",
-        is_liked=True,
-        status="complete",
-        created_at="2026-03-15T10:00:00Z",
-        tags="pop",
-        duration=120.0,
-        clip_type="gen",
-        has_vocal=True,
         display_name="artist",
     )
 
@@ -150,7 +158,6 @@ class _FakeCache:
 
 
 def test_apply_clip_metadata_mirrors_clip_fields_only() -> None:
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-meta-0000-0000-0000-000000000000", "New Title")
     clip.image_large_url = "https://images.example/cover.jpg"
@@ -203,7 +210,6 @@ def test_apply_clip_metadata_clears_album_without_touching_file_state() -> None:
 
 
 def test_apply_file_state_writes_size_and_embedded_art_hash() -> None:
-    from custom_components.suno.models import image_url_hash, selected_image_url
 
     clip = _clip("clip-file-0000-0000-0000-000000000000", "Song")
     clip.image_large_url = "https://images.example/cover.jpg"
@@ -235,7 +241,6 @@ async def test_stale_title_heals_without_retag(hass: HomeAssistant, tmp_path: Pa
     refresh clip-mirror fields without touching file-mirror fields or
     issuing a retag.
     """
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-stale-title-0000-0000-0000-000000000000", "New Live Title")
     clip.image_large_url = "https://images.example/cover.jpg"
@@ -297,7 +302,6 @@ async def test_unchanged_clip_reconcile_does_not_clobber_embedded_art_hash(hass:
     the unchanged reconciler preserves it untouched (it would also
     overwrite with the same value, but the test pins that contract).
     """
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-no-art-clobber-0000-0000-0000-000000000000", "Stable Song")
     clip.image_large_url = "https://images.example/keep.jpg"
@@ -2202,7 +2206,6 @@ async def test_sync_cover_art_hash_map_prevents_variant_pingpong(hass: HomeAssis
 
 async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, tmp_path: Path) -> None:
     """_retag_clip pre-checks for missing files and signals MISSING."""
-    from custom_components.suno.downloaded_library import RetagResult
 
     library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
     await library.async_load()
@@ -2219,7 +2222,6 @@ async def test_retag_clip_returns_missing_when_target_gone(hass: HomeAssistant, 
 
 async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tmp_path: Path) -> None:
     """_retag_clip treats zero-byte files as MISSING."""
-    from custom_components.suno.downloaded_library import RetagResult
 
     library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage(), audio=_FakeAudio())
     await library.async_load()
@@ -2240,7 +2242,6 @@ async def test_retag_clip_returns_missing_when_zero_byte(hass: HomeAssistant, tm
 
 async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changed meta hash should re-tag the file in place, not re-download."""
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-meta-0000-0000-0000-000000000000", "Meta Song")
     sync_dir = tmp_path / "mirror"
@@ -2283,7 +2284,6 @@ async def test_metadata_hash_change_triggers_retag(hass: HomeAssistant, tmp_path
 
 async def test_async_reconcile_retags_when_prompt_changes(hass: HomeAssistant, tmp_path: Path) -> None:
     """Prompt-only metadata drift should retag lyrics without re-downloading."""
-    from custom_components.suno.models import clip_meta_hash
 
     clip_old = _clip("clip-prompt-0000-0000-0000-000000000000", "Prompt Song")
     clip_old.prompt = "prompt A"
@@ -2332,7 +2332,6 @@ async def test_async_reconcile_retags_when_gpt_description_prompt_changes(
     tmp_path: Path,
 ) -> None:
     """Changed GPT description prompt should refresh embedded comment tags."""
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip("clip-gpt-desc-0000-0000-0000-000000000000", "GPT Description Song")
     clip.gpt_description_prompt = "desc A"
@@ -2380,7 +2379,6 @@ async def test_async_reconcile_retags_when_gpt_description_prompt_changes(
 
 async def test_async_reconcile_retags_when_handle_changes(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changed Suno handle should re-tag SUNO_HANDLE in place."""
-    from custom_components.suno.models import clip_meta_hash
 
     old_clip = _clip("clip-handle-0000-0000-0000-000000000000", "Handle Song")
     old_clip.handle = "@alice"
@@ -2496,7 +2494,6 @@ async def test_reconcile_existing_file_downloads_video(hass: HomeAssistant, tmp_
 
 async def test_sync_videos_downloads_for_unchanged_clip(hass: HomeAssistant, tmp_path: Path) -> None:
     """Video is downloaded even when clip metadata is unchanged (no retag/download triggered)."""
-    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
 
     clip = _clip_with_display(
         "clip-vid3-0000-0000-0000-000000000000",
@@ -2585,7 +2582,6 @@ async def test_retag_failure_preserves_old_hash(hass: HomeAssistant, tmp_path: P
 
 async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -> None:
     """Full username change: multiple clips renamed + re-tagged, no re-downloads."""
-    from custom_components.suno.models import clip_meta_hash
 
     sync_dir = tmp_path / "mirror"
 
@@ -2637,7 +2633,6 @@ async def test_multi_clip_username_change(hass: HomeAssistant, tmp_path: Path) -
 
 async def test_liked_from_other_user_not_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
     """Liked songs from other artists are NOT renamed when user changes name."""
-    from custom_components.suno.models import clip_meta_hash
 
     sync_dir = tmp_path / "mirror"
     other_clip = _clip_with_display("other-clip-0000-0000-000000000000", "Other Song", display_name="otheartist")
@@ -2677,7 +2672,6 @@ async def test_liked_from_other_user_not_renamed(hass: HomeAssistant, tmp_path: 
 
 async def test_partial_rename_failure_continues(hass: HomeAssistant, tmp_path: Path) -> None:
     """OSError on one file during rename should not abort the batch."""
-    from custom_components.suno.models import clip_meta_hash
 
     sync_dir = tmp_path / "mirror"
 
@@ -2739,8 +2733,6 @@ async def test_hash_formula_migration_triggers_retag(hass: HomeAssistant, tmp_pa
     """Old-format hash (included display_name) triggers retag on first sync with new code."""
     import hashlib
 
-    from custom_components.suno.models import clip_meta_hash
-
     clip = _clip_with_display("clip-mig-0000-0000-0000-000000000000", "Migration Song", display_name="alice")
     # Old hash formula included display_name.
     old_hash = hashlib.md5(  # noqa: S324
@@ -2799,7 +2791,6 @@ async def test_manifest_write_oserror_is_swallowed(hass: HomeAssistant, tmp_path
 
 async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """When track_path is given, _update_cover_art writes <basename>.jpg too."""
-    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     clip_id = "clip-sidecar"
     track = tmp_path / "Foo.flac"
@@ -2833,7 +2824,6 @@ async def test_update_cover_art_writes_per_track_sidecar(hass: HomeAssistant, tm
 
 async def test_update_cover_art_writes_hash_map_once_for_single_clip(hass: HomeAssistant, tmp_path: Path) -> None:
     """A single clip writes one hash-map entry and skips the next sync."""
-    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     clip_id = "clip-single"
     image_url = "https://x/single.jpg"
@@ -2857,7 +2847,6 @@ async def test_update_cover_art_writes_hash_map_once_for_single_clip(hass: HomeA
 
 async def test_update_cover_art_migrates_legacy_bare_hash_on_fetch(hass: HomeAssistant, tmp_path: Path) -> None:
     """A legacy bare hash is replaced by the current clip's map entry."""
-    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     clip_id = "clip-legacy"
     image_url = "https://x/legacy.jpg"
@@ -2880,7 +2869,6 @@ async def test_update_cover_art_migrates_legacy_bare_hash_on_fetch(hass: HomeAss
 
 async def test_update_cover_art_fetch_failure_leaves_hash_file_untouched(hass: HomeAssistant, tmp_path: Path) -> None:
     """Failed image fetches do not rewrite existing hash-map contents."""
-    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     clip_id = "clip-failure"
     image_url = "https://x/failure.jpg"
@@ -2904,7 +2892,6 @@ async def test_update_cover_art_fetch_failure_leaves_hash_file_untouched(hass: H
 
 async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssistant, tmp_path: Path) -> None:
     """Hash-match path still backfills track sidecar if it's missing."""
-    from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 
     clip_id = "clip-backfill"
     track = tmp_path / "Foo.flac"
@@ -2927,7 +2914,6 @@ async def test_update_cover_art_backfills_missing_track_sidecar(hass: HomeAssist
 
 def test_album_for_clip_returns_none_for_non_remix() -> None:
     """Non-remix derivatives keep their own title as the album."""
-    from custom_components.suno.downloaded_library import _album_for_clip
 
     parent = SunoClip(
         id="parent",
@@ -2966,7 +2952,6 @@ def test_album_for_clip_returns_none_for_non_remix() -> None:
 
 def test_album_for_clip_inherits_root_for_remix() -> None:
     """Remix variants inherit the root ancestor's title as album."""
-    from custom_components.suno.downloaded_library import _album_for_clip
 
     parent = SunoClip(
         id="parent",
@@ -3383,7 +3368,6 @@ async def test_reconcile_manifest_idempotent_when_clean(hass: HomeAssistant, tmp
 
 async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
     """End-to-end: manifest entry whose file is gone → re-download queued."""
-    from custom_components.suno.models import clip_meta_hash
 
     sync_dir = tmp_path / "mirror"
     sync_dir.mkdir()
@@ -3428,7 +3412,6 @@ async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_p
 
 async def test_present_file_does_not_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
     """Negative control: file present + hash match → no re-download work."""
-    from custom_components.suno.models import clip_meta_hash
 
     sync_dir = tmp_path / "mirror"
     sync_dir.mkdir()
@@ -3502,7 +3485,6 @@ async def test_zero_size_file_triggers_redownload(hass: HomeAssistant, tmp_path:
 
 async def test_reconcile_skipped_when_nothing_changed(hass: HomeAssistant, tmp_path: Path) -> None:
     """Reconciliation is skipped when no downloads, deletions, migrations, or mode changes occurred."""
-    from custom_components.suno.models import clip_meta_hash
 
     clip_id = "clip0099-0000-0000-0000-000000000000"
     clip = _clip(clip_id, "Song")
@@ -3614,7 +3596,6 @@ async def test_cache_mode_cleans_up_existing_files(hass: HomeAssistant, tmp_path
 
 async def test_all_three_modes_coexist(hass: HomeAssistant, tmp_path: Path) -> None:
     """Mirror + Archive + Cache on different sections simultaneously."""
-    from custom_components.suno.models import SunoPlaylist
 
     storage = InMemoryDownloadedLibraryStorage(
         {
@@ -3678,8 +3659,6 @@ async def test_async_reconcile_removes_clips_when_playlist_disappears(hass: Home
     album directory is removed, and the ``.m3u8`` file for the gone playlist is
     rewritten away while the surviving playlist's ``.m3u8`` stays.
     """
-    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
-    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
 
     sync_dir = tmp_path / "downloads"
     sync_dir.mkdir()
@@ -3791,7 +3770,6 @@ async def test_async_reconcile_preserves_archive_playlist_clip_when_playlist_dis
     hass: HomeAssistant, tmp_path: Path
 ) -> None:
     """Archive-mode playlist clip survives even when its only playlist disappears."""
-    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
 
     sync_dir = tmp_path / "downloads"
     sync_dir.mkdir()
@@ -3855,8 +3833,6 @@ async def test_async_reconcile_renames_m3u8_when_playlist_renamed(hass: HomeAssi
     filenames on the case-sensitive Linux filesystem HA OS uses, so any
     case-insensitive matching in the cleanup would surface here.
     """
-    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
-    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
 
     sync_dir = tmp_path / "downloads"
     sync_dir.mkdir()
@@ -3924,8 +3900,6 @@ async def test_async_reconcile_renames_m3u8_when_playlist_renamed(hass: HomeAssi
 
 async def test_async_reconcile_removes_m3u8_when_create_playlists_disabled(hass: HomeAssistant, tmp_path: Path) -> None:
     """Disabling generated playlists removes existing M3U8 files only."""
-    from custom_components.suno.const import CONF_CREATE_PLAYLISTS
-    from custom_components.suno.models import SunoPlaylist, clip_meta_hash
 
     sync_dir = tmp_path / "downloads"
     sync_dir.mkdir()
@@ -4043,7 +4017,6 @@ async def test_album_set_from_root_ancestor(hass: HomeAssistant, tmp_path: Path)
 
 async def test_async_reconcile_retags_remix_when_root_title_renamed(hass: HomeAssistant, tmp_path: Path) -> None:
     """A renamed root ancestor refreshes the inherited album tag on remixes."""
-    from custom_components.suno.models import clip_meta_hash
 
     root_clip = SunoClip(
         id="root1",
@@ -4117,7 +4090,6 @@ async def test_async_reconcile_retags_remix_when_root_title_renamed(hass: HomeAs
 
 async def test_async_reconcile_retags_remix_when_root_lineage_unavailable(hass: HomeAssistant, tmp_path: Path) -> None:
     """A missing root ancestor refreshes the inherited album marker to the fallback."""
-    from custom_components.suno.models import clip_meta_hash
 
     remix_clip = SunoClip(
         id="remix-unavailable",
@@ -4214,20 +4186,7 @@ async def test_album_fallback_no_root(hass: HomeAssistant, tmp_path: Path) -> No
 
 def _make_clip(clip_id: str, title: str = "Song", created: str = "2026-03-15T10:00:00Z") -> SunoClip:
     """Construct a minimal SunoClip for path/playlist/helper tests."""
-    return SunoClip(
-        id=clip_id,
-        title=title,
-        audio_url=f"https://cdn1.suno.ai/{clip_id}.mp3",
-        image_url=None,
-        image_large_url=None,
-        is_liked=True,
-        status="complete",
-        created_at=created,
-        tags="pop",
-        duration=120.0,
-        clip_type="gen",
-        has_vocal=True,
-    )
+    return make_clip(clip_id, title=title, created_at=created, image_url="", image_large_url="")
 
 
 # ── TestSafeName (relocated from tests/test_download.py:49) ──
@@ -4840,7 +4799,6 @@ def _clip_with_art(
 
 async def test_stale_embedded_art_hash_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
     """Manifest entries with missing/stale embedded_art_hash queue retag even when meta_hash matches."""
-    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
 
     clip = _clip_with_art("clip-art-0000-0000-0000-000000000000", "Art Song")
     sync_dir = tmp_path / "mirror"
@@ -4881,7 +4839,6 @@ async def test_stale_embedded_art_hash_triggers_retag(hass: HomeAssistant, tmp_p
 
 async def test_retag_uses_validated_cover_jpg_without_network_fetch(hass: HomeAssistant, tmp_path: Path) -> None:
     """When cover.jpg + .cover_hash match the current URL, retag uses cover.jpg bytes."""
-    from custom_components.suno.models import clip_meta_hash, image_url_hash, selected_image_url
 
     clip = _clip_with_art("clip-cov-0000-0000-0000-000000000000", "Cover Song")
     sync_dir = tmp_path / "mirror"
@@ -4941,7 +4898,6 @@ async def test_read_validated_cover_requires_matching_clip_entry(hass: HomeAssis
 
 async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAssistant, tmp_path: Path) -> None:
     """A stale .cover_hash forces a fresh fetch — protects against embedding stale art."""
-    from custom_components.suno.models import clip_meta_hash, selected_image_url
 
     clip = _clip_with_art("clip-mis-0000-0000-0000-000000000000", "Mismatch Song")
     sync_dir = tmp_path / "mirror"
@@ -4982,7 +4938,6 @@ async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAs
 
 async def test_retag_aborts_when_image_url_set_but_no_bytes_available(hass: HomeAssistant, tmp_path: Path) -> None:
     """If we cannot obtain current art bytes, do not advance manifest sentinels."""
-    from custom_components.suno.models import clip_meta_hash
 
     clip = _clip_with_art("clip-noart-0000-0000-0000-00000000000", "No Art Song")
     sync_dir = tmp_path / "mirror"
@@ -5068,7 +5023,6 @@ async def test_video_convert_failure_records_failed_marker(hass: HomeAssistant, 
 
 async def test_video_convert_skipped_after_max_attempts(hass: HomeAssistant, tmp_path: Path) -> None:
     """After MAX_VIDEO_CONVERT_ATTEMPTS failures, conversion is skipped on next sync."""
-    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
 
     library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
@@ -5125,7 +5079,6 @@ async def test_video_convert_success_clears_failed_marker(hass: HomeAssistant, t
 
 async def test_video_convert_settings_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changing video_art_settings causes a fresh attempt even after exhausted retries."""
-    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
 
     library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
@@ -5149,7 +5102,6 @@ async def test_video_convert_settings_change_clears_gate(hass: HomeAssistant, tm
 
 async def test_video_convert_source_url_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changing the source video URL causes a fresh attempt even after exhausted retries."""
-    from custom_components.suno.const import MAX_VIDEO_CONVERT_ATTEMPTS
 
     library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
