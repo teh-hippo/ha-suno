@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v6.3.5 (2026-05-31)
+
+### Bug Fixes
+
+- **video_art**: Stop runaway timeouts on animated WebP conversion
+  ([`dfd4b10`](https://github.com/teh-hippo/ha-suno/commit/dfd4b1004d5bcac3ae1fed62ee5386eb19af3dc7))
+
+### Documentation
+
+- **library_refresh**: Refresh _prepopulate_lineage docstring post R4-3
+  ([`8cd3637`](https://github.com/teh-hippo/ha-suno/commit/8cd363790de7919c9dde917bd5e6d501f6cd3ef3))
+
+
 ## v6.3.4 (2026-05-30)
 
 ### Bug Fixes
