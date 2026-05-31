@@ -22,105 +22,118 @@ from .conftest import make_entry, patch_suno_setup, setup_entry
 
 # ── ID3 header builder ──────────────────────────────────────────────
 
+# ── TestBuildId3Header (converted to free functions) ────────────────────
 
-class TestBuildId3Header:
-    """Tests for the minimal ID3v2.4 header builder."""
+"""Tests for the minimal ID3v2.4 header builder."""
 
-    def test_header_starts_with_id3_magic(self) -> None:
-        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
-        assert result[:3] == b"ID3"
 
-    def test_header_version_is_2_3(self) -> None:
-        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
-        assert result[3:5] == b"\x03\x00"
+def test_build_id3_header_header_starts_with_id3_magic() -> None:
+    result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+    assert result[:3] == b"ID3"
 
-    def test_contains_tit2_frame(self) -> None:
-        result = build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
-        assert b"TIT2" in result
-        assert b"My Song" in result
 
-    def test_contains_tpe1_frame(self) -> None:
-        result = build_id3_header(TrackMetadata(title="Title", artist="Suno"))
-        assert b"TPE1" in result
-        assert b"Suno" in result
+def test_build_id3_header_header_version_is_2_3() -> None:
+    result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+    assert result[3:5] == b"\x03\x00"
 
-    def test_utf8_encoding_byte(self) -> None:
-        """Each text frame should use UTF-8 encoding (0x03)."""
-        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
-        # After TIT2 frame header (4 id + 4 size + 2 flags = 10 bytes)
-        tit2_pos = result.index(b"TIT2")
-        encoding_byte = result[tit2_pos + 10]
-        assert encoding_byte == 0x03
 
-    def test_syncsafe_size(self) -> None:
-        """The header size field should be a valid syncsafe integer."""
-        result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
-        raw = result[6:10]
-        # Each byte must have bit 7 clear (syncsafe)
-        for byte in raw:
-            assert byte & 0x80 == 0
+def test_build_id3_header_contains_tit2_frame() -> None:
+    result = build_id3_header(TrackMetadata(title="My Song", artist="Artist"))
+    assert b"TIT2" in result
+    assert b"My Song" in result
 
-    def test_unicode_title(self) -> None:
-        result = build_id3_header(TrackMetadata(title="日本語タイトル", artist="アーティスト"))
-        assert "日本語タイトル".encode() in result
-        assert "アーティスト".encode() in result
 
-    def test_empty_strings(self) -> None:
-        result = build_id3_header(TrackMetadata(title="", artist=""))
-        assert result[:3] == b"ID3"
-        assert b"TIT2" in result
-        assert b"TPE1" in result
+def test_build_id3_header_contains_tpe1_frame() -> None:
+    result = build_id3_header(TrackMetadata(title="Title", artist="Suno"))
+    assert b"TPE1" in result
+    assert b"Suno" in result
 
-    def test_round_trip_size(self) -> None:
-        """The size in the header should match the actual frame data size."""
-        result = build_id3_header(TrackMetadata(title="Test Title", artist="Test Artist"))
-        raw = result[6:10]
-        decoded_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
-        # Total bytes = 10 (header) + frames
-        assert decoded_size == len(result) - 10
+
+def test_build_id3_header_utf8_encoding_byte() -> None:
+    """Each text frame should use UTF-8 encoding (0x03)."""
+    result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+    # After TIT2 frame header (4 id + 4 size + 2 flags = 10 bytes)
+    tit2_pos = result.index(b"TIT2")
+    encoding_byte = result[tit2_pos + 10]
+    assert encoding_byte == 0x03
+
+
+def test_build_id3_header_syncsafe_size() -> None:
+    """The header size field should be a valid syncsafe integer."""
+    result = build_id3_header(TrackMetadata(title="Title", artist="Artist"))
+    raw = result[6:10]
+    # Each byte must have bit 7 clear (syncsafe)
+    for byte in raw:
+        assert byte & 0x80 == 0
+
+
+def test_build_id3_header_unicode_title() -> None:
+    result = build_id3_header(TrackMetadata(title="日本語タイトル", artist="アーティスト"))
+    assert "日本語タイトル".encode() in result
+    assert "アーティスト".encode() in result
+
+
+def test_build_id3_header_empty_strings() -> None:
+    result = build_id3_header(TrackMetadata(title="", artist=""))
+    assert result[:3] == b"ID3"
+    assert b"TIT2" in result
+    assert b"TPE1" in result
+
+
+def test_build_id3_header_round_trip_size() -> None:
+    """The size in the header should match the actual frame data size."""
+    result = build_id3_header(TrackMetadata(title="Test Title", artist="Test Artist"))
+    raw = result[6:10]
+    decoded_size = (raw[0] << 21) | (raw[1] << 14) | (raw[2] << 7) | raw[3]
+    # Total bytes = 10 (header) + frames
+    assert decoded_size == len(result) - 10
 
 
 # ── Skip existing ID3 ───────────────────────────────────────────────
 
+# ── TestSkipExistingId3 (converted to free functions) ────────────────────
 
-class TestSkipExistingId3:
-    """Tests for stripping existing ID3v2 tags from upstream data."""
+"""Tests for stripping existing ID3v2 tags from upstream data."""
 
-    def test_no_id3_tag_passthrough(self) -> None:
-        """Non-ID3 data should pass through unchanged."""
-        data = b"\xff\xfb\x90\x00" + b"\x00" * 100
-        assert skip_existing_id3(data) == data
 
-    def test_strips_id3_tag(self) -> None:
-        """An ID3v2 header followed by audio data should have the tag stripped."""
-        # Build a fake 20-byte ID3 tag (size = 20 in syncsafe)
-        tag_size = 20
-        syncsafe = (
-            ((tag_size >> 21) & 0x7F),
-            ((tag_size >> 14) & 0x7F),
-            ((tag_size >> 7) & 0x7F),
-            (tag_size & 0x7F),
-        )
-        id3_header = b"ID3\x04\x00\x00" + bytes(syncsafe)
-        tag_body = b"\x00" * tag_size
-        audio_data = b"\xff\xfb\x90\x00audio_payload"
-        chunk = id3_header + tag_body + audio_data
-        result = skip_existing_id3(chunk)
-        assert result == audio_data
+def test_skip_existing_id3_no_id3_tag_passthrough() -> None:
+    """Non-ID3 data should pass through unchanged."""
+    data = b"\xff\xfb\x90\x00" + b"\x00" * 100
+    assert skip_existing_id3(data) == data
 
-    def test_chunk_too_short(self) -> None:
-        """Chunks shorter than 10 bytes pass through even if they start with ID3."""
-        data = b"ID3\x04\x00"
-        assert skip_existing_id3(data) == data
 
-    def test_entire_chunk_is_id3_tag(self) -> None:
-        """If the whole chunk is ID3 tag data, result should be empty."""
-        tag_size = 20
-        syncsafe = (0, 0, 0, tag_size)
-        id3_header = b"ID3\x04\x00\x00" + bytes(syncsafe)
-        chunk = id3_header + b"\x00" * tag_size
-        result = skip_existing_id3(chunk)
-        assert result == b""
+def test_skip_existing_id3_strips_id3_tag() -> None:
+    """An ID3v2 header followed by audio data should have the tag stripped."""
+    # Build a fake 20-byte ID3 tag (size = 20 in syncsafe)
+    tag_size = 20
+    syncsafe = (
+        ((tag_size >> 21) & 0x7F),
+        ((tag_size >> 14) & 0x7F),
+        ((tag_size >> 7) & 0x7F),
+        (tag_size & 0x7F),
+    )
+    id3_header = b"ID3\x04\x00\x00" + bytes(syncsafe)
+    tag_body = b"\x00" * tag_size
+    audio_data = b"\xff\xfb\x90\x00audio_payload"
+    chunk = id3_header + tag_body + audio_data
+    result = skip_existing_id3(chunk)
+    assert result == audio_data
+
+
+def test_skip_existing_id3_chunk_too_short() -> None:
+    """Chunks shorter than 10 bytes pass through even if they start with ID3."""
+    data = b"ID3\x04\x00"
+    assert skip_existing_id3(data) == data
+
+
+def test_skip_existing_id3_entire_chunk_is_id3_tag() -> None:
+    """If the whole chunk is ID3 tag data, result should be empty."""
+    tag_size = 20
+    syncsafe = (0, 0, 0, tag_size)
+    id3_header = b"ID3\x04\x00\x00" + bytes(syncsafe)
+    chunk = id3_header + b"\x00" * tag_size
+    result = skip_existing_id3(chunk)
+    assert result == b""
 
 
 # ── View integration tests ──────────────────────────────────────────
@@ -295,7 +308,7 @@ async def test_find_clip_skips_entries_without_runtime_data(hass: HomeAssistant,
 # ── Streaming handler tests ─────────────────────────────────────────
 
 
-async def _async_iter(chunks):
+async def _skip_existing_id3_async_iter(chunks):
     """Helper to create an async iterator from a list of byte chunks."""
     for chunk in chunks:
         yield chunk
@@ -320,7 +333,7 @@ class _RequestContextMock:
         return False
 
 
-def _album_art_miss_response():
+def _skip_existing_id3_album_art_miss_response():
     response = MagicMock()
     response.status = 404
     response.read = AsyncMock(return_value=b"")
@@ -328,11 +341,11 @@ def _album_art_miss_response():
     return response
 
 
-def _mock_session_get(mock_session, *responses):
+def _skip_existing_id3_mock_session_get(mock_session, *responses):
     queue = list(responses)
 
     def _get(*_args, **_kwargs):
-        response = queue.pop(0) if queue else _album_art_miss_response()
+        response = queue.pop(0) if queue else _skip_existing_id3_album_art_miss_response()
         return _RequestContextMock(response)
 
     mock_get = MagicMock(side_effect=_get)
@@ -355,14 +368,14 @@ async def test_stream_mp3_with_cache(hass: HomeAssistant, mock_suno_client: Asyn
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -382,14 +395,14 @@ async def test_stream_mp3_without_cache(hass: HomeAssistant, mock_suno_client: A
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -413,14 +426,14 @@ async def test_stream_mp3_strips_existing_id3(hass: HomeAssistant, mock_suno_cli
 
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([upstream_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([upstream_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -445,7 +458,7 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
     mock_cache.async_put = AsyncMock()
     entry.runtime_data._cache = mock_cache
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
@@ -453,7 +466,7 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -463,7 +476,7 @@ async def test_stream_hq_with_cache(hass: HomeAssistant, mock_suno_client: Async
     mock_cache.async_put.assert_awaited_once()
 
 
-def _make_test_wav() -> bytes:
+def _skip_existing_id3_make_test_wav() -> bytes:
     """Build a minimal valid WAV file for testing."""
     import struct
 
@@ -500,7 +513,7 @@ async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: As
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
@@ -508,7 +521,7 @@ async def test_stream_hq_without_cache(hass: HomeAssistant, mock_suno_client: As
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -528,7 +541,7 @@ async def test_upstream_non_200_returns_502(hass: HomeAssistant, mock_suno_clien
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -544,7 +557,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
@@ -552,7 +565,7 @@ async def test_upstream_200_wav_path(hass: HomeAssistant, mock_suno_client: Asyn
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -570,14 +583,14 @@ async def test_mp3_uses_clip_audio_url(hass: HomeAssistant, mock_suno_client: As
     audio_data = b"\xff\xfb\x90\x00" + b"\x00" * 50
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        mock_get = _mock_session_get(mock_session, mock_response)
+        mock_get = _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -602,14 +615,14 @@ async def test_save_to_cache_failure_is_silent(hass: HomeAssistant, mock_suno_cl
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 100
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -635,7 +648,7 @@ async def test_save_to_cache_bytes_failure_is_silent(
     mock_cache.async_put = AsyncMock(side_effect=OSError("disk full"))
     entry.runtime_data._cache = mock_cache
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.headers = {"Content-Type": "audio/wav", "Content-Length": str(len(wav_data))}
@@ -643,7 +656,7 @@ async def test_save_to_cache_bytes_failure_is_silent(
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -662,7 +675,7 @@ async def test_wav_to_flac_uses_ffmpeg_manager_binary(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.read = AsyncMock(return_value=wav_data)
@@ -673,7 +686,7 @@ async def test_wav_to_flac_uses_ffmpeg_manager_binary(
         patch("custom_components.suno.proxy.get_ffmpeg_manager") as mock_ffmpeg_mgr,
     ):
         mock_ffmpeg_mgr.return_value.binary = "ffmpeg"
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -692,7 +705,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.read = AsyncMock(return_value=wav_data)
@@ -708,7 +721,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_failure(
         patch("asyncio.create_subprocess_exec", return_value=mock_proc),
     ):
         mock_ffmpeg_mgr.return_value.binary = "/usr/bin/ffmpeg"
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -724,7 +737,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
     with patch_suno_setup(mock_suno_client):
         await setup_entry(hass, entry)
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.read = AsyncMock(return_value=wav_data)
@@ -736,7 +749,7 @@ async def test_wav_to_flac_returns_502_on_ffmpeg_not_found(
         patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError),
     ):
         mock_ffmpeg_mgr.return_value.binary = "/nonexistent/ffmpeg"
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -754,14 +767,14 @@ async def test_hq_uses_api_to_get_wav(hass: HomeAssistant, mock_suno_client: Asy
     mock_suno_client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-aaa-111.wav")
     mock_suno_client.request_wav = AsyncMock()
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.read = AsyncMock(return_value=wav_data)
     mock_response.close = MagicMock()
 
     with patch("custom_components.suno.proxy.async_get_clientsession") as mock_session:
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -783,7 +796,7 @@ async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client:
     mock_suno_client.get_wav_url = AsyncMock(side_effect=[None, "https://cdn1.suno.ai/clip-aaa-111.wav"])
     mock_suno_client.request_wav = AsyncMock()
 
-    wav_data = _make_test_wav()
+    wav_data = _skip_existing_id3_make_test_wav()
     mock_response = AsyncMock()
     mock_response.status = 200
     mock_response.read = AsyncMock(return_value=wav_data)
@@ -793,7 +806,7 @@ async def test_hq_triggers_wav_generation(hass: HomeAssistant, mock_suno_client:
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.flac")
 
@@ -1111,7 +1124,7 @@ async def test_connection_reset_clears_collected(hass: HomeAssistant, mock_suno_
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -1162,7 +1175,7 @@ async def test_downloaded_file_vanishes_falls_through(
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
@@ -1170,7 +1183,7 @@ async def test_downloaded_file_vanishes_falls_through(
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -1189,7 +1202,7 @@ async def test_mp3_stream_includes_album_art(hass: HomeAssistant, mock_suno_clie
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     fake_art = b"\xff\xd8\xff\xe0" + b"\x00" * 50  # minimal JPEG-like bytes
@@ -1198,7 +1211,7 @@ async def test_mp3_stream_includes_album_art(hass: HomeAssistant, mock_suno_clie
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=fake_art) as mock_fetch,
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
@@ -1222,14 +1235,14 @@ async def test_mp3_stream_graceful_when_art_unavailable(
     audio_data = b"\xff\xfb\x90\x00" + b"\xab" * 200
     mock_response = AsyncMock()
     mock_response.status = 200
-    mock_response.content.iter_chunked = lambda size: _async_iter([audio_data])
+    mock_response.content.iter_chunked = lambda size: _skip_existing_id3_async_iter([audio_data])
     mock_response.close = MagicMock()
 
     with (
         patch("custom_components.suno.proxy.async_get_clientsession") as mock_session,
         patch("custom_components.suno.proxy.fetch_album_art", return_value=None),
     ):
-        _mock_session_get(mock_session, mock_response)
+        _skip_existing_id3_mock_session_get(mock_session, mock_response)
         client = await hass_client()
         resp = await client.get("/api/suno/media/clip-aaa-111.mp3")
 
