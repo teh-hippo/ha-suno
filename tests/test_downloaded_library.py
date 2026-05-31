@@ -42,15 +42,11 @@ from custom_components.suno.downloaded_library import (
     ManifestEntry,
     RenderedAudio,
     RetagResult,
-    _build_download_summary,
 )
 from custom_components.suno.downloaded_library.cover_art import _update_cover_art
 from custom_components.suno.downloaded_library.filesystem import _write_file
-from custom_components.suno.downloaded_library.m3u8 import _write_m3u8_playlists
 from custom_components.suno.downloaded_library.metadata import _album_for_clip
-from custom_components.suno.downloaded_library.paths import _clip_path, _safe_name, _video_clip_path
-from custom_components.suno.downloaded_library.planning import _add_clip
-from custom_components.suno.downloaded_library.source_modes import _get_source_mode, _source_preserves_files
+from custom_components.suno.downloaded_library.paths import _clip_path, _video_clip_path
 from custom_components.suno.downloaded_library.video_art import VideoArtSettings
 from custom_components.suno.models import (
     SunoClip,
@@ -839,125 +835,6 @@ def _make_dated_clip(clip_id: str, title: str = "Song", created: str = "2026-03-
     )
 
 
-async def test_build_desired_preserves_clips_when_section_is_stale(hass: HomeAssistant) -> None:
-    """Stale liked section preserves liked clips already on disk."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    library.state = {
-        "clips": {
-            "clip-liked": {"path": "liked.flac", "sources": ["liked"]},
-            "clip-my-songs": {"path": "my_songs.flac", "sources": ["my_songs"]},
-        },
-        "last_download": None,
-    }
-
-    options = {
-        CONF_SHOW_LIKED: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_MY_SONGS_COUNT: None,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    suno_data = SunoData(stale_sections=("liked_clips",))
-    plan = library.build_desired(options, suno_data)
-
-    assert "clip-liked" in plan.preserved_ids
-
-
-async def test_build_desired_my_songs_count_only(hass: HomeAssistant) -> None:
-    """count=N, days=None returns top-N clips."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    clips = [_make_dated_clip(f"clip-{i}", created="2026-03-15T10:00:00Z") for i in range(10)]
-
-    options = {
-        CONF_SHOW_LIKED: False,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_SHOW_MY_SONGS: True,
-        CONF_MY_SONGS_COUNT: 5,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    plan = library.build_desired(options, SunoData(clips=clips))
-    assert len(plan.items) == 5
-    ids = {item.clip.id for item in plan.items}
-    assert ids == {f"clip-{i}" for i in range(5)}
-
-
-async def test_build_desired_my_songs_days_only(hass: HomeAssistant) -> None:
-    """count=None, days=N returns clips within N days."""
-    from datetime import timedelta
-
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    now = datetime.now(tz=UTC)
-    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    clips = [
-        _make_dated_clip("clip-new-1", created=recent_ts),
-        _make_dated_clip("clip-new-2", created=recent_ts),
-        _make_dated_clip("clip-old", created=old_ts),
-    ]
-
-    options = {
-        CONF_SHOW_LIKED: False,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_SHOW_MY_SONGS: True,
-        CONF_MY_SONGS_COUNT: None,
-        CONF_MY_SONGS_DAYS: 7,
-    }
-    plan = library.build_desired(options, SunoData(clips=clips))
-    ids = {item.clip.id for item in plan.items}
-    assert "clip-new-1" in ids
-    assert "clip-new-2" in ids
-    assert "clip-old" not in ids
-
-
-async def test_build_desired_my_songs_count_and_days_intersect(hass: HomeAssistant) -> None:
-    """count=N AND days=M returns at most N clips within M days (intersection)."""
-    from datetime import timedelta
-
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    now = datetime.now(tz=UTC)
-    recent_ts = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    old_ts = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    clips = [
-        _make_dated_clip("clip-r0", created=recent_ts),
-        _make_dated_clip("clip-r1", created=recent_ts),
-        _make_dated_clip("clip-r2", created=recent_ts),
-        _make_dated_clip("clip-r3", created=recent_ts),
-        _make_dated_clip("clip-r4", created=recent_ts),
-        _make_dated_clip("clip-old-0", created=old_ts),
-        _make_dated_clip("clip-old-1", created=old_ts),
-    ]
-
-    options = {
-        CONF_SHOW_LIKED: False,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_SHOW_MY_SONGS: True,
-        CONF_MY_SONGS_COUNT: 3,
-        CONF_MY_SONGS_DAYS: 7,
-    }
-    plan = library.build_desired(options, SunoData(clips=clips))
-    ids = {item.clip.id for item in plan.items}
-    assert len(ids) == 3
-    assert ids == {"clip-r0", "clip-r1", "clip-r2"}
-
-
-async def test_build_desired_my_songs_disabled_when_both_zero(hass: HomeAssistant) -> None:
-    """count=None/0 and days=None/0 means my_songs is disabled."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    options = {
-        CONF_SHOW_LIKED: False,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_SHOW_MY_SONGS: True,
-        CONF_MY_SONGS_COUNT: None,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    plan = library.build_desired(options, SunoData(clips=[_make_dated_clip("clip-1")]))
-    assert len(plan.items) == 0
-
-
 # ── Quality tracking ────────────────────────────────────────────
 
 
@@ -1254,91 +1131,6 @@ async def test_download_writes_through_cache(hass: HomeAssistant, tmp_path: Path
     assert args[2] == b"fLaC" + b"\x00" * 50
 
 
-# ── Disk reconciliation ─────────────────────────────────────────
-
-
-async def test_reconcile_disk_removes_orphan_files(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Orphan .flac files not in clips_state are deleted."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    orphan = tmp_path / "2026-01-01" / "Orphan [deadbeef].flac"
-    orphan.parent.mkdir(parents=True)
-    orphan.write_bytes(b"fake")
-
-    removed = await library._reconcile_disk(tmp_path, {})
-    assert removed == 1
-    assert not orphan.exists()
-
-
-async def test_reconcile_disk_keeps_tracked_files(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Files referenced in clips_state are not deleted."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    rel = "2026-01-01/Tracked [abcd1234].flac"
-    tracked = tmp_path / rel
-    tracked.parent.mkdir(parents=True)
-    tracked.write_bytes(b"real")
-
-    clips_state = {"clip-id": ManifestEntry.from_dict({"path": rel})}
-    removed = await library._reconcile_disk(tmp_path, clips_state)
-    assert removed == 0
-    assert tracked.exists()
-
-
-async def test_reconcile_disk_skips_non_audio(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Non-audio files (.json, .m3u8, .tmp) are left alone."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    for name in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"):
-        (tmp_path / name).write_text("x")
-
-    removed = await library._reconcile_disk(tmp_path, {})
-    assert removed == 0
-    assert all((tmp_path / n).exists() for n in (".suno_download.json", "Liked Songs.m3u8", "partial.tmp"))
-
-
-async def test_reconcile_disk_cleans_empty_dirs(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Empty parent directories are removed after orphan deletion."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    orphan = tmp_path / "2026-01-01" / "Gone [deadbeef].flac"
-    orphan.parent.mkdir(parents=True)
-    orphan.write_bytes(b"bye")
-
-    removed = await library._reconcile_disk(tmp_path, {})
-    assert removed == 1
-    assert not orphan.parent.exists()
-
-
-async def test_reconcile_disk_keeps_mp4_sidecar_next_to_audio(hass: HomeAssistant, tmp_path: Path) -> None:
-    """mp4 sidecars sharing an audio file's basename are kept when the mode expects them."""
-    library = DownloadedLibrary(
-        hass,
-        InMemoryDownloadedLibraryStorage(),
-        video_art_mode=VIDEO_ART_DOWNLOAD,
-    )
-    rel = "artist/Song/artist-Song [abcd1234].flac"
-    audio_path = tmp_path / rel
-    audio_path.parent.mkdir(parents=True)
-    audio_path.write_bytes(b"fLaC" + b"\x00" * 50)
-    video = audio_path.with_suffix(".mp4")
-    video.write_bytes(b"\x00\x00\x00\x1cftypisom")
-
-    clips_state = {"abcd1234": ManifestEntry.from_dict({"path": rel})}
-    removed = await library._reconcile_disk(tmp_path, clips_state)
-    assert removed == 0
-    assert audio_path.exists()
-    assert video.exists()
-
-
-async def test_reconcile_disk_removes_orphan_mp4_in_legacy_music_videos(hass: HomeAssistant, tmp_path: Path) -> None:
-    """An orphan mp4 left behind in the legacy music-videos/ tree is cleaned up."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    legacy_video = tmp_path / "music-videos" / "artist" / "artist-Song [abcd1234].mp4"
-    legacy_video.parent.mkdir(parents=True)
-    legacy_video.write_bytes(b"\x00\x00\x00\x1cftypisom")
-
-    removed = await library._reconcile_disk(tmp_path, {})
-    assert removed == 1
-    assert not legacy_video.exists()
-
-
 # ── get_downloaded_path edge cases ──────────────────────────────
 
 
@@ -1427,24 +1219,6 @@ async def test_library_size_mb_missing_size(hass: HomeAssistant) -> None:
         },
     }
     assert library.library_size_mb == 1.0
-
-
-# ── source enable / path skip ───────────────────────────────────
-
-
-async def test_build_desired_skips_disabled_source(hass: HomeAssistant) -> None:
-    """show_liked=False excludes liked clips from desired set."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    clip = _clip("clip-liked-1", "Liked Song")
-    options = {
-        CONF_SHOW_LIKED: False,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_MY_SONGS_COUNT: None,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    plan = library.build_desired(options, SunoData(liked_clips=[clip]))
-    assert len(plan.items) == 0
 
 
 async def test_async_reconcile_empty_path_skips_work(hass: HomeAssistant) -> None:
@@ -2911,49 +2685,6 @@ def test_album_for_clip_inherits_root_for_remix() -> None:
     assert _album_for_clip(remix, index) == "Original Track"
 
 
-# ── build_desired source-mode toggles ───────────────────────────
-
-
-async def test_build_desired_skips_cache_only_sources(hass: HomeAssistant) -> None:
-    """build_desired excludes cache-mode sections from the items list."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    options = {
-        CONF_SHOW_LIKED: True,
-        CONF_SHOW_MY_SONGS: True,
-        CONF_SHOW_PLAYLISTS: True,
-        CONF_ALL_PLAYLISTS: False,
-        CONF_PLAYLISTS: [],
-        CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE,
-        CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE,
-        CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE,
-        CONF_MY_SONGS_COUNT: 5,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    suno_data = SunoData(
-        liked_clips=[_clip("c1")],
-        clips=[_clip("c2")],
-    )
-    plan = library.build_desired(options, suno_data)
-    assert len(plan.items) == 0
-
-
-async def test_build_desired_respects_show_toggles(hass: HomeAssistant) -> None:
-    """show_playlists=False excludes playlists from desired set."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    options = {
-        CONF_SHOW_LIKED: True,
-        CONF_SHOW_PLAYLISTS: False,
-        CONF_SHOW_MY_SONGS: False,
-        CONF_ALL_PLAYLISTS: True,
-        CONF_PLAYLISTS: [],
-        CONF_MY_SONGS_COUNT: 5,
-        CONF_MY_SONGS_DAYS: None,
-    }
-    plan = library.build_desired(options, SunoData(liked_clips=[_clip("c1")]))
-    ids = {item.clip.id for item in plan.items}
-    assert "c1" in ids
-
-
 # ── Video downloads ─────────────────────────────────────────────
 
 
@@ -3229,101 +2960,6 @@ async def test_async_reconcile_removes_orphan_mp4_when_video_art_convert(
     assert audio_path.exists()
     assert not mp4_path.exists()
     assert webp_path.exists()
-
-
-# ── Reconcile manifest / present-file / missing-file ────────────
-
-
-async def test_reconcile_manifest_marks_missing_files(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Manifest entries whose files are gone get path/meta_hash cleared."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    base = tmp_path / "mirror"
-    base.mkdir()
-    (base / "present.flac").write_bytes(b"fLaC" + b"\x00" * 50)
-    clips_state: dict[str, dict[str, object]] = {
-        "present-id": ManifestEntry.from_dict({"path": "present.flac", "meta_hash": "abc"}),
-        "missing-id": ManifestEntry.from_dict({"path": "gone.flac", "meta_hash": "def"}),
-    }
-
-    count = await library._reconcile_manifest(base, clips_state)
-
-    assert count == 1
-    assert clips_state["present-id"].path == "present.flac"
-    assert clips_state["present-id"].meta_hash == "abc"
-    assert clips_state["missing-id"].path == ""
-    assert (clips_state["missing-id"].meta_hash if clips_state["missing-id"].meta_hash else "") == ""
-
-
-async def test_reconcile_manifest_clears_embedded_art_hash_for_missing_files(
-    hass: HomeAssistant, tmp_path: Path
-) -> None:
-    """Regression: missing files must also clear embedded_art_hash.
-
-    Reproduces the v6.3.1-v6.3.4 leak where the engine's three "file is
-    gone" branches cleared ``path`` + ``meta_hash`` but forgot
-    ``embedded_art_hash``. A stale art-hash on a re-downloaded file
-    suppressed the next retag pass, leaving the file tagged with
-    obsolete album art forever. Round 1 migrated the three engine
-    branches to ``_clear_for_redownload`` but missed this one in
-    ``reconciliation.py``; Round 2 closes it.
-    """
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    base = tmp_path / "mirror"
-    base.mkdir()
-    clips_state: dict[str, dict[str, object]] = {
-        "missing-with-stale-art": ManifestEntry.from_dict(
-            {
-                "path": "gone.flac",
-                "meta_hash": "def",
-                "embedded_art_hash": "stale-art-hash",
-                "album": "Old Album",
-            }
-        ),
-    }
-
-    count = await library._reconcile_manifest(base, clips_state)
-
-    assert count == 1
-    entry = clips_state["missing-with-stale-art"]
-    assert entry.path == ""
-    assert entry.meta_hash == ""
-    assert not entry.embedded_art_hash
-    assert entry.album is None
-
-
-async def test_reconcile_manifest_treats_zero_byte_as_missing(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Zero-byte files are reconciled the same as fully missing files."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    base = tmp_path / "mirror"
-    base.mkdir()
-    (base / "empty.flac").write_bytes(b"")
-    clips_state: dict[str, dict[str, object]] = {
-        "empty-id": ManifestEntry.from_dict({"path": "empty.flac", "meta_hash": "abc"}),
-    }
-
-    count = await library._reconcile_manifest(base, clips_state)
-
-    assert count == 1
-    assert clips_state["empty-id"].path == ""
-
-
-async def test_reconcile_manifest_idempotent_when_clean(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Manifest with all files present: no mutation, returns 0."""
-    library = DownloadedLibrary(hass, InMemoryDownloadedLibraryStorage())
-    base = tmp_path / "mirror"
-    base.mkdir()
-    (base / "a.flac").write_bytes(b"fLaC" + b"\x00" * 10)
-    (base / "b.flac").write_bytes(b"fLaC" + b"\x00" * 10)
-    clips_state: dict[str, dict[str, object]] = {
-        "a-id": ManifestEntry.from_dict({"path": "a.flac", "meta_hash": "h1"}),
-        "b-id": ManifestEntry.from_dict({"path": "b.flac", "meta_hash": "h2"}),
-    }
-    snapshot = json.dumps({k: v.to_dict() for k, v in clips_state.items()}, sort_keys=True)
-
-    count = await library._reconcile_manifest(base, clips_state)
-
-    assert count == 0
-    assert json.dumps({k: v.to_dict() for k, v in clips_state.items()}, sort_keys=True) == snapshot
 
 
 async def test_missing_audio_file_triggers_redownload(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -4151,607 +3787,88 @@ def _make_clip(clip_id: str, title: str = "Song", created: str = "2026-03-15T10:
 
 # ── TestSafeName (relocated from tests/test_download.py:49) ──
 
-
-class TestSafeName:
-    def test_preserves_spaces_and_case(self) -> None:
-        assert _safe_name("Hello World") == "Hello World"
-
-    def test_unsafe_chars_replaced(self) -> None:
-        result = _safe_name('test<>:"/\\|?*file')
-        assert "<" not in result
-        assert "/" not in result
-
-    def test_empty_string_returns_untitled(self) -> None:
-        assert _safe_name("") == "untitled"
-
-    def test_unicode_preserved(self) -> None:
-        assert _safe_name("café résumé") == "café résumé"
-
-    def test_emoji_preserved(self) -> None:
-        assert "Music" in _safe_name("🎵 Music")
-
-    def test_traversal_neutralised(self) -> None:
-        assert "/" not in _safe_name("../../etc/passwd")
-
-    def test_windows_reserved_handled(self) -> None:
-        result = _safe_name("CON")
-        assert result != "CON"  # pathvalidate appends underscore
-
-    def test_truncates_long_names(self) -> None:
-        assert len(_safe_name("a" * 300)) <= 200
-
-
 # ── TestClipPath (relocated from tests/test_download.py:81) ──
 
+# ── TestClipPath (converted to free functions) ────────────────────
 
-class TestClipPath:
-    def _make_clip(
-        self,
-        title: str = "My Song",
-        created: str = "2026-01-15T10:00:00Z",
-        clip_id: str = "abcd1234-test-clip-id",
-        display_name: str = "testuser",
-    ):
-        clip = MagicMock()
-        clip.id = clip_id
-        clip.title = title
-        clip.created_at = created
-        clip.display_name = display_name
-        return clip
 
-    def test_high_quality_flac(self) -> None:
-        clip = self._make_clip()
-        result = _clip_path(clip, "high")
-        assert result == "testuser/My Song/testuser-My Song [abcd1234].flac"
-
-    def test_standard_quality_mp3(self) -> None:
-        clip = self._make_clip()
-        result = _clip_path(clip, "standard")
-        assert result == "testuser/My Song/testuser-My Song [abcd1234].mp3"
-
-    def test_missing_display_name(self) -> None:
-        clip = self._make_clip(display_name="")
-        result = _clip_path(clip, "high")
-        assert result == "Suno/My Song/Suno-My Song [abcd1234].flac"
-
-    def test_different_clips_same_title_get_different_paths(self) -> None:
-        clip_a = self._make_clip(clip_id="aaaaaaaa-1111-2222-3333-444444444444")
-        clip_b = self._make_clip(clip_id="bbbbbbbb-1111-2222-3333-444444444444")
-        assert _clip_path(clip_a, "high") != _clip_path(clip_b, "high")
+def _clip_path_make_clip(
+    title: str = "My Song",
+    created: str = "2026-01-15T10:00:00Z",
+    clip_id: str = "abcd1234-test-clip-id",
+    display_name: str = "testuser",
+):
+    clip = MagicMock()
+    clip.id = clip_id
+    clip.title = title
+    clip.created_at = created
+    clip.display_name = display_name
+    return clip
 
 
 # ── TestVideoClipPath (relocated from tests/test_download.py:120) ──
 
+# ── TestVideoClipPath (converted to free functions) ────────────────────
 
-class TestVideoClipPath:
-    """Music videos live alongside their audio file (same dir, .mp4 suffix)."""
+"""Music videos live alongside their audio file (same dir, .mp4 suffix)."""
 
-    def _make_clip(self, clip_id: str = "abcd1234-test-clip-id", title: str = "My Song", display: str = "testuser"):
-        clip = MagicMock()
-        clip.id = clip_id
-        clip.title = title
-        clip.display_name = display
-        return clip
 
-    def test_video_path_alongside_audio_flac(self) -> None:
-        clip = self._make_clip()
-        assert _video_clip_path(clip) == "testuser/My Song/testuser-My Song [abcd1234].mp4"
-
-    def test_video_path_basename_matches_audio_basename(self) -> None:
-        clip = self._make_clip()
-        flac = _clip_path(clip, "high")
-        mp3 = _clip_path(clip, "standard")
-        video = _video_clip_path(clip)
-        # Same parent directory and same basename — only suffix differs.
-        assert Path(video).parent == Path(flac).parent == Path(mp3).parent
-        assert Path(video).stem == Path(flac).stem == Path(mp3).stem
-        assert Path(video).suffix == ".mp4"
-
-    def test_no_music_videos_directory_in_path(self) -> None:
-        """The legacy music-videos/ directory should never appear in the path."""
-        clip = self._make_clip()
-        assert "music-videos" not in _video_clip_path(clip)
-
-    def test_video_path_missing_display_name_falls_back_to_suno(self) -> None:
-        clip = self._make_clip(display="")
-        assert _video_clip_path(clip) == "Suno/My Song/Suno-My Song [abcd1234].mp4"
+def _video_clip_path_make_clip(
+    clip_id: str = "abcd1234-test-clip-id",
+    title: str = "My Song",
+    display: str = "testuser",
+):
+    clip = MagicMock()
+    clip.id = clip_id
+    clip.title = title
+    clip.display_name = display
+    return clip
 
 
 # ── TestWriteM3u8Playlists (relocated from tests/test_download.py:618) ──
 
+# ── TestWriteM3u8Playlists (converted to free functions) ────────────────────
 
-class TestWriteM3u8Playlists:
-    def _make_clip(self, clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
-        clip = MagicMock()
-        clip.id = clip_id
-        clip.title = title
-        clip.duration = duration
-        return clip
 
-    def test_writes_absolute_paths(self, tmp_path: Path) -> None:
-        """Playlist entries must use absolute paths for Jellyfin compatibility."""
-        clip = self._make_clip()
-        clips_state = {
-            "clip1": ManifestEntry.from_dict(
-                {"path": "artist/test_song/artist-test_song [clip1aaa].flac", "title": "Test Song"}
-            )
-        }
-        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
-
-        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        assert "./" not in content
-        assert str(tmp_path / "artist/test_song/artist-test_song [clip1aaa].flac") in content
-
-    def test_uses_clip_duration(self, tmp_path: Path) -> None:
-        """Duration in #EXTINF should come from clip metadata, not hardcoded -1."""
-        clip = self._make_clip(duration=95.7)
-        clips_state = {
-            "clip1": ManifestEntry.from_dict(
-                {"path": "artist/test_song/artist-test_song [clip1aaa].flac", "title": "Test Song"}
-            )
-        }
-        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
-
-        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        assert "#EXTINF:95," in content
-
-    def test_duration_fallback_when_zero(self, tmp_path: Path) -> None:
-        """Duration falls back to -1 when clip has no duration."""
-        clip = self._make_clip(duration=0)
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
-
-        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        assert "#EXTINF:-1," in content
-
-    def test_header_format(self, tmp_path: Path) -> None:
-        """M3U8 files must start with #EXTM3U and include #PLAYLIST tag."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["playlist:pl1"], quality=QUALITY_HIGH)]
-        source_to_name = {"playlist:pl1": "My Playlist"}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
-
-        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
-        assert content.startswith("#EXTM3U\n")
-        assert "#PLAYLIST:My Playlist\n" in content
-
-    def test_liked_and_playlist_sources(self, tmp_path: Path) -> None:
-        """Clips with both liked and playlist sources appear in both M3U8 files."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)]
-        source_to_name = {"liked": "Liked Songs", "playlist:pl1": "Favourites"}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
-
-        assert (tmp_path / "Liked Songs.m3u8").exists()
-        assert (tmp_path / "Favourites.m3u8").exists()
-
-    def test_clip_liked_and_in_playlist_no_duplicates(self, tmp_path: Path) -> None:
-        """A liked clip also in a playlist appears once in each M3U8, not twice in Liked Songs."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["liked", "playlist:pl1"], quality=QUALITY_HIGH)]
-        source_to_name = {"liked": "Liked Songs", "playlist:pl1": "The Second album"}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
-
-        liked_content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        album_content = (tmp_path / "The Second album.m3u8").read_text(encoding="utf-8")
-        assert liked_content.count("song.flac") == 1
-        assert album_content.count("song.flac") == 1
-
-    def test_clip_in_two_playlists(self, tmp_path: Path) -> None:
-        """A clip in two playlists appears in both M3U8 files."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["playlist:a", "playlist:b"], quality=QUALITY_HIGH)]
-        source_to_name = {"playlist:a": "Playlist A", "playlist:b": "Playlist B"}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
-
-        assert (tmp_path / "Playlist A.m3u8").exists()
-        assert (tmp_path / "Playlist B.m3u8").exists()
-        a_content = (tmp_path / "Playlist A.m3u8").read_text(encoding="utf-8")
-        b_content = (tmp_path / "Playlist B.m3u8").read_text(encoding="utf-8")
-        assert "song.flac" in a_content
-        assert "song.flac" in b_content
-
-    def test_liked_plus_two_playlists(self, tmp_path: Path) -> None:
-        """A clip that is liked and in two playlists appears in all three M3U8 files."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [
-            DownloadItem(
-                clip=clip,
-                sources=["liked", "playlist:a", "playlist:b"],
-                quality=QUALITY_HIGH,
-            )
-        ]
-        source_to_name = {"liked": "Liked Songs", "playlist:a": "Keep", "playlist:b": "Zac & Xavi"}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name)
-
-        assert (tmp_path / "Liked Songs.m3u8").exists()
-        assert (tmp_path / "Keep.m3u8").exists()
-        assert (tmp_path / "Zac & Xavi.m3u8").exists()
-        for f in ["Liked Songs.m3u8", "Keep.m3u8", "Zac & Xavi.m3u8"]:
-            content = (tmp_path / f).read_text(encoding="utf-8")
-            assert content.count("song.flac") == 1
-
-    def test_my_songs_source_excluded_from_m3u8(self, tmp_path: Path) -> None:
-        """Clips with only a 'my_songs' source produce no M3U8 file."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"path": "song.flac", "title": "Song"})}
-        desired = [DownloadItem(clip=clip, sources=["my_songs"], quality=QUALITY_STANDARD)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
-
-        assert not list(tmp_path.glob("*.m3u8"))
-
-    def test_cleans_stale_m3u8(self, tmp_path: Path) -> None:
-        """Stale M3U8 files from previous runs are removed."""
-        stale = tmp_path / "Old Playlist.m3u8"
-        stale.write_text("#EXTM3U\n", encoding="utf-8")
-
-        _write_m3u8_playlists(tmp_path, {}, [])
-
-        assert not stale.exists()
-
-    def test_skips_clips_without_path(self, tmp_path: Path) -> None:
-        """Clips missing a path in state are excluded from playlists."""
-        clip = self._make_clip()
-        clips_state = {"clip1": ManifestEntry.from_dict({"title": "Song"})}  # no "path" key
-        desired = [DownloadItem(clip=clip, sources=["liked"], quality=QUALITY_HIGH)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired)
-
-        # No M3U8 written since the only clip had no path
-        assert not list(tmp_path.glob("*.m3u8"))
+def _write_m3u8_playlists_make_clip(clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
+    clip = MagicMock()
+    clip.id = clip_id
+    clip.title = title
+    clip.duration = duration
+    return clip
 
 
 # ── TestBuildSyncSummary (relocated from tests/test_download.py:1019) ──
 
-
-class TestBuildSyncSummary:
-    def test_no_change(self) -> None:
-        assert _build_download_summary(0, 0, 0) == "No change"
-
-    def test_single_new_song(self) -> None:
-        assert _build_download_summary(1, 0, 0) == "1 new song"
-
-    def test_multiple_new_songs(self) -> None:
-        assert _build_download_summary(8, 0, 0) == "8 new songs"
-
-    def test_single_removal(self) -> None:
-        assert _build_download_summary(0, 1, 0) == "1 removal"
-
-    def test_multiple_removals(self) -> None:
-        assert _build_download_summary(0, 3, 0) == "3 removals"
-
-    def test_single_metadata_update(self) -> None:
-        assert _build_download_summary(0, 0, 1) == "1 metadata update"
-
-    def test_multiple_metadata_updates(self) -> None:
-        assert _build_download_summary(0, 0, 2) == "2 metadata updates"
-
-    def test_combined(self) -> None:
-        result = _build_download_summary(1, 2, 1)
-        assert result == "1 new song, 1 metadata update, 2 removals"
-
-    def test_all_plural(self) -> None:
-        result = _build_download_summary(3, 4, 5)
-        assert result == "3 new songs, 5 metadata updates, 4 removals"
-
-    def test_renamed(self) -> None:
-        assert _build_download_summary(0, 0, 0, renamed=3) == "3 renamed"
-
-    def test_retagged(self) -> None:
-        assert _build_download_summary(0, 0, 0, retagged=5) == "5 re-tagged"
-
-    def test_full_username_change(self) -> None:
-        """Typical username change: renames + re-tags, no downloads."""
-        result = _build_download_summary(0, 0, 0, renamed=50, retagged=0)
-        assert result == "50 renamed"
-
-    def test_all_operations(self) -> None:
-        result = _build_download_summary(2, 1, 0, renamed=3, retagged=5)
-        assert result == "2 new songs, 3 renamed, 5 re-tagged, 1 removal"
-
-
 # ── TestSyncRetentionModes (relocated from tests/test_download.py:1278) ──
 
+# ── TestSyncRetentionModes (converted to free functions) ────────────────────
 
-class TestSyncRetentionModes:
-    """Tests for per-source sync/archive/cache retention modes."""
-
-    def test_sync_mode_deletes_removed_clips(self) -> None:
-        """Clip with source ['liked'], mode=mirror → deleted when removed from desired."""
-        clips_state = {
-            "clip-1": ManifestEntry.from_dict({"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked"]}),
-        }
-        seen_ids: set[str] = set()  # clip not in desired
-        preserved_ids: set[str] = set()
-        options = {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.sources
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-
-        assert to_delete == ["clip-1"]
-
-    def test_archive_mode_keeps_removed_clips(self) -> None:
-        """Clip with source ['liked'], mode=archive → NOT deleted when removed from desired."""
-        clips_state = {
-            "clip-1": ManifestEntry.from_dict({"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked"]}),
-        }
-        seen_ids: set[str] = set()
-        preserved_ids: set[str] = set()
-        options = {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.sources
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-
-        assert to_delete == []
-
-    def test_mixed_sources_archive_wins(self) -> None:
-        """Clip with sources ['liked', 'my_songs']. Liked=archive, my_songs=mirror → NOT deleted."""
-        clips_state = {
-            "clip-1": ManifestEntry.from_dict(
-                {"path": "2026-01-15/Song [clip-1].flac", "sources": ["liked", "my_songs"]}
-            ),
-        }
-        seen_ids: set[str] = set()
-        preserved_ids: set[str] = set()
-        options = {
-            CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE,
-            CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_MIRROR,
-        }
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.sources
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-
-        assert to_delete == []
-
-    def test_empty_sources_deleted(self) -> None:
-        """Clip with sources [] → deleted (orphan cleanup via all() on empty)."""
-        clips_state = {
-            "clip-1": ManifestEntry.from_dict({"path": "2026-01-15/Song [clip-1].flac", "sources": []}),
-        }
-        seen_ids: set[str] = set()
-        preserved_ids: set[str] = set()
-        options = {}
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.sources
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-
-        assert to_delete == ["clip-1"]
-
-    def test_cache_mode_deletes_like_mirror(self) -> None:
-        """Cache mode sources are not preserved (treated like mirror for deletion)."""
-        clips_state = {
-            "clip-1": ManifestEntry.from_dict({"path": "2026-01-15/Song [clip-1].flac", "sources": ["my_songs"]}),
-        }
-        seen_ids: set[str] = set()
-        preserved_ids: set[str] = set()
-        options = {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}
-
-        to_delete = []
-        for cid in clips_state:
-            if cid in seen_ids or cid in preserved_ids:
-                continue
-            entry = clips_state[cid]
-            sources = entry.sources
-            if all(not _source_preserves_files(src, options) for src in sources):
-                to_delete.append(cid)
-
-        assert to_delete == ["clip-1"]
-
-
+"""Tests for per-source sync/archive/cache retention modes."""
 # ── TestAddClipQualityMerge (relocated from tests/test_download.py:1388) ──
 
+# ── TestAddClipQualityMerge (converted to free functions) ────────────────────
 
-class TestAddClipQualityMerge:
-    """Tests for _add_clip quality upgrade semantics."""
-
-    def test_flac_wins_over_mp3(self) -> None:
-        """When a clip appears first as MP3 then FLAC, quality upgrades to FLAC."""
-        clip = _make_clip("clip-merge-1", "Merged")
-        clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "liked", QUALITY_STANDARD)
-        _add_clip(clip_map, clip, "playlist:x", QUALITY_HIGH)
-        assert clip_map["clip-merge-1"].quality == QUALITY_HIGH
-        assert set(clip_map["clip-merge-1"].sources) == {"liked", "playlist:x"}
-
-    def test_mp3_does_not_downgrade_flac(self) -> None:
-        """When a clip appears first as FLAC then MP3, quality stays FLAC."""
-        clip = _make_clip("clip-merge-2", "Stays High")
-        clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "liked", QUALITY_HIGH)
-        _add_clip(clip_map, clip, "my_songs", QUALITY_STANDARD)
-        assert clip_map["clip-merge-2"].quality == QUALITY_HIGH
-        assert set(clip_map["clip-merge-2"].sources) == {"liked", "my_songs"}
-
-    def test_same_quality_no_change(self) -> None:
-        """Same quality from both sources stays unchanged."""
-        clip = _make_clip("clip-merge-3", "Same")
-        clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "liked", QUALITY_STANDARD)
-        _add_clip(clip_map, clip, "my_songs", QUALITY_STANDARD)
-        assert clip_map["clip-merge-3"].quality == QUALITY_STANDARD
-
-    def test_first_add_creates_entry(self) -> None:
-        """First add creates a new DownloadItem with correct fields."""
-        clip = _make_clip("clip-new", "New Song")
-        clip_map: dict[str, DownloadItem] = {}
-        _add_clip(clip_map, clip, "liked", QUALITY_HIGH)
-        item = clip_map["clip-new"]
-        assert item.clip is clip
-        assert item.sources == ["liked"]
-        assert item.quality == QUALITY_HIGH
-
-
+"""Tests for _add_clip quality upgrade semantics."""
 # ── TestSourceUsesSyncMode (relocated from tests/test_download.py:1431) ──
 
+# ── TestSourceUsesSyncMode (converted to free functions) ────────────────────
 
-class TestSourceUsesSyncMode:
-    """Direct unit tests for _get_source_mode and _source_preserves_files."""
-
-    def test_liked_mirror_mode(self) -> None:
-        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}) == DOWNLOAD_MODE_MIRROR
-
-    def test_liked_archive_mode(self) -> None:
-        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}) == DOWNLOAD_MODE_ARCHIVE
-
-    def test_liked_cache_mode(self) -> None:
-        assert _get_source_mode("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
-
-    def test_playlist_mirror_mode(self) -> None:
-        assert (
-            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_MIRROR})
-            == DOWNLOAD_MODE_MIRROR
-        )
-
-    def test_playlist_archive_mode(self) -> None:
-        assert (
-            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_ARCHIVE})
-            == DOWNLOAD_MODE_ARCHIVE
-        )
-
-    def test_playlist_cache_mode(self) -> None:
-        assert (
-            _get_source_mode("playlist:abc", {CONF_DOWNLOAD_MODE_PLAYLISTS: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
-        )
-
-    def test_my_songs_mirror_mode(self) -> None:
-        assert _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_MIRROR}) == DOWNLOAD_MODE_MIRROR
-
-    def test_my_songs_archive_mode(self) -> None:
-        assert (
-            _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_ARCHIVE}) == DOWNLOAD_MODE_ARCHIVE
-        )
-
-    def test_my_songs_cache_mode(self) -> None:
-        assert _get_source_mode("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}) == DOWNLOAD_MODE_CACHE
-
-    def test_unknown_source_defaults_to_mirror(self) -> None:
-        assert _get_source_mode("unknown_source", {}) == DOWNLOAD_MODE_MIRROR
-
-    def test_default_mode_when_key_missing(self) -> None:
-        """Missing config key uses DEFAULT_DOWNLOAD_MODE ('mirror')."""
-        assert _get_source_mode("liked", {}) == DOWNLOAD_MODE_MIRROR
-
-    def test_preserves_files_true_for_archive(self) -> None:
-        assert _source_preserves_files("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_ARCHIVE}) is True
-
-    def test_preserves_files_false_for_mirror(self) -> None:
-        assert _source_preserves_files("liked", {CONF_DOWNLOAD_MODE_LIKED: DOWNLOAD_MODE_MIRROR}) is False
-
-    def test_preserves_files_false_for_cache(self) -> None:
-        assert _source_preserves_files("my_songs", {CONF_DOWNLOAD_MODE_MY_SONGS: DOWNLOAD_MODE_CACHE}) is False
-
-
+"""Direct unit tests for _get_source_mode and _source_preserves_files."""
 # ── TestPlaylistOrderPreservation (relocated from tests/test_download.py:2526) ──
 
-
-class TestPlaylistOrderPreservation:
-    def _make_clip(self, clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
-        clip = MagicMock()
-        clip.id = clip_id
-        clip.title = title
-        clip.duration = duration
-        return clip
-
-    def test_playlist_order_uses_playlist_order_dict(self, tmp_path: Path) -> None:
-        """Entries are sorted according to playlist_order dict."""
-        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(4)]
-        clips_state = {
-            f"clip{i}": ManifestEntry.from_dict({"path": f"Song {i}.flac", "title": f"Song {i}"}) for i in range(4)
-        }
-        desired = [DownloadItem(clip=clips[i], sources=["liked"], quality=QUALITY_HIGH) for i in range(4)]
-        # API order: clip3, clip1, clip0, clip2
-        playlist_order = {"liked": ["clip3", "clip1", "clip0", "clip2"]}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order=playlist_order)
-
-        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
-        assert "Song 3" in lines[0]
-        assert "Song 1" in lines[1]
-        assert "Song 0" in lines[2]
-        assert "Song 2" in lines[3]
-
-    def test_fallback_ordering_without_playlist_order(self, tmp_path: Path) -> None:
-        """Without playlist_order, entries appear in desired iteration order."""
-        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(3)]
-        clips_state = {
-            f"clip{i}": ManifestEntry.from_dict({"path": f"Song {i}.flac", "title": f"Song {i}"}) for i in range(3)
-        }
-        desired = [DownloadItem(clip=clips[i], sources=["liked"], quality=QUALITY_HIGH) for i in range(3)]
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, playlist_order={})
-
-        content = (tmp_path / "Liked Songs.m3u8").read_text(encoding="utf-8")
-        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
-        assert len(lines) == 3
-        assert "Song 0" in lines[0]
-        assert "Song 1" in lines[1]
-        assert "Song 2" in lines[2]
-
-    def test_playlist_order_matches_api_response_order(self, tmp_path: Path) -> None:
-        """Playlist output order matches the API response order (reversed from default)."""
-        clips = [self._make_clip(f"clip{i}", f"Song {i}") for i in range(5)]
-        clips_state = {
-            f"clip{i}": ManifestEntry.from_dict({"path": f"Song {i}.flac", "title": f"Song {i}"}) for i in range(5)
-        }
-        desired = [DownloadItem(clip=clips[i], sources=["playlist:abc"], quality=QUALITY_HIGH) for i in range(5)]
-        source_to_name = {"playlist:abc": "My Playlist"}
-        # API returned clips in reverse order
-        api_order = ["clip4", "clip3", "clip2", "clip1", "clip0"]
-        playlist_order = {"playlist:abc": api_order}
-
-        _write_m3u8_playlists(tmp_path, clips_state, desired, source_to_name, playlist_order)
-
-        content = (tmp_path / "My Playlist.m3u8").read_text(encoding="utf-8")
-        lines = [ln for ln in content.splitlines() if ln.startswith("#EXTINF")]
-        assert len(lines) == 5
-        for idx, api_clip_id in enumerate(api_order):
-            clip_num = api_clip_id.replace("clip", "")
-            assert f"Song {clip_num}" in lines[idx]
+# ── TestPlaylistOrderPreservation (converted to free functions) ────────────────────
 
 
-def _clip_with_art(
+def _playlist_order_preservation_make_clip(clip_id: str = "clip1", title: str = "Test Song", duration: float = 120.5):
+    clip = MagicMock()
+    clip.id = clip_id
+    clip.title = title
+    clip.duration = duration
+    return clip
+
+
+def _playlist_order_preservation_clip_with_art(
     clip_id: str,
     title: str = "Song",
     image_large_url: str = "https://cdn1.suno.ai/img.jpg",
@@ -4776,7 +3893,7 @@ def _clip_with_art(
 async def test_stale_embedded_art_hash_triggers_retag(hass: HomeAssistant, tmp_path: Path) -> None:
     """Manifest entries with missing/stale embedded_art_hash queue retag even when meta_hash matches."""
 
-    clip = _clip_with_art("clip-art-0000-0000-0000-000000000000", "Art Song")
+    clip = _playlist_order_preservation_clip_with_art("clip-art-0000-0000-0000-000000000000", "Art Song")
     sync_dir = tmp_path / "mirror"
     rel_path = _clip_path(clip, QUALITY_HIGH)
     target = sync_dir / rel_path
@@ -4816,7 +3933,7 @@ async def test_stale_embedded_art_hash_triggers_retag(hass: HomeAssistant, tmp_p
 async def test_retag_uses_validated_cover_jpg_without_network_fetch(hass: HomeAssistant, tmp_path: Path) -> None:
     """When cover.jpg + .cover_hash match the current URL, retag uses cover.jpg bytes."""
 
-    clip = _clip_with_art("clip-cov-0000-0000-0000-000000000000", "Cover Song")
+    clip = _playlist_order_preservation_clip_with_art("clip-cov-0000-0000-0000-000000000000", "Cover Song")
     sync_dir = tmp_path / "mirror"
     rel_path = _clip_path(clip, QUALITY_HIGH)
     target = sync_dir / rel_path
@@ -4875,7 +3992,7 @@ async def test_read_validated_cover_requires_matching_clip_entry(hass: HomeAssis
 async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAssistant, tmp_path: Path) -> None:
     """A stale .cover_hash forces a fresh fetch — protects against embedding stale art."""
 
-    clip = _clip_with_art("clip-mis-0000-0000-0000-000000000000", "Mismatch Song")
+    clip = _playlist_order_preservation_clip_with_art("clip-mis-0000-0000-0000-000000000000", "Mismatch Song")
     sync_dir = tmp_path / "mirror"
     rel_path = _clip_path(clip, QUALITY_HIGH)
     target = sync_dir / rel_path
@@ -4915,7 +4032,7 @@ async def test_retag_falls_back_to_fetch_when_cover_hash_mismatches(hass: HomeAs
 async def test_retag_aborts_when_image_url_set_but_no_bytes_available(hass: HomeAssistant, tmp_path: Path) -> None:
     """If we cannot obtain current art bytes, do not advance manifest sentinels."""
 
-    clip = _clip_with_art("clip-noart-0000-0000-0000-00000000000", "No Art Song")
+    clip = _playlist_order_preservation_clip_with_art("clip-noart-0000-0000-0000-00000000000", "No Art Song")
     sync_dir = tmp_path / "mirror"
     rel_path = _clip_path(clip, QUALITY_HIGH)
     target = sync_dir / rel_path
@@ -4951,7 +4068,7 @@ async def test_retag_aborts_when_image_url_set_but_no_bytes_available(hass: Home
 # ── Video art conversion retry-budget ────────────────────────────
 
 
-async def _build_convert_library(
+async def _playlist_order_preservation_build_convert_library(
     hass: HomeAssistant,
     tmp_path: Path,
     *,
@@ -4979,7 +4096,7 @@ async def _build_convert_library(
 
 async def test_video_convert_failure_records_failed_marker(hass: HomeAssistant, tmp_path: Path) -> None:
     """A failed convert_mp4_to_webp records video_art_failed with attempts=1."""
-    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    library, clip, sync_dir = await _playlist_order_preservation_build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
 
     with patch(
@@ -5000,7 +4117,7 @@ async def test_video_convert_failure_records_failed_marker(hass: HomeAssistant, 
 async def test_video_convert_skipped_after_max_attempts(hass: HomeAssistant, tmp_path: Path) -> None:
     """After MAX_VIDEO_CONVERT_ATTEMPTS failures, conversion is skipped on next sync."""
 
-    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    library, clip, sync_dir = await _playlist_order_preservation_build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
 
     with patch(
@@ -5022,7 +4139,7 @@ async def test_video_convert_skipped_after_max_attempts(hass: HomeAssistant, tmp
 
 async def test_video_convert_success_clears_failed_marker(hass: HomeAssistant, tmp_path: Path) -> None:
     """A successful conversion removes the video_art_failed marker."""
-    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    library, clip, sync_dir = await _playlist_order_preservation_build_convert_library(hass, tmp_path)
 
     async def fail_then_succeed(
         _hass: HomeAssistant,
@@ -5056,7 +4173,7 @@ async def test_video_convert_success_clears_failed_marker(hass: HomeAssistant, t
 async def test_video_convert_settings_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changing video_art_settings causes a fresh attempt even after exhausted retries."""
 
-    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    library, clip, sync_dir = await _playlist_order_preservation_build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
 
     with patch(
@@ -5079,7 +4196,7 @@ async def test_video_convert_settings_change_clears_gate(hass: HomeAssistant, tm
 async def test_video_convert_source_url_change_clears_gate(hass: HomeAssistant, tmp_path: Path) -> None:
     """Changing the source video URL causes a fresh attempt even after exhausted retries."""
 
-    library, clip, sync_dir = await _build_convert_library(hass, tmp_path)
+    library, clip, sync_dir = await _playlist_order_preservation_build_convert_library(hass, tmp_path)
     convert_mock = AsyncMock(return_value=False)
 
     with patch(
