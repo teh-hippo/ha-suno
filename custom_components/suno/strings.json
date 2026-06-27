@@ -3,14 +3,14 @@
     "step": {
       "user": {
         "title": "Connect to Suno",
-        "description": "Paste your Suno `__client` cookie from [suno.com](https://suno.com), via DevTools (Application → Cookies). No computer? See the [iPhone guide]({docs_url}).",
+        "description": "Paste your Suno `__client` cookie from [suno.com]({suno_url}), via DevTools (Application → Cookies). No computer? See the [iPhone guide]({docs_url}).",
         "data": {
           "cookie": "Session token"
         }
       },
       "reauth_confirm": {
         "title": "Re-authenticate with Suno",
-        "description": "Your session expired. Paste a fresh `__client` cookie from [suno.com](https://suno.com), via DevTools. No computer? See the [iPhone guide]({docs_url}).",
+        "description": "Your session expired. Paste a fresh `__client` cookie from [suno.com]({suno_url}), via DevTools. No computer? See the [iPhone guide]({docs_url}).",
         "data": {
           "cookie": "Session token"
         }

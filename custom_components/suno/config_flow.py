@@ -90,6 +90,7 @@ from .runtime import paths_overlap
 _LOGGER = logging.getLogger(__name__)
 
 _DOCS_URL = "https://github.com/teh-hippo/ha-suno/blob/master/docs/login.md"
+_SUNO_URL = "https://suno.com"
 
 QUALITY_OPTIONS = [
     SelectOptionDict(value="standard", label="Standard (MP3)"),
@@ -326,7 +327,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders={"docs_url": _DOCS_URL},
+            description_placeholders={"docs_url": _DOCS_URL, "suno_url": _SUNO_URL},
         )
 
     async def async_step_reauth(self, _entry_data: dict[str, Any]) -> ConfigFlowResult:
@@ -373,7 +374,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders={"docs_url": _DOCS_URL},
+            description_placeholders={"docs_url": _DOCS_URL, "suno_url": _SUNO_URL},
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
