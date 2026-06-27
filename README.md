@@ -28,20 +28,20 @@ Copy `custom_components/suno` into your HA `custom_components/` directory and re
 
 ## Setup
 
-Suno doesn't have a public API. This integration uses a session token from your browser (valid ~2 years).
+Suno has no public API. The integration uses your `__client` session cookie (valid ~2 years).
 
 ### Getting your session token
 
-1. Log in to [suno.com](https://suno.com) and open Developer Tools (F12)
-2. Go to **Application** → **Cookies** → **suno.com**
-3. Copy the value of `__client` (starts with `eyJ...`)
+On a computer, sign in at [suno.com](https://suno.com), open DevTools (F12), and copy
+`__client` (starts with `eyJ`) from **Application → Cookies → suno.com**. No computer?
+See the [iPhone guide](docs/login.md).
 
 ### Adding the integration
 
 1. **Settings → Devices & Services → Add Integration** → search "Suno"
 2. Paste your token
 
-If the token expires, HA shows a "needs attention" badge — click it to paste a fresh one.
+If the token expires, HA shows a "needs attention" badge; click it to paste a fresh one.
 
 ## Configuration
 

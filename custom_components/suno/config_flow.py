@@ -88,6 +88,8 @@ from .exceptions import SunoAuthError, SunoConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
+_DOCS_URL = "https://github.com/teh-hippo/ha-suno/blob/master/docs/login.md"
+
 QUALITY_OPTIONS = [
     SelectOptionDict(value="standard", label="Standard (MP3)"),
     SelectOptionDict(value="high", label="High (FLAC)"),
@@ -287,7 +289,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders={"suno_url": "https://suno.com"},
+            description_placeholders={"docs_url": _DOCS_URL},
         )
 
     async def async_step_reauth(self, _entry_data: dict[str, Any]) -> ConfigFlowResult:
@@ -334,7 +336,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders={"suno_url": "https://suno.com"},
+            description_placeholders={"docs_url": _DOCS_URL},
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
