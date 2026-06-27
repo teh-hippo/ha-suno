@@ -27,7 +27,7 @@ class _SunoButton(CoordinatorEntity[SunoCoordinator], ButtonEntity):
     def __init__(self, runtime: HomeAssistantRuntime, entry: SunoConfigEntry, *, key: str) -> None:
         super().__init__(runtime.coordinator)
         self._runtime = runtime
-        self._attr_unique_id = f"{entry.unique_id}_{key}"
+        self._attr_unique_id = f"{entry.unique_id or entry.entry_id}_{key}"
         self._entry = entry
 
     @property

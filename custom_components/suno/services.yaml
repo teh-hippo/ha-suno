@@ -2,6 +2,13 @@ download_library:
   name: Download library
   description: Trigger a download of your Suno library to the configured directory.
   fields:
+    config_entry_id:
+      name: Account
+      description: Suno account to download. Leave empty to download every configured account.
+      required: false
+      selector:
+        config_entry:
+          integration: suno
     force:
       name: Force
       description: Re-download all files, ignoring download state.

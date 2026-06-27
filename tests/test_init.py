@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.suno import async_remove_entry
 from custom_components.suno.const import (
@@ -26,7 +28,38 @@ from custom_components.suno.exceptions import SunoApiError, SunoAuthError, SunoC
 from custom_components.suno.models import SunoClip, SunoData
 from custom_components.suno.runtime import _SERVICE_DOWNLOAD, HomeAssistantRuntime
 
-from .conftest import make_entry, patch_suno_setup, setup_entry
+from .conftest import (
+    make_entry,
+    make_mock_auth,
+    patch_suno_setup,
+    sample_clips,
+    sample_credits,
+    sample_playlists,
+    setup_entry,
+)
+
+
+def _mock_client(user_id: str) -> AsyncMock:
+    """Build a mock SunoClient whose auth resolves to ``user_id``."""
+    client = AsyncMock()
+    client.user_id = user_id
+    client.display_name = "Suno"
+    client.suno_display_name = None
+    auth = make_mock_auth()
+    auth.user_id = user_id
+    auth.authenticate = AsyncMock(return_value=user_id)
+    client._auth = auth
+    client.authenticate = AsyncMock(return_value=user_id)
+    client.get_feed = AsyncMock(return_value=(sample_clips(), False))
+    client.get_all_songs = AsyncMock(return_value=sample_clips())
+    client.get_liked_songs = AsyncMock(return_value=sample_clips(1))
+    client.get_playlists = AsyncMock(return_value=sample_playlists())
+    client.get_playlist_clips = AsyncMock(return_value=sample_clips()[:1])
+    client.get_credits = AsyncMock(return_value=sample_credits())
+    client.get_clip_parent_raw = AsyncMock(return_value=None)
+    client.get_wav_url = AsyncMock(return_value="https://cdn1.suno.ai/clip-aaa-111.wav")
+    client.request_wav = AsyncMock()
+    return client
 
 
 async def test_setup_entry_success(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -152,27 +185,33 @@ async def test_remove_entry_oserror_logged(hass: HomeAssistant, tmp_path: Path) 
 
 
 async def test_remove_entry_preserves_cache_for_other_entries(hass: HomeAssistant, tmp_path: Path) -> None:
-    """Removing one entry preserves the cache dir when another entry remains."""
+    """Removing one entry deletes only its own per-entry cache dir."""
     entry_a = make_entry(unique_id="user-a")
     entry_b = make_entry(unique_id="user-b")
     entry_a.add_to_hass(hass)
     entry_b.add_to_hass(hass)
 
-    cache_dir = tmp_path / ".cache" / "suno"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "clip.mp3").write_bytes(b"data")
+    cache_root = tmp_path / ".cache"
+    dir_a = cache_root / f"suno/{entry_a.entry_id}"
+    dir_b = cache_root / f"suno/{entry_b.entry_id}"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+    (dir_a / "clip.mp3").write_bytes(b"data")
+    (dir_b / "clip.mp3").write_bytes(b"data")
 
     storage_dir = tmp_path / ".storage"
     storage_dir.mkdir()
 
     with (
-        patch.object(hass.config, "cache_path", return_value=str(cache_dir)),
-        patch.object(hass.config, "path", side_effect=lambda p: str(tmp_path / p)),
+        patch.object(hass.config, "cache_path", side_effect=lambda p: str(cache_root / p)),
+        patch.object(hass.config, "path", side_effect=lambda *p: str(tmp_path.joinpath(*p))),
     ):
         await async_remove_entry(hass, entry_a)
 
-    # Cache dir must still exist because entry_b remains
-    assert cache_dir.exists()
+    # Only entry_a's directory is removed; entry_b's cache (and the shared
+    # parent) survive because entry_b remains.
+    assert not dir_a.exists()
+    assert dir_b.exists()
 
 
 async def test_setup_entry_connection_error_with_stored_data(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -205,18 +244,27 @@ async def test_setup_entry_generic_error_with_stored_data(hass: HomeAssistant, m
     assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_rate_limiter_shared_across_entries(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
-    """Rate limiter is the same instance for all config entries."""
-
+async def test_rate_limiter_per_account_with_shared_gate(hass: HomeAssistant) -> None:
+    """Each entry gets its own rate limiter, but all share one concurrency gate."""
     entry_a = make_entry(unique_id="user-a")
     entry_b = make_entry(unique_id="user-b")
 
-    with patch_suno_setup(mock_suno_client):
+    with patch_suno_setup(_mock_client("user-a")):
         await setup_entry(hass, entry_a)
+    with patch_suno_setup(_mock_client("user-b")):
         await setup_entry(hass, entry_b)
 
-    assert "rate_limiter" in hass.data[DOMAIN]
-    assert hass.data[DOMAIN]["rate_limiter"] is hass.data[DOMAIN]["rate_limiter"]
+    rt_a = entry_a.runtime_data
+    rt_b = entry_b.runtime_data
+
+    # Per-account throttle state: distinct limiter instances.
+    assert rt_a.rate_limiter is not rt_b.rate_limiter
+
+    # Shared global concurrency cap: one semaphore for all accounts.
+    gate = hass.data[DOMAIN]["concurrency_gate"]
+    assert isinstance(gate, asyncio.Semaphore)
+    assert rt_a.rate_limiter._semaphore is gate
+    assert rt_b.rate_limiter._semaphore is gate
 
 
 # ── Download manager creation logic ───────────────────────────────
@@ -391,46 +439,49 @@ async def test_force_download_refreshes_library_before_reconcile(
 
 # ── Service lifecycle ────────────────────────────────────────────────
 
-# ── TestServiceLifecycle (converted to free functions) ────────────────────
 
-"""Tests for download service registration lifecycle."""
-
-
-def test_service_lifecycle_service_not_removed_while_other_entries_remain() -> None:
-    """Service removal callback should keep the service when other entries exist."""
-
-    hass = MagicMock()
-    entry = MagicMock()
-    entry.entry_id = "entry-1"
-
-    other_entry = MagicMock()
-    other_entry.entry_id = "entry-2"
-    hass.config_entries.async_entries.return_value = [other_entry]
-
-    # Build the guarded removal function the same way production code does
-    def _maybe_remove_service() -> None:
-        remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
-        if not remaining:
-            hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
-
-    _maybe_remove_service()
-    hass.services.async_remove.assert_not_called()
+def _download_entry(unique_id: str, path: str) -> MockConfigEntry:
+    """Build a download-enabled entry (mirror) pointed at ``path``."""
+    options = {**make_entry().options, CONF_DOWNLOAD_PATH: path}
+    return make_entry(unique_id=unique_id, options=options)
 
 
-def test_service_lifecycle_service_removed_when_last_entry_unloads() -> None:
-    """Service removal callback should remove the service when no entries remain."""
+async def test_download_service_kept_while_another_entry_remains(hass: HomeAssistant, tmp_path: Path) -> None:
+    """Unloading one account keeps the shared service while another remains."""
+    entry_a = _download_entry("user-a", str(tmp_path / "a"))
+    entry_b = _download_entry("user-b", str(tmp_path / "b"))
 
-    hass = MagicMock()
-    entry = MagicMock()
-    entry.entry_id = "entry-1"
+    with patch(
+        "custom_components.suno.downloaded_library.DownloadedLibrary.async_reconcile",
+        new_callable=AsyncMock,
+    ):
+        with patch_suno_setup(_mock_client("user-a")):
+            await setup_entry(hass, entry_a)
+        with patch_suno_setup(_mock_client("user-b")):
+            await setup_entry(hass, entry_b)
 
-    # No other entries remain after this one unloads
-    hass.config_entries.async_entries.return_value = [entry]
+        assert hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD)
 
-    def _maybe_remove_service() -> None:
-        remaining = [e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id]
-        if not remaining:
-            hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+        assert await hass.config_entries.async_unload(entry_a.entry_id)
+        await hass.async_block_till_done()
 
-    _maybe_remove_service()
-    hass.services.async_remove.assert_called_once_with(DOMAIN, _SERVICE_DOWNLOAD)
+    # entry_b still configured, so the service persists and is not stale.
+    assert hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD)
+
+
+async def test_download_service_removed_when_only_entry_unloads(hass: HomeAssistant, tmp_path: Path) -> None:
+    """The service is removed once the last download entry unloads."""
+    entry = _download_entry("user-a", str(tmp_path / "a"))
+
+    with patch(
+        "custom_components.suno.downloaded_library.DownloadedLibrary.async_reconcile",
+        new_callable=AsyncMock,
+    ):
+        with patch_suno_setup(_mock_client("user-a")):
+            await setup_entry(hass, entry)
+        assert hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD)
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD)

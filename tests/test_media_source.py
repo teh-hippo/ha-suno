@@ -451,14 +451,14 @@ async def test_resolve_searches_all_entries(hass: HomeAssistant, mock_suno_clien
     item = MediaSourceItem(hass, "suno", "clip/clip-second-only", None)
     result = await source.async_resolve_media(item)
     # clip-second-only is liked, quality_liked defaults to "high" → FLAC
-    assert result.url.startswith("/api/suno/media/clip-second-only.flac")
+    assert result.url.startswith(f"/api/suno/media/{entry2.entry_id}/clip-second-only.flac")
     assert "authSig=" in result.url
     assert result.mime_type == "audio/flac"
 
     # Clip from entry 1 should still resolve fine
     item1 = MediaSourceItem(hass, "suno", "clip/clip-aaa-111", None)
     result1 = await source.async_resolve_media(item1)
-    assert result1.url.startswith("/api/suno/media/clip-aaa-111.flac")
+    assert result1.url.startswith(f"/api/suno/media/{entry1.entry_id}/clip-aaa-111.flac")
     assert "authSig=" in result1.url
 
 

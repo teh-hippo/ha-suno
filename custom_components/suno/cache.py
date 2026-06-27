@@ -24,11 +24,13 @@ _FLAC_MAGIC = b"fLaC"
 class SunoCache:
     """On-disk audio cache with LRU eviction."""
 
-    def __init__(self, hass: HomeAssistant, max_size_mb: int) -> None:
+    def __init__(self, hass: HomeAssistant, max_size_mb: int, entry_id: str) -> None:
         self._hass = hass
+        self._entry_id = entry_id
         self._max_bytes = max_size_mb * 1024 * 1024
-        self._cache_dir = Path(hass.config.cache_path("suno"))
-        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
+        self._cache_dir = Path(hass.config.cache_path(f"suno/{entry_id}"))
+        self._store_key = f"{STORE_KEY}_{entry_id}"
+        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, self._store_key)
         self._index: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._save_pending = False
@@ -90,17 +92,45 @@ class SunoCache:
     async def async_init(self) -> None:
         """Create the cache directory, clean temp files, and load the index."""
         await self._hass.async_add_executor_job(self._init_dir)
+        await self._hass.async_add_executor_job(self._cleanup_legacy_shared_cache)
         try:
             saved = await self._store.async_load()
         except Exception:
             _LOGGER.warning("Cache index incompatible or corrupt, resetting")
-            storage_path = Path(self._hass.config.path(".storage", STORE_KEY))
+            storage_path = Path(self._hass.config.path(".storage", self._store_key))
             await self._hass.async_add_executor_job(storage_path.unlink, True)
-            self._store = Store(self._hass, STORE_VERSION, STORE_KEY)
+            self._store = Store(self._hass, STORE_VERSION, self._store_key)
             await self._hass.async_add_executor_job(self._wipe_cache_files)
             saved = None
         if saved is not None:
             self._index = saved
+
+    def _cleanup_legacy_shared_cache(self) -> None:
+        """Remove the obsolete pre-per-entry shared cache once.
+
+        Older versions stored audio directly in ``cache/suno`` and the
+        index in ``.storage/suno_cache_index``, shared across every config
+        entry. The audio cache is reconstructible, so this is a one-off
+        cleanup (not a migration) to reclaim space. It is idempotent and
+        only touches top-level legacy files, never the per-entry
+        directory, so it is safe to run from every entry.
+        """
+        legacy_dir = Path(self._hass.config.cache_path("suno"))
+        if legacy_dir.resolve() == self._cache_dir.resolve():
+            # Both resolve to the same location (e.g. a test shim that
+            # ignores the path argument); never delete our own files.
+            return
+        if legacy_dir.is_dir():
+            for legacy_file in legacy_dir.iterdir():
+                if legacy_file.is_file() and legacy_file.suffix.lower() in (".mp3", ".flac"):
+                    try:
+                        legacy_file.unlink()
+                    except OSError:
+                        pass
+        try:
+            Path(self._hass.config.path(".storage", STORE_KEY)).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _wipe_cache_files(self) -> None:
         """Remove all cached audio files."""

@@ -7,27 +7,34 @@ import time
 
 
 class SunoRateLimiter:
-    """Coordinates API request rate limiting across multiple config entries."""
+    """Throttle Suno API requests for a single account.
+
+    Each config entry owns its own limiter so that a ``429`` against one
+    account never throttles another. Concurrency, however, is bounded
+    globally: when a shared ``concurrency_gate`` semaphore is supplied it
+    is used as the acquire/release gate, so ``N`` accounts cannot all
+    hammer Suno at once (for example on a Home Assistant restart). The
+    throttle/backoff state stays per-instance (per account).
+    """
 
     MAX_RETRY_AFTER = 300  # Cap Retry-After to 5 minutes
 
-    def __init__(self, max_concurrent: int = 3) -> None:
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+    def __init__(self, max_concurrent: int = 3, *, concurrency_gate: asyncio.Semaphore | None = None) -> None:
+        self._semaphore = concurrency_gate if concurrency_gate is not None else asyncio.Semaphore(max_concurrent)
         self._throttle_until: float = 0
         self._throttle_lock = asyncio.Lock()
         self._total_429_count: int = 0
 
     async def acquire(self) -> None:
-        """Acquire a request slot, waiting for any active throttle to clear."""
+        """Acquire a request slot, waiting out any active throttle first.
+
+        The per-account throttle is waited out BEFORE the shared concurrency
+        slot is taken, so one account's 429 backoff never holds a global
+        concurrency slot and stalls other accounts that share the gate.
+        """
+        while (wait := self._throttle_until - time.monotonic()) > 0:
+            await asyncio.sleep(wait)
         await self._semaphore.acquire()
-        try:
-            if self._throttle_until > 0:
-                wait = self._throttle_until - time.monotonic()
-                if wait > 0:
-                    await asyncio.sleep(wait)
-        except BaseException:
-            self._semaphore.release()
-            raise
 
     def release(self) -> None:
         """Release a request slot."""

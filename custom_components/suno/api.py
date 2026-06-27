@@ -127,10 +127,16 @@ class SunoClient:
                                 delay = 2.0 * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                                 if (retry_after := resp.headers.get("Retry-After")) and retry_after.isdigit():
                                     delay = max(delay, float(retry_after))
-                                if self._rate_limiter:
-                                    await self._rate_limiter.report_rate_limit(delay)
                                 _LOGGER.debug("Rate limited, retrying in %.1fs", delay)
-                                await asyncio.sleep(delay)
+                                if self._rate_limiter:
+                                    # Record the throttle and drop the shared
+                                    # concurrency slot (released in finally) so the
+                                    # backoff is waited out by the next acquire()
+                                    # without holding a global slot — one account's
+                                    # 429 must not stall the others.
+                                    await self._rate_limiter.report_rate_limit(delay)
+                                else:
+                                    await asyncio.sleep(delay)
                                 continue
                             raise SunoApiError("Rate limited after maximum retries")
                         if expect_json:

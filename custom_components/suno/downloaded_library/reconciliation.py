@@ -3,11 +3,19 @@
 These free functions handle the two read-then-mutate passes that compare the
 manifest state against what is actually on disk. Both run their I/O via a
 Home Assistant executor job, so they take ``hass`` as their first argument.
+
+Cross-account safety is enforced at the runtime layer: the integration
+refuses to load two entries whose download paths overlap or nest, so a
+single loaded account exclusively owns its entire download tree. The
+reconcile pass therefore walks the whole tree, but keeps a per-folder
+``.cover_hash`` foreign-id check as defense-in-depth against legacy state
+or manual fiddling that leaves unknown clip_ids in a sidecar.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 from homeassistant.core import HomeAssistant
@@ -53,19 +61,51 @@ async def _reconcile_disk(
             if not d.is_dir():
                 continue
             has_audio = any(f.suffix.lower() in (".flac", ".mp3") for f in d.iterdir() if f.is_file())
-            if not has_audio:
-                for sidecar in ("cover.jpg", "cover.webp", ".cover_hash"):
-                    sc = d / sidecar
-                    if sc.exists():
-                        sc.unlink(missing_ok=True)
-                        _LOGGER.info("Reconciliation: removed orphan sidecar %s", sc.relative_to(base_path))
-                        count += 1
+            if has_audio:
+                continue
+            # Defense-in-depth: if ``.cover_hash`` records clip_ids this account
+            # does not know about, leave every folder sidecar in place. Within
+            # a single, exclusively-owned tree this only fires after legacy
+            # migrations or manual edits, so the rare cost is acceptable.
+            cover_hash_path = d / ".cover_hash"
+            if cover_hash_path.exists() and _cover_hash_has_foreign_ids(cover_hash_path, clips_state):
+                continue
+            for sidecar in ("cover.jpg", "cover.webp", ".cover_hash"):
+                sc = d / sidecar
+                if sc.exists():
+                    sc.unlink(missing_ok=True)
+                    _LOGGER.info("Reconciliation: removed orphan sidecar %s", sc.relative_to(base_path))
+                    count += 1
         for d in sorted(base_path.rglob("*"), reverse=True):
             if d.is_dir() and not any(d.iterdir()):
                 d.rmdir()
         return count
 
     return await hass.async_add_executor_job(_scan_and_remove, base, known_paths)
+
+
+def _cover_hash_has_foreign_ids(
+    cover_hash_path: Path,
+    clips_state: Mapping[str, ManifestEntry],
+) -> bool:
+    """Return True when ``.cover_hash`` has clip_ids outside this manifest.
+
+    Imported lazily to avoid a circular import with ``cover_art``.
+    """
+    from .cover_art import CoverHashFile  # noqa: PLC0415
+
+    try:
+        raw = cover_hash_path.read_text()
+    except OSError:
+        return False
+    parsed = CoverHashFile._parse(raw)
+    if not parsed:
+        return False
+    known_ids = set(clips_state.keys())
+    for clip_id in parsed:
+        if clip_id and clip_id not in known_ids:
+            return True
+    return False
 
 
 async def _reconcile_manifest(hass: HomeAssistant, base: Path, clips_state: dict[str, ManifestEntry]) -> int:
