@@ -20,7 +20,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoCon
         return {
             "config_entry": {
                 "unique_id": entry.unique_id,
-                "options": dict(entry.options),
+                "options": async_redact_data(dict(entry.options), REDACT_KEYS),
                 "data": async_redact_data(dict(entry.data), REDACT_KEYS),
             },
             "error": "Integration not fully loaded",
@@ -29,7 +29,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SunoCon
     return {
         "config_entry": {
             "unique_id": entry.unique_id,
-            "options": dict(entry.options),
+            "options": async_redact_data(dict(entry.options), REDACT_KEYS),
             "data": async_redact_data(dict(entry.data), REDACT_KEYS),
         },
         **runtime.diagnostics(),

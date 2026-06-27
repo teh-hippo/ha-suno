@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -321,6 +321,12 @@ class DownloadedLibrary:
         plan = desired_plan or self.build_desired(options, suno_library)
         self.clip_index = {item.clip.id: item.clip for item in plan.items}
         clips_state: dict[str, ManifestEntry] = dict(self._state.clips)
+        # Snapshot taken BEFORE _finalize_state updates ``last_download``: if
+        # we entered this run with both an empty manifest AND no prior
+        # ``last_download``, the engine has nothing on disk it can call its
+        # own and ``_reconcile_disk`` would treat every pre-existing file as
+        # orphan garbage (the remove + re-add scenario).
+        was_fresh_manifest = not self._state.clips and self._state.last_download is None
 
         missing_on_disk = await self._reconcile_manifest(base, clips_state)
         if missing_on_disk:
@@ -389,13 +395,36 @@ class DownloadedLibrary:
 
         stored_video_art_mode = self._state.video_art_mode
         video_art_mode_changed = stored_video_art_mode is not None and stored_video_art_mode != self._video_art_mode
-        if allow_destructive and (downloaded or to_delete or migrated or force or video_art_mode_changed):
+        if (
+            allow_destructive
+            and (downloaded or to_delete or migrated or force or video_art_mode_changed)
+            and not (was_fresh_manifest and not clips_state)
+        ):
             orphans = await self._reconcile_disk(base, clips_state)
             if orphans:
                 _LOGGER.info("Reconciliation removed %d orphaned files", orphans)
         if allow_destructive and stored_video_art_mode != self._video_art_mode:
             self._state.video_art_mode = self._video_art_mode
             await self._save_state(base)
+
+    def _is_fresh_manifest_after_run(self, clips_state: Mapping[str, ManifestEntry]) -> bool:
+        """Return True when the engine has nothing to base orphan deletion on.
+
+        After the download pass ``clips_state`` and ``self._state.last_download``
+        reflect the run's outcome. If both are empty the engine has never
+        recorded anything (e.g. the per-entry HA Store was wiped by a remove +
+        re-add, leaving the on-disk library disconnected from any manifest).
+        Running ``_reconcile_disk`` in that state would treat the entire prior
+        library as orphan garbage and delete it. Skipping the pass leaves the
+        files in place until the next sync re-populates the manifest.
+
+        Kept for direct callers (and tests); ``_run_download`` uses a snapshot
+        taken before ``_finalize_state`` updates ``last_download`` so the
+        snapshot is the source of truth there.
+        """
+        if clips_state:
+            return False
+        return self._state.last_download is None
 
     async def _migrate_renamed_paths(
         self,
@@ -428,7 +457,14 @@ class DownloadedLibrary:
                         migrated += 1
                         to_retag.append(item)
                         _LOGGER.debug("Renamed: %s -> %s", old_path, new_path)
-                        await self._move_sidecars(base, item.clip, old_file, new_file)
+                        await self._move_sidecars(
+                            base,
+                            item.clip,
+                            old_file,
+                            new_file,
+                            clip_id=item.clip.id,
+                            clips_state=clips_state,
+                        )
                         _cleanup_empty_dirs(base, old_file)
                 except OSError:
                     _LOGGER.warning("Failed to rename: %s -> %s", old_path, new_path)
@@ -716,7 +752,7 @@ class DownloadedLibrary:
             entry = clips_state.pop(clip_id, None)
             if entry is not None and entry.path:
                 await _delete_file(self.hass, base, entry.path)
-                await self._delete_sidecars(base, entry.path)
+                await self._delete_sidecars(base, entry.path, clip_id=clip_id, clips_state=clips_state)
 
     async def _finalize_state(
         self,
@@ -750,19 +786,58 @@ class DownloadedLibrary:
         else:
             await self._delete_generated_playlists(base)
 
-    async def _move_sidecars(self, base: Path, clip: SunoClip, old_file: Path, new_file: Path) -> None:
+    async def _move_sidecars(
+        self,
+        base: Path,
+        clip: SunoClip,
+        old_file: Path,
+        new_file: Path,
+        clip_id: str | None = None,
+        clips_state: Mapping[str, ManifestEntry] | None = None,
+    ) -> None:
+        """Migrate per-clip sidecars to a new folder without harming siblings.
+
+        Track-level sidecars (`.mp4` and the per-track `.jpg`) are renamed
+        because their basename is unique to one clip. Folder-level sidecars
+        (`cover.jpg`, `cover.webp`, `.cover_hash`) are *copied* when the old
+        folder still has another clip owning it, so the sibling keeps its
+        cover art. For `.cover_hash` the migrating clip's entry is also
+        removed from the old file so the dict reflects reality after the move.
+        """
         old_video = old_file.with_suffix(".mp4")
         if await self.hass.async_add_executor_job(old_video.exists):
             new_video = base / _video_clip_path(clip)
             await self.hass.async_add_executor_job(new_video.parent.mkdir, 0o755, True, True)
             await self.hass.async_add_executor_job(old_video.rename, new_video)
         if old_file.parent != new_file.parent:
-            for sidecar_name in ("cover.jpg", "cover.webp", ".cover_hash"):
+            old_folder_rel = str(PurePosixPath(*old_file.relative_to(base).parts[:-1]))
+            old_folder_has_other = await self._folder_has_other_owner(
+                old_file.parent, base, f"{old_folder_rel}/placeholder", clip_id, clips_state
+            )
+            for sidecar_name in ("cover.jpg", "cover.webp"):
                 old_sc = old_file.parent / sidecar_name
-                if await self.hass.async_add_executor_job(old_sc.exists):
-                    new_sc = new_file.parent / sidecar_name
-                    await self.hass.async_add_executor_job(new_sc.parent.mkdir, 0o755, True, True)
+                if not await self.hass.async_add_executor_job(old_sc.exists):
+                    continue
+                new_sc = new_file.parent / sidecar_name
+                await self.hass.async_add_executor_job(new_sc.parent.mkdir, 0o755, True, True)
+                if old_folder_has_other:
+                    await self.hass.async_add_executor_job(_link_or_copy_sync, old_sc, new_sc)
+                else:
                     await self.hass.async_add_executor_job(old_sc.rename, new_sc)
+            old_hash_path = old_file.parent / ".cover_hash"
+            if await self.hass.async_add_executor_job(old_hash_path.exists):
+                new_hash_path = new_file.parent / ".cover_hash"
+                await self.hass.async_add_executor_job(new_hash_path.parent.mkdir, 0o755, True, True)
+                if old_folder_has_other:
+                    await self.hass.async_add_executor_job(_link_or_copy_sync, old_hash_path, new_hash_path)
+                    if clip_id:
+                        old_hash = CoverHashFile(old_hash_path)
+                        try:
+                            await old_hash.remove(self.hass, clip_id)
+                        except OSError:
+                            pass
+                else:
+                    await self.hass.async_add_executor_job(old_hash_path.rename, new_hash_path)
         old_track_jpg = old_file.with_suffix(".jpg")
         if await self.hass.async_add_executor_job(old_track_jpg.exists):
             new_track_jpg = new_file.with_suffix(".jpg")
@@ -782,21 +857,103 @@ class DownloadedLibrary:
         if (old_path := old_paths_after_download.pop(item.clip.id, "")) and old_path != rel_path:
             await _delete_file(self.hass, base, old_path)
 
-    async def _delete_sidecars(self, base: Path, rel_path: str) -> None:
+    async def _delete_sidecars(
+        self,
+        base: Path,
+        rel_path: str,
+        *,
+        clip_id: str | None = None,
+        clips_state: Mapping[str, ManifestEntry] | None = None,
+    ) -> None:
+        """Delete sidecars belonging to one clip without disturbing siblings.
+
+        Track-level sidecars (`.mp4`, `.jpg` named after the audio file) are
+        always safe to delete because their basename embeds the clip's short
+        id. Folder-level sidecars (`cover.jpg`, `cover.webp`, `.cover_hash`)
+        are shared by every clip that lives in the same `<artist>/<title>`
+        directory; deleting them while a sibling clip still uses them strips
+        cover art from another (possibly cross-account) clip.
+
+        ``.cover_hash`` is treated as authoritative for "what else uses this
+        folder?": this clip's entry is dropped first, then a remaining
+        manifest sibling OR a remaining ``.cover_hash`` clip_id keeps
+        ``cover.jpg`` and ``cover.webp`` in place. The file is deleted when
+        no owners remain.
+        """
         clip_file = base / rel_path
-        sidecars = (
-            clip_file.with_suffix(".mp4"),
-            clip_file.with_suffix(".jpg"),
-            clip_file.parent / "cover.jpg",
-            clip_file.parent / "cover.webp",
-            clip_file.parent / ".cover_hash",
-        )
-        for sidecar in sidecars:
+        track_sidecars = (clip_file.with_suffix(".mp4"), clip_file.with_suffix(".jpg"))
+        for sidecar in track_sidecars:
             if await self.hass.async_add_executor_job(sidecar.exists):
                 try:
                     await self.hass.async_add_executor_job(sidecar.unlink)
                 except OSError:
                     pass
+
+        folder = clip_file.parent
+        cover_hash_path = folder / ".cover_hash"
+        cover_hash_existed = await self.hass.async_add_executor_job(cover_hash_path.exists)
+        if clip_id and cover_hash_existed:
+            hash_file = CoverHashFile(cover_hash_path)
+            try:
+                await hash_file.remove(self.hass, clip_id)
+            except OSError:
+                pass
+
+        if await self._folder_has_other_owner(folder, base, rel_path, clip_id, clips_state):
+            return
+
+        for sidecar_name in ("cover.jpg", "cover.webp"):
+            sidecar = folder / sidecar_name
+            if await self.hass.async_add_executor_job(sidecar.exists):
+                try:
+                    await self.hass.async_add_executor_job(sidecar.unlink)
+                except OSError:
+                    pass
+        # If the caller did not pass clip_id (legacy path), the hash file is
+        # still on disk and contains the now-removed clip's data; with no
+        # remaining owners it is safe to drop.
+        if not clip_id and cover_hash_existed:
+            try:
+                await self.hass.async_add_executor_job(cover_hash_path.unlink)
+            except OSError:
+                pass
+
+    async def _folder_has_other_owner(
+        self,
+        folder: Path,
+        base: Path,
+        rel_path: str,
+        clip_id: str | None,
+        clips_state: Mapping[str, ManifestEntry] | None,
+    ) -> bool:
+        """Return True when any other clip still claims ``folder`` for storage.
+
+        Two signals are checked: (1) a remaining manifest entry whose path is
+        in the same folder, and (2) a `.cover_hash` file on disk whose dict
+        contains clip_ids beyond the one being removed. The second signal
+        catches sibling clips owned by another account whose Store this engine
+        cannot see; even with the runtime path-overlap guard this is a cheap
+        belt-and-braces check.
+        """
+        rel_folder = PurePosixPath(rel_path).parent
+        if clips_state:
+            for other_id, other_entry in clips_state.items():
+                if other_id == clip_id:
+                    continue
+                if not other_entry.path:
+                    continue
+                if PurePosixPath(other_entry.path).parent == rel_folder:
+                    return True
+
+        cover_hash_path = folder / ".cover_hash"
+        if not await self.hass.async_add_executor_job(cover_hash_path.exists):
+            return False
+        hash_file = CoverHashFile(cover_hash_path)
+        try:
+            known = await hash_file.known_clip_ids(self.hass)
+        except OSError:
+            return False
+        return any(other for other in known if other != clip_id)
 
     def build_desired(self, options: Mapping[str, Any], suno_library: SunoData) -> DesiredDownloadPlan:
         """Build the desired Downloaded Library records from a Suno Library."""
@@ -938,7 +1095,14 @@ class DownloadedLibrary:
         options: Mapping[str, Any],
         previous_options: Mapping[str, Any] | None = None,
     ) -> None:
-        """Remove Mirror-managed downloads when local downloads are disabled."""
+        """Remove Mirror-managed downloads when local downloads are disabled.
+
+        The runtime path-overlap guard makes this account the sole owner of
+        ``download_path``, so generated playlists at the root are this
+        account's to clean up. Within-account folder-sibling safety (cover
+        art shared by two clips in the same ``<artist>/<title>`` folder) is
+        preserved by routing through ``_delete_clip_artifacts``.
+        """
         download_path = (
             options.get(CONF_DOWNLOAD_PATH) or (previous_options or {}).get(CONF_DOWNLOAD_PATH) or self._download_path
         )
@@ -966,7 +1130,7 @@ class DownloadedLibrary:
 
             clips_state.pop(clip_id, None)
             if entry.path:
-                await self._delete_clip_artifacts(base, entry.path)
+                await self._delete_clip_artifacts(base, entry.path, clip_id=clip_id, clips_state=clips_state)
             removed += 1
 
         await self._delete_generated_playlists(base)
@@ -985,31 +1149,44 @@ class DownloadedLibrary:
         self._publish_status()
 
     async def async_purge_old_path(self, old_path: str) -> None:
-        """Delete manifest-tracked files and generated playlists from an abandoned path."""
+        """Delete manifest-tracked files and generated playlists from an abandoned path.
+
+        The runtime path-overlap guard means no other loaded account uses
+        ``old_path``, so generated playlists and the on-disk manifest sidecar
+        here are this account's leftovers and safe to remove.
+        """
         if not old_path:
             return
 
         base = Path(old_path)
         clips_state: dict[str, ManifestEntry] = dict(self._state.clips)
+        remaining: dict[str, ManifestEntry] = dict(clips_state)
         removed = 0
 
         for clip_id, entry in list(clips_state.items()):
-            clips_state.pop(clip_id, None)
+            remaining.pop(clip_id, None)
             removed += 1
             if entry.path:
-                await self._delete_clip_artifacts(base, entry.path)
+                await self._delete_clip_artifacts(base, entry.path, clip_id=clip_id, clips_state=remaining)
 
         await self._delete_generated_playlists(base)
         await _delete_file(self.hass, base, _MANIFEST_FILENAME)
-        self._state.clips = clips_state
+        self._state.clips = remaining
         self._state.last_download = datetime.now(tz=UTC).isoformat()
         self._last_result = f"Download path changed: {removed} removed" if removed else "Download path changed"
         self._state.last_result = self._last_result
         await self._storage.async_save(self._state.to_dict())
         self._publish_status()
 
-    async def _delete_clip_artifacts(self, base: Path, rel_path: str) -> None:
-        await self._delete_sidecars(base, rel_path)
+    async def _delete_clip_artifacts(
+        self,
+        base: Path,
+        rel_path: str,
+        *,
+        clip_id: str | None = None,
+        clips_state: Mapping[str, ManifestEntry] | None = None,
+    ) -> None:
+        await self._delete_sidecars(base, rel_path, clip_id=clip_id, clips_state=clips_state)
         await _delete_file(self.hass, base, rel_path)
         _cleanup_empty_dirs(base, base / rel_path)
 
@@ -1028,7 +1205,12 @@ class DownloadedLibrary:
         await self.hass.async_add_executor_job(_delete_playlists, base)
 
     async def cleanup_tmp_files(self, download_path: str) -> None:
-        """Remove stale temporary files from the Downloaded Library directory."""
+        """Remove stale temporary files from the Downloaded Library directory.
+
+        Walks the whole tree because the runtime path-overlap guard makes the
+        download root exclusively owned by this account; another account
+        cannot have an in-flight ``.tmp`` here.
+        """
 
         def _cleanup(p: str) -> None:
             base = Path(p)

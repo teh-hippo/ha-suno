@@ -238,7 +238,7 @@ async def test_view_cancelled_error_propagates(hass: HomeAssistant, mock_suno_cl
     # Pre-populate inflight with a future that will appear cancelled.
     fut: _asyncio.Future[bytes | None] = _asyncio.get_running_loop().create_future()
     fut.cancel()
-    view._inflight["clip-x.flac"] = fut
+    view._inflight[("", "clip-x", "flac")] = fut
 
     # Build a minimal Request-like stub; we exercise _handle_hq directly.
     # Cancellation from asyncio.shield on a cancelled future should raise CancelledError,
@@ -249,7 +249,7 @@ async def test_view_cancelled_error_propagates(hass: HomeAssistant, mock_suno_cl
     except _asyncio.CancelledError:
         raised = True
     finally:
-        view._inflight.pop("clip-x.flac", None)
+        view._inflight.pop(("", "clip-x", "flac"), None)
     assert raised, "CancelledError was swallowed"
 
 
@@ -948,13 +948,13 @@ async def test_hq_inflight_coalescing(hass: HomeAssistant, mock_suno_client: Asy
     # Pre-set an inflight future that resolves to FLAC data
     fut: asyncio.Future[bytes | None] = hass.loop.create_future()
     fut.set_result(flac_data)
-    view._inflight["clip-aaa-111.flac"] = fut
+    view._inflight[("", "clip-aaa-111", "flac")] = fut
 
     resp = await view._handle_hq("clip-aaa-111", None, "Title", "Artist", "audio/flac", None, "", None)
     assert resp.status == 200
     assert resp.body == flac_data
     # Future should have been consumed
-    view._inflight.pop("clip-aaa-111.flac", None)
+    view._inflight.pop(("", "clip-aaa-111", "flac"), None)
 
 
 async def test_hq_inflight_timeout_returns_none(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -968,7 +968,7 @@ async def test_hq_inflight_timeout_returns_none(hass: HomeAssistant, mock_suno_c
 
     # Pre-set an inflight future that never resolves
     fut: asyncio.Future[bytes | None] = hass.loop.create_future()
-    view._inflight["clip-aaa-111.flac"] = fut
+    view._inflight[("", "clip-aaa-111", "flac")] = fut
 
     with patch("custom_components.suno.proxy.asyncio.wait_for", side_effect=TimeoutError):
         # With client=None, pipeline returns None → 502
@@ -976,7 +976,7 @@ async def test_hq_inflight_timeout_returns_none(hass: HomeAssistant, mock_suno_c
         assert resp.status == 502
 
     fut.cancel()
-    view._inflight.pop("clip-aaa-111.flac", None)
+    view._inflight.pop(("", "clip-aaa-111", "flac"), None)
 
 
 async def test_hq_cancelled_error_reraised(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
@@ -996,7 +996,7 @@ async def test_hq_cancelled_error_reraised(hass: HomeAssistant, mock_suno_client
         await view._handle_hq("clip-x", None, "T", "A", "audio/flac", None, "", object())
 
     # Inflight should be cleaned up
-    assert "clip-x.flac" not in view._inflight
+    assert ("", "clip-x", "flac") not in view._inflight
 
 
 async def test_mp3_connection_reset_handled(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:

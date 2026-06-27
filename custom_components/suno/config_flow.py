@@ -15,7 +15,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -85,6 +85,7 @@ from .const import (
     VIDEO_ART_OFF,
 )
 from .exceptions import SunoAuthError, SunoConnectionError
+from .runtime import paths_overlap
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +135,41 @@ def _clean_library_input(user_input: dict[str, Any], errors: dict[str, str]) -> 
             errors[CONF_VIDEO_FFMPEG_EXTRA_ARGS] = "invalid_ffmpeg_args"
     cleaned_input[CONF_VIDEO_FFMPEG_EXTRA_ARGS] = extra_args
     return cleaned_input
+
+
+def _download_path_conflict(hass: HomeAssistant, path: str, current_entry_id: str | None) -> bool:
+    """Return True if another Suno entry's download path overlaps ``path``.
+
+    Overlap means equal, parent, or child directories, not just exact
+    equality, so two accounts cannot be pointed at directories where one
+    account's mirror reconciliation would delete the other's files.
+    """
+    if not path:
+        return False
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.entry_id == current_entry_id:
+            continue
+        other_path = entry.options.get(CONF_DOWNLOAD_PATH)
+        if other_path and paths_overlap(path, str(other_path)):
+            return True
+    return False
+
+
+async def _async_validate_download_path(hass: HomeAssistant, path: str) -> bool:
+    """Check that the download path is writable."""
+
+    def _check(target_path: str) -> bool:
+        try:
+            target = Path(target_path).resolve()
+            target.mkdir(parents=True, exist_ok=True)
+            test_file = target / ".suno_write_test"
+            test_file.touch()
+            test_file.unlink()
+            return True
+        except OSError, PermissionError:
+            return False
+
+    return await hass.async_add_executor_job(_check, path)
 
 
 def _library_schema(opts: dict[str, Any]) -> vol.Schema:
@@ -227,6 +263,7 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Suno."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step: cookie input."""
@@ -346,7 +383,13 @@ class SunoConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="unknown")
         errors: dict[str, str] = {}
         if user_input is not None:
-            cleaned_input = _clean_library_input(user_input, errors)
+            path = user_input.get(CONF_DOWNLOAD_PATH, "")
+            if path and not await _async_validate_download_path(self.hass, path):
+                errors[CONF_DOWNLOAD_PATH] = "invalid_download_path"
+            elif path and _download_path_conflict(self.hass, path, entry.entry_id):
+                errors[CONF_DOWNLOAD_PATH] = "download_path_conflict"
+            if not errors:
+                cleaned_input = _clean_library_input(user_input, errors)
             if not errors:
                 return self.async_update_reload_and_abort(entry, options={**entry.options, **cleaned_input})
         return self.async_show_form(
@@ -515,33 +558,9 @@ class SunoOptionsFlow(OptionsFlowWithReload):
         return self.async_show_form(step_id="my_songs", data_schema=schema)
 
     def _check_download_path_conflict(self, path: str) -> bool:
-        """Check if another config entry already uses this download path."""
-        if not path:
-            return False
-        resolved = Path(path).resolve()
-        current_entry_id = getattr(self, "config_entry", None)
-        current_id = current_entry_id.entry_id if current_entry_id else None
-
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if entry.entry_id == current_id:
-                continue
-            other_path = entry.options.get(CONF_DOWNLOAD_PATH)
-            if other_path and Path(other_path).resolve() == resolved:
-                return True
-        return False
+        """Check if another config entry's download path overlaps this one."""
+        return _download_path_conflict(self.hass, path, self.config_entry.entry_id)
 
     async def _validate_download_path(self, path: str) -> bool:
         """Check that the download path is writable."""
-
-        def _check(p: str) -> bool:
-            try:
-                target = Path(p).resolve()
-                target.mkdir(parents=True, exist_ok=True)
-                test_file = target / ".suno_write_test"
-                test_file.touch()
-                test_file.unlink()
-                return True
-            except OSError, PermissionError:
-                return False
-
-        return await self.hass.async_add_executor_job(_check, path)
+        return await _async_validate_download_path(self.hass, path)

@@ -52,7 +52,9 @@
       "invalid_cookie": "Could not authenticate.  Check your cookie is correct and not expired.",
       "cannot_connect": "Could not connect to Suno.  Check your network connection.",
       "unknown": "An unexpected error occurred.",
-      "invalid_ffmpeg_args": "Advanced ffmpeg arguments could not be parsed. Check quoting."
+      "invalid_ffmpeg_args": "Advanced ffmpeg arguments could not be parsed. Check quoting.",
+      "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission.",
+      "download_path_conflict": "This sync directory overlaps one already used by another Suno account. Choose a separate, non-overlapping directory."
     },
     "abort": {
       "already_configured": "This Suno account is already configured.",
@@ -144,7 +146,7 @@
     },
     "error": {
       "invalid_download_path": "Path is not writable.  Check the directory exists and Home Assistant has write permission.",
-      "download_path_conflict": "This sync directory is already in use by another Suno account.",
+      "download_path_conflict": "This sync directory overlaps one already used by another Suno account. Choose a separate, non-overlapping directory.",
       "invalid_ffmpeg_args": "Advanced ffmpeg arguments could not be parsed. Check quoting."
     }
   },
@@ -193,6 +195,25 @@
     },
     "update_failed": {
       "message": "Error fetching Suno data: {error}"
+    },
+    "wrong_account": {
+      "message": "This cookie now signs in as a different Suno account. Re-authenticate with the original account, or remove this entry and add a new one."
+    },
+    "download_path_conflict": {
+      "message": "Suno cannot start because this account's download directory overlaps the directory used by {other_title} ({other_path}). Give each account a separate, non-overlapping directory in the integration options."
+    },
+    "unknown_download_target": {
+      "message": "No Suno account with downloads enabled matches config entry {config_entry_id}."
+    }
+  },
+  "issues": {
+    "download_path_conflict": {
+      "title": "Suno download directory conflict",
+      "description": "The Suno account \"{title}\" uses download directory `{path}`, which overlaps the directory used by \"{other_title}\" (`{other_path}`). Overlapping directories make the accounts delete each other's files, so this account will not start. Give each account a separate, non-overlapping sync directory in the integration options to fix this."
+    },
+    "wrong_account": {
+      "title": "Suno account mismatch",
+      "description": "The cookie for \"{title}\" now signs in as a different Suno account. Re-authenticate with the original account, or remove this entry and add the new account separately."
     }
   }
 }

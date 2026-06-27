@@ -560,6 +560,91 @@ async def test_download_path_self_reference_no_conflict(hass: HomeAssistant, moc
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
+async def test_download_path_conflict_nested_child(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """A path nested under another account's directory is rejected."""
+    entry = make_entry(options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno/account-a"})
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    other = make_entry(unique_id="other-user", options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno"})
+    other.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = hass.config_entries.options._progress[result["flow_id"]]
+    with patch.object(type(flow), "_validate_download_path", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: True,
+                CONF_SHOW_LIKED: True,
+                CONF_SHOW_MY_SONGS: True,
+                CONF_DOWNLOAD_PATH: "/media/suno/account-a",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"][CONF_DOWNLOAD_PATH] == "download_path_conflict"
+
+
+async def test_download_path_conflict_parent(hass: HomeAssistant, mock_suno_client: AsyncMock) -> None:
+    """A path that is a parent of another account's directory is rejected."""
+    entry = make_entry(options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno/a"})
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    other = make_entry(
+        unique_id="other-user",
+        options={**make_entry().options, CONF_DOWNLOAD_PATH: "/media/suno/a/inner"},
+    )
+    other.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    flow = hass.config_entries.options._progress[result["flow_id"]]
+    with patch.object(type(flow), "_validate_download_path", return_value=True):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_SHOW_PLAYLISTS: True,
+                CONF_SHOW_LIKED: True,
+                CONF_SHOW_MY_SONGS: True,
+                CONF_DOWNLOAD_PATH: "/media/suno/a",
+                CONF_CREATE_PLAYLISTS: True,
+                CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"][CONF_DOWNLOAD_PATH] == "download_path_conflict"
+
+
+async def test_reconfigure_rejects_conflicting_path(hass: HomeAssistant, mock_suno_client: AsyncMock, tmp_path) -> None:
+    """The reconfigure flow also blocks an overlapping download path."""
+    entry = make_entry()
+    with patch_suno_setup(mock_suno_client):
+        await setup_entry(hass, entry)
+
+    shared = str(tmp_path / "shared")
+    other = make_entry(unique_id="other-user", options={**make_entry().options, CONF_DOWNLOAD_PATH: shared})
+    other.add_to_hass(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_SHOW_LIKED: True,
+            CONF_SHOW_MY_SONGS: True,
+            CONF_SHOW_PLAYLISTS: True,
+            CONF_DOWNLOAD_PATH: shared,
+            CONF_CACHE_MAX_SIZE: DEFAULT_CACHE_MAX_SIZE,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"][CONF_DOWNLOAD_PATH] == "download_path_conflict"
+
+
 async def test_dynamic_title_from_auth(hass: HomeAssistant, mock_setup_entry: AsyncMock) -> None:
     """Config entry title uses auth.display_name from the flow."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})

@@ -17,33 +17,52 @@ from .audio_metadata import build_id3_header, skip_existing_id3
 from .audio_stream import fetch_album_art
 from .const import CDN_BASE_URL
 from .models import SunoClip, TrackMetadata, clip_meta_hash, selected_image_url
-from .runtime import HomeAssistantRuntime, iter_entry_runtimes
+from .runtime import HomeAssistantRuntime, iter_entry_runtimes, runtime_from_entry
 
 _LOGGER = logging.getLogger(__name__)
+
+_InflightKey = tuple[str, str, str]
+_ClipGeneration = tuple[tuple[str, int, int], ...]
 
 
 class SunoMediaProxyView(HomeAssistantView):
     """Proxy Suno CDN audio with injected metadata."""
 
     url = "/api/suno/media/{clip_id}.{ext}"
+    extra_urls = ["/api/suno/media/{entry_id}/{clip_id}.{ext}"]
     name = "api:suno:media"
     requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._inflight: dict[str, asyncio.Future[bytes | None]] = {}
+        self._inflight: dict[_InflightKey, asyncio.Future[bytes | None]] = {}
         self._clips_by_id: dict[str, tuple[SunoClip, HomeAssistantRuntime]] = {}
-        self._clips_generation: int = -1
+        self._clips_generation: _ClipGeneration = ()
+
+    def _get_runtime_for_entry_id(self, entry_id: str) -> HomeAssistantRuntime | None:
+        """Find a specific loaded Suno runtime."""
+        entry = self.hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            return None
+        return runtime_from_entry(entry)
+
+    @staticmethod
+    def _runtime_entry_id(runtime: HomeAssistantRuntime | None) -> str:
+        """Return the runtime's owning config entry id for request keying."""
+        return runtime.entry.entry_id if runtime is not None else ""
+
+    @staticmethod
+    def _generation_for(
+        runtimes: list[tuple[Any, HomeAssistantRuntime]],
+    ) -> _ClipGeneration:
+        """Build a non-colliding generation key for loaded runtimes."""
+        return tuple((entry.entry_id, id(runtime), runtime.data_version) for entry, runtime in runtimes)
 
     def _find_clip(self, clip_id: str) -> tuple[SunoClip | None, HomeAssistantRuntime | None]:
         """Look up a clip and its owning runtime across all active runtimes."""
-        generation = 0
         runtimes = list(iter_entry_runtimes(self.hass))
-        first_runtime: HomeAssistantRuntime | None = None
-        for _entry, runtime in runtimes:
-            generation += runtime.data_version
-            if first_runtime is None:
-                first_runtime = runtime
+        generation = self._generation_for(runtimes)
+        first_runtime = runtimes[0][1] if runtimes else None
         if generation != self._clips_generation:
             lookup: dict[str, tuple[SunoClip, HomeAssistantRuntime]] = {}
             for _entry, runtime in runtimes:
@@ -56,9 +75,26 @@ class SunoMediaProxyView(HomeAssistantView):
             return result
         return None, first_runtime
 
-    async def get(self, request: web.Request, clip_id: str, ext: str) -> web.StreamResponse:
+    async def get(
+        self,
+        request: web.Request,
+        clip_id: str,
+        ext: str,
+        entry_id: str | None = None,
+    ) -> web.StreamResponse:
         """Stream audio with injected metadata tags."""
-        clip, runtime = self._find_clip(clip_id)
+        if entry_id is not None:
+            runtime = self._get_runtime_for_entry_id(entry_id)
+            if runtime is None:
+                return web.Response(status=404, text="Suno account not loaded")
+            clip = runtime.find_clip(clip_id)
+            if clip is None:
+                return web.Response(status=404, text="Suno clip not found for account")
+            resolved_entry_id = entry_id
+        else:
+            clip, runtime = self._find_clip(clip_id)
+            resolved_entry_id = self._runtime_entry_id(runtime)
+
         title = clip.title if clip else "Suno"
         artist = clip.display_name if clip and clip.display_name else "Suno"
         meta_hash = clip_meta_hash(clip) if clip else ""
@@ -82,7 +118,16 @@ class SunoMediaProxyView(HomeAssistantView):
                 return web.FileResponse(cached_path, headers={"Content-Type": content_type})
 
         if is_hq:
-            return await self._handle_hq(clip_id, clip, title, artist, content_type, runtime, meta_hash)
+            return await self._handle_hq(
+                clip_id,
+                clip,
+                title,
+                artist,
+                content_type,
+                runtime,
+                meta_hash,
+                entry_id=resolved_entry_id,
+            )
 
         audio_url = clip.audio_url if clip else f"{CDN_BASE_URL}/{clip_id}.mp3"
         session = async_get_clientsession(self.hass)
@@ -154,11 +199,12 @@ class SunoMediaProxyView(HomeAssistantView):
         runtime: HomeAssistantRuntime | None,
         meta_hash: str,
         client: Any = None,
+        entry_id: str | None = None,
     ) -> web.Response:
         """Transcode WAV to FLAC with metadata, using request coalescing."""
         if runtime is None and isinstance(client, HomeAssistantRuntime):
             runtime = client
-        key = f"{clip_id}.flac"
+        key = (entry_id if entry_id is not None else self._runtime_entry_id(runtime), clip_id, "flac")
         if key in self._inflight:
             try:
                 result = await asyncio.wait_for(asyncio.shield(self._inflight[key]), timeout=150)

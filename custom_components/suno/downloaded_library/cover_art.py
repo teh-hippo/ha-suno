@@ -69,6 +69,38 @@ class CoverHashFile:
             self._cache = await hass.async_add_executor_job(self._read_sync)
         return self._cache.get(clip_id)
 
+    async def known_clip_ids(self, hass: HomeAssistant) -> set[str]:
+        """Return the set of clip_ids stored in this ``.cover_hash`` file.
+
+        Used by the sidecar-safety pass to decide whether the file is still
+        being used by another clip (or another account that shares this
+        folder) before deleting or rewriting it.
+        """
+        if self._cache is None:
+            self._cache = await hass.async_add_executor_job(self._read_sync)
+        return {cid for cid in self._cache if cid and cid != self._LEGACY_KEY}
+
+    async def remove(self, hass: HomeAssistant, clip_id: str) -> bool:
+        """Drop a clip_id from ``.cover_hash``; delete the file when emptied.
+
+        Returns True when the file was unlinked because removing this clip
+        emptied the dict, False otherwise.
+        """
+        if self._cache is None:
+            self._cache = await hass.async_add_executor_job(self._read_sync)
+        self._cache.pop(clip_id, None)
+        self._cache.pop(self._LEGACY_KEY, None)
+        if not self._cache:
+
+            def _unlink() -> None:
+                self._path.unlink(missing_ok=True)
+
+            await hass.async_add_executor_job(_unlink)
+            return True
+        serialised = self._serialise(self._cache).encode()
+        await _write_file(hass, self._path, serialised)
+        return False
+
     async def set(self, hass: HomeAssistant, clip_id: str, hash_value: str) -> None:
         """Store the hash for a clip; migrates legacy format on first write."""
         if self._cache is None:

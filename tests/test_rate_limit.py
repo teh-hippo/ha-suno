@@ -125,3 +125,29 @@ async def test_acquire_cancelled_releases_semaphore() -> None:
     limiter._throttle_until = 0  # Clear throttle for clean test
     await asyncio.wait_for(limiter.acquire(), timeout=0.1)
     limiter.release()
+
+
+async def test_throttled_limiter_does_not_hold_shared_gate() -> None:
+    """A throttled per-account limiter must not occupy the shared concurrency gate.
+
+    Per-account limiters share one global concurrency gate; a 429 backoff on
+    one account must be waited out WITHOUT holding a shared slot, so the other
+    accounts are not stalled behind it.
+    """
+    gate = asyncio.Semaphore(1)
+    account_a = SunoRateLimiter(concurrency_gate=gate)
+    account_b = SunoRateLimiter(concurrency_gate=gate)
+
+    await account_a.report_rate_limit(retry_after=10.0)
+
+    # Account A's acquire waits out its throttle without taking the shared slot.
+    a_task = asyncio.create_task(account_a.acquire())
+    await asyncio.sleep(0.05)
+    assert not a_task.done()
+
+    # Account B (un-throttled) still gets the single shared slot promptly.
+    await asyncio.wait_for(account_b.acquire(), timeout=0.1)
+    account_b.release()
+
+    a_task.cancel()
+    await asyncio.gather(a_task, return_exceptions=True)

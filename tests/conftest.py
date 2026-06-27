@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -54,6 +54,22 @@ MOCK_USER_ID = "test-user-id-123"
 @pytest.fixture(autouse=True)
 def _enable_custom_integrations(enable_custom_integrations):  # noqa: PT004
     """Enable custom integrations for all tests."""
+
+
+@pytest.fixture(autouse=True)
+async def _unload_loaded_suno_entries(hass: HomeAssistant) -> Any:
+    """Unload any Suno config entries a test leaves loaded.
+
+    Options-flow tests reload the entry via ``OptionsFlowWithReload``, creating
+    a fresh coordinator whose periodic-refresh timer would otherwise linger past
+    teardown and trip Home Assistant's lingering-timer cleanup check. Depending
+    on ``hass`` keeps this finaliser ordered before the ``hass`` teardown.
+    """
+    yield
+    for entry in list(hass.config_entries.async_entries(DOMAIN)):
+        if entry.state is ConfigEntryState.LOADED:
+            await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 def make_entry(

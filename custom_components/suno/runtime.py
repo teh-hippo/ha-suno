@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import shutil
-from collections.abc import Iterable, Mapping
-from pathlib import Path
+from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path, PurePath
 from typing import Any
 
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryError,
+    ConfigEntryNotReady,
+    ServiceValidationError,
+)
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.start import async_at_started
 
@@ -61,6 +69,15 @@ from .rate_limit import SunoRateLimiter
 _LOGGER = logging.getLogger(__name__)
 
 _SERVICE_DOWNLOAD = "download_library"
+_SERVICE_ATTR_ENTRY_ID = "config_entry_id"
+_SERVICE_ATTR_FORCE = "force"
+
+# Shared global state stored under ``hass.data[DOMAIN]``.
+_CONCURRENCY_GATE = "concurrency_gate"
+_GLOBAL_MAX_CONCURRENT = 3
+
+_DOWNLOAD_PATH_CONFLICT_ISSUE = "download_path_conflict"
+_WRONG_ACCOUNT_ISSUE = "wrong_account"
 
 _DOWNLOAD_SECTIONS = (
     (CONF_SHOW_LIKED, DEFAULT_SHOW_LIKED, CONF_DOWNLOAD_MODE_LIKED, DEFAULT_DOWNLOAD_MODE),
@@ -85,6 +102,147 @@ def downloaded_library_enabled(options: Mapping[str, Any]) -> bool:
 
 def _is_empty_suno_library(data: SunoData) -> bool:
     return not data.clips and not data.liked_clips and not data.playlists and not data.playlist_clips
+
+
+def _path_identity(path: Path) -> tuple[int, int] | None:
+    """Return a ``(st_dev, st_ino)`` identity for an existing path, else None."""
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return (stat_result.st_dev, stat_result.st_ino)
+
+
+def paths_overlap(first: str, second: str) -> bool:
+    """Return True when two download paths are equal or nested either way.
+
+    Overlapping download paths let one account's mirror reconciliation
+    delete another account's files, so both the config flow and the runtime
+    setup invariant reject them. Paths are resolved (following symlinks and
+    normalising ``..`` and trailing slashes); when both exist we compare by
+    device/inode so symlinked or case-insensitive duplicates are caught,
+    otherwise we fall back to a case-normalised comparison.
+    """
+    if not first or not second:
+        return False
+    first_resolved = Path(first).expanduser().resolve()
+    second_resolved = Path(second).expanduser().resolve()
+    first_id = _path_identity(first_resolved)
+    second_id = _path_identity(second_resolved)
+    if first_id is not None and first_id == second_id:
+        return True
+    first_norm = PurePath(os.path.normcase(str(first_resolved)))
+    second_norm = PurePath(os.path.normcase(str(second_resolved)))
+    return first_norm == second_norm or first_norm.is_relative_to(second_norm) or second_norm.is_relative_to(first_norm)
+
+
+def _conflicting_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) -> ConfigEntry[Any] | None:
+    """Return an overlapping Suno entry this one must defer to.
+
+    An entry refuses to load if another overlapping (equal/parent/child) entry
+    is already loaded, or — when neither is loaded yet, e.g. a concurrent
+    Home Assistant restart — if the other sorts earlier by ``entry_id``. This
+    keeps exactly one of an overlapping set loadable (instead of taking them
+    all down) and never lets two engines reconcile the same tree.
+    """
+    my_path = entry.options.get(CONF_DOWNLOAD_PATH)
+    if not my_path:
+        return None
+    for other in hass.config_entries.async_entries(DOMAIN):
+        if other.entry_id == entry.entry_id:
+            continue
+        other_path = other.options.get(CONF_DOWNLOAD_PATH)
+        if not (other_path and paths_overlap(str(my_path), str(other_path))):
+            continue
+        if other.state is ConfigEntryState.LOADED or other.entry_id < entry.entry_id:
+            return other
+    return None
+
+
+def _download_path_conflict_issue_id(entry_id: str) -> str:
+    return f"{_DOWNLOAD_PATH_CONFLICT_ISSUE}_{entry_id}"
+
+
+def _wrong_account_issue_id(entry_id: str) -> str:
+    return f"{_WRONG_ACCOUNT_ISSUE}_{entry_id}"
+
+
+def _assert_no_download_path_conflict(hass: HomeAssistant, entry: ConfigEntry[Any]) -> None:
+    """Refuse to start when this entry's download path overlaps another account.
+
+    Two accounts sharing or nesting a download directory mutually delete
+    each other's files during mirror reconciliation. The config/options
+    flows block this up front, but this invariant also guards entries that
+    pre-date the flow guard or were imported. On conflict we surface a
+    Repairs issue and raise ``ConfigEntryError``; otherwise we clear any
+    stale issue.
+    """
+    issue_id = _download_path_conflict_issue_id(entry.entry_id)
+    other = _conflicting_entry(hass, entry)
+    if other is None:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    # A refused entry never reaches the options handshake, so reclaim any
+    # options we remembered for a reload to avoid leaking them.
+    _pop_previous_options(hass, entry.entry_id)
+    my_path = str(entry.options.get(CONF_DOWNLOAD_PATH, ""))
+    other_path = str(other.options.get(CONF_DOWNLOAD_PATH, ""))
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="download_path_conflict",
+        translation_placeholders={
+            "title": entry.title or entry.entry_id,
+            "path": my_path,
+            "other_title": other.title or other.entry_id,
+            "other_path": other_path,
+        },
+    )
+    raise ConfigEntryError(
+        translation_domain=DOMAIN,
+        translation_key="download_path_conflict",
+        translation_placeholders={"other_title": other.title or other.entry_id, "other_path": other_path},
+    )
+
+
+def _enforce_account_identity(hass: HomeAssistant, entry: ConfigEntry[Any], user_id: str | None) -> None:
+    """Backfill a missing unique_id and flag a mismatched Suno account.
+
+    The config entry's ``unique_id`` is the Suno ``user_id``. When it is
+    missing we backfill it from the authenticated id. When the cookie now
+    authenticates as a *different* account we must not silently serve that
+    account's library under this entry's identity, so we warn and raise a
+    Repairs issue pointing the user at reauth. The authoritative hard block
+    lives in the reauth flow (``config_flow``), which is the real
+    cookie-change entry point; failing setup outright here is avoided so a
+    transient identity hiccup cannot strand an otherwise healthy entry.
+    """
+    issue_id = _wrong_account_issue_id(entry.entry_id)
+    if not user_id or user_id == entry.unique_id:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    if entry.unique_id is None:
+        hass.config_entries.async_update_entry(entry, unique_id=user_id)
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+        return
+    _LOGGER.warning(
+        "Suno cookie for entry %s authenticates as account %s but the entry is %s; re-authentication required",
+        entry.entry_id,
+        user_id,
+        entry.unique_id,
+    )
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="wrong_account",
+        translation_placeholders={"title": entry.title or entry.entry_id},
+    )
 
 
 class HomeAssistantRuntime:
@@ -114,7 +272,8 @@ class HomeAssistantRuntime:
     @classmethod
     async def async_setup(cls, hass: HomeAssistant, entry: ConfigEntry[Any]) -> HomeAssistantRuntime:
         """Create and initialise the Home Assistant Runtime for one entry."""
-        rate_limiter = _shared_rate_limiter(hass)
+        _assert_no_download_path_conflict(hass, entry)
+        rate_limiter = _entry_rate_limiter(hass)
         session = async_get_clientsession(hass)
         auth = ClerkAuth(session, entry.data[CONF_COOKIE])
         client = SunoClient(auth, rate_limiter=rate_limiter)
@@ -123,18 +282,23 @@ class HomeAssistantRuntime:
         stored_data = await _load_stored_library(coordinator)
 
         auth_ok = False
+        user_id: str | None = None
         try:
-            await auth.authenticate()
+            user_id = await auth.authenticate()
             auth_ok = True
         except SunoConnectionError:
             message = "Cannot reach Suno, using stored library" if stored_data else "Cannot reach Suno, starting empty"
             _LOGGER.warning(message)
         except SunoAuthError as err:
+            _pop_previous_options(hass, entry.entry_id)
             raise ConfigEntryAuthFailed(str(err)) from err
         except Exception as err:
             if not stored_data:
                 raise ConfigEntryNotReady(f"Could not connect: {err}") from err
             _LOGGER.warning("Cannot reach Suno, using stored library")
+
+        if auth_ok:
+            _enforce_account_identity(hass, entry, user_id)
 
         try:
             await coordinator.async_config_entry_first_refresh()
@@ -147,7 +311,7 @@ class HomeAssistantRuntime:
             _LOGGER.warning(message)
             coordinator.async_set_updated_data(stored_data or SunoData())
 
-        cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE))
+        cache = SunoCache(hass, entry.options.get(CONF_CACHE_MAX_SIZE, DEFAULT_CACHE_MAX_SIZE), entry.entry_id)
         await cache.async_init()
 
         runtime = cls(hass, entry, coordinator, client, cache, rate_limiter)
@@ -157,7 +321,7 @@ class HomeAssistantRuntime:
 
     @property
     def rate_limiter(self) -> SunoRateLimiter:
-        """Return the shared Suno rate limiter."""
+        """Return this account's rate limiter (per-entry throttle state)."""
         return self._rate_limiter
 
     @property
@@ -215,6 +379,10 @@ class HomeAssistantRuntime:
         if self._downloaded_library is None:
             return
         await self._run_reconcile(force=True)
+
+    async def async_run_download(self, *, force: bool = False) -> None:
+        """Run a reconciliation for this account (download_library service)."""
+        await self._run_reconcile(force=force)
 
     async def _run_reconcile(
         self,
@@ -456,35 +624,26 @@ class HomeAssistantRuntime:
             engine = self._downloaded_library
             if engine is None or engine.running or self._updating_sensors:
                 return
-            hass.async_create_task(
+            # Background task so it is cancelled if the entry unloads mid-run,
+            # preventing two engines writing the same path across a reload.
+            entry.async_create_background_task(
+                hass,
                 self._run_reconcile(coordinator_data=coordinator.data),
                 f"suno_download_refresh_{entry.entry_id}",
             )
 
         entry.async_on_unload(coordinator.async_add_listener(_on_coordinator_update))
 
-        async def _handle_download_service(call: ServiceCall) -> None:
-            await self._run_reconcile(force=call.data.get("force", False))
+        _async_register_download_service(hass)
+        entry.async_on_unload(_download_service_remover(hass, entry))
 
-        if not hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
-            hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
-
-            def _maybe_remove_service() -> None:
-                remaining = [
-                    existing_entry
-                    for existing_entry in hass.config_entries.async_entries(DOMAIN)
-                    if existing_entry.entry_id != entry.entry_id
-                ]
-                if not remaining:
-                    hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
-
-            entry.async_on_unload(_maybe_remove_service)
-
-        async def _on_ha_started(_event: Any) -> None:
+        async def _on_ha_started(_hass: HomeAssistant) -> None:
             _LOGGER.info("Home Assistant started - beginning initial sync")
             await self._run_reconcile(initial=True)
 
-        async_at_started(hass, _on_ha_started)
+        # Cancel the start listener on unload so a reload during HA startup
+        # cannot fire an initial sync against a torn-down runtime.
+        entry.async_on_unload(async_at_started(hass, _on_ha_started))
 
     async def _async_cleanup_disabled_downloads(
         self,
@@ -533,32 +692,91 @@ def runtime_from_entry(entry: ConfigEntry[Any]) -> HomeAssistantRuntime | None:
 
 
 def iter_entry_runtimes(hass: HomeAssistant) -> Iterable[tuple[ConfigEntry[Any], HomeAssistantRuntime]]:
-    """Iterate loaded Suno entries and their runtimes."""
+    """Iterate fully loaded Suno entries and their runtimes.
+
+    Entries that are setting up or tearing down are skipped so the proxy,
+    media source, and download service never serve a half-built or
+    already-unloaded sibling runtime.
+    """
     for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is not ConfigEntryState.LOADED:
+            continue
         if (runtime := runtime_from_entry(entry)) is not None:
             yield entry, runtime
 
 
+def _async_register_download_service(hass: HomeAssistant) -> None:
+    """Register the ``download_library`` service once for the whole domain.
+
+    The handler resolves target runtimes at call time (rather than closing
+    over the first entry's runtime), so it never points at a torn-down
+    runtime and can drive every account, or one targeted account.
+    """
+    if hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
+        return
+
+    async def _handle_download_service(call: ServiceCall) -> None:
+        force = bool(call.data.get(_SERVICE_ATTR_FORCE, False))
+        target_id = call.data.get(_SERVICE_ATTR_ENTRY_ID)
+        targets = [
+            (target_entry, runtime)
+            for target_entry, runtime in iter_entry_runtimes(hass)
+            if runtime.downloads_enabled and (target_id is None or target_entry.entry_id == target_id)
+        ]
+        if target_id is not None and not targets:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_download_target",
+                translation_placeholders={"config_entry_id": str(target_id)},
+            )
+        for _target_entry, runtime in targets:
+            await runtime.async_run_download(force=force)
+
+    hass.services.async_register(DOMAIN, _SERVICE_DOWNLOAD, _handle_download_service)
+
+
+def _download_service_remover(hass: HomeAssistant, entry: ConfigEntry[Any]) -> Callable[[], None]:
+    """Return an unload callback that removes the service when this is the last entry."""
+
+    def _maybe_remove_service() -> None:
+        others = [
+            existing for existing in hass.config_entries.async_entries(DOMAIN) if existing.entry_id != entry.entry_id
+        ]
+        if not others and hass.services.has_service(DOMAIN, _SERVICE_DOWNLOAD):
+            hass.services.async_remove(DOMAIN, _SERVICE_DOWNLOAD)
+
+    return _maybe_remove_service
+
+
 async def async_remove_runtime_entry(hass: HomeAssistant, entry: ConfigEntry[Any]) -> None:
     """Clean up per-entry and shared runtime state on removal."""
-    remaining = [
-        existing for existing in hass.config_entries.async_entries(DOMAIN) if existing.entry_id != entry.entry_id
-    ]
+    entry_id = entry.entry_id
+
+    # Per-entry audio cache directory (suno/<entry_id>): removed for this
+    # entry regardless of whether other accounts remain.
+    entry_cache_dir = Path(hass.config.cache_path(f"suno/{entry_id}"))
+    if entry_cache_dir.is_dir():
+        await hass.async_add_executor_job(shutil.rmtree, entry_cache_dir, True)
+        _LOGGER.debug("Removed entry cache directory: %s", entry_cache_dir)
 
     storage_dir = Path(hass.config.path(".storage"))
     if storage_dir.is_dir():
-        for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob(f"suno_*{entry.entry_id}*"))):
+        for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob(f"suno_*{entry_id}*"))):
             try:
                 await hass.async_add_executor_job(store_file.unlink)
                 _LOGGER.debug("Removed store file: %s", store_file.name)
             except OSError:
                 _LOGGER.warning("Could not remove store file: %s", store_file)
 
-    if not remaining:
-        cache_dir = Path(hass.config.cache_path("suno"))
-        if cache_dir.is_dir():
-            await hass.async_add_executor_job(shutil.rmtree, cache_dir, True)
-            _LOGGER.debug("Removed cache directory: %s", cache_dir)
+    # HA deletes the entry from the registry before calling this hook, so an
+    # empty domain list means we were the last entry: tear down shared state
+    # idempotently. Concurrent removals are safe because the final hook to
+    # run always observes the empty registry.
+    if not hass.config_entries.async_entries(DOMAIN):
+        legacy_cache_dir = Path(hass.config.cache_path("suno"))
+        if legacy_cache_dir.is_dir():
+            await hass.async_add_executor_job(shutil.rmtree, legacy_cache_dir, True)
+            _LOGGER.debug("Removed legacy cache directory: %s", legacy_cache_dir)
 
         if storage_dir.is_dir():
             for store_file in await hass.async_add_executor_job(lambda: list(storage_dir.glob("suno_cache*"))):
@@ -578,13 +796,25 @@ async def _load_stored_library(coordinator: SunoCoordinator) -> SunoData | None:
         return None
 
 
-def _shared_rate_limiter(hass: HomeAssistant) -> SunoRateLimiter:
+def _shared_concurrency_gate(hass: HomeAssistant) -> asyncio.Semaphore:
+    """Return the domain-wide concurrency gate shared by every account.
+
+    Per-account limiters reset their throttle state independently, but they
+    all acquire this single semaphore so ``N`` accounts cannot saturate the
+    Suno API at once (for example when every account's initial sync fires on
+    a Home Assistant restart).
+    """
     domain_data = hass.data.setdefault(DOMAIN, {})
-    rate_limiter = domain_data.get("rate_limiter")
-    if not isinstance(rate_limiter, SunoRateLimiter):
-        rate_limiter = SunoRateLimiter()
-        domain_data["rate_limiter"] = rate_limiter
-    return rate_limiter
+    gate = domain_data.get(_CONCURRENCY_GATE)
+    if not isinstance(gate, asyncio.Semaphore):
+        gate = asyncio.Semaphore(_GLOBAL_MAX_CONCURRENT)
+        domain_data[_CONCURRENCY_GATE] = gate
+    return gate
+
+
+def _entry_rate_limiter(hass: HomeAssistant) -> SunoRateLimiter:
+    """Build a per-account rate limiter bound to the shared concurrency gate."""
+    return SunoRateLimiter(concurrency_gate=_shared_concurrency_gate(hass))
 
 
 def _remember_previous_options(hass: HomeAssistant, entry_id: str, options: Mapping[str, Any]) -> None:
@@ -609,5 +839,6 @@ __all__ = [
     "async_remove_runtime_entry",
     "downloaded_library_enabled",
     "iter_entry_runtimes",
+    "paths_overlap",
     "runtime_from_entry",
 ]
