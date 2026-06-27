@@ -1,6 +1,47 @@
 # CHANGELOG
 
 
+## v6.4.0 (2026-06-27)
+
+### Bug Fixes
+
+- Route the suno.com login URL through a placeholder
+  ([`0da7942`](https://github.com/teh-hippo/ha-suno/commit/0da7942969e47bfe8da01a4885f0fc868b80269a))
+
+### Chores
+
+- **deps**: Lock file maintenance
+  ([`5c36906`](https://github.com/teh-hippo/ha-suno/commit/5c36906e27b37ab9e0227a056762aa121a6b3c7f))
+
+- **deps**: Lock file maintenance
+  ([`11598b1`](https://github.com/teh-hippo/ha-suno/commit/11598b1e8f300778fe341cb4b33b05ba206af335))
+
+- **deps**: Update actions/checkout digest to df4cb1c
+  ([`3e93a40`](https://github.com/teh-hippo/ha-suno/commit/3e93a40fd37e6232478518b54e6734b0bd069804))
+
+- **deps**: Update astral-sh/setup-uv action to v8.2.0
+  ([`a26d6a4`](https://github.com/teh-hippo/ha-suno/commit/a26d6a4606206c3b054d7a1cb3c5465fabefb10f))
+
+- **deps**: Update mcr.microsoft.com/devcontainers/python:3.14 docker digest to 66af9ee
+  ([`02bc04c`](https://github.com/teh-hippo/ha-suno/commit/02bc04c74375da454bd87fc09322482aae6fb484))
+
+- **deps**: Update softprops/action-gh-release digest to 718ea10
+  ([`e18838b`](https://github.com/teh-hippo/ha-suno/commit/e18838b48141844644fff0b713cb7fdeb6df56fd))
+
+- **deps**: Update teh-hippo/common-repo-configs digest to b3d0a78
+  ([`5335437`](https://github.com/teh-hippo/ha-suno/commit/53354371d3de3ecc36bfdc02bf1a943773140156))
+
+### Documentation
+
+- Simplify login instructions and add iPhone guide
+  ([`b03387e`](https://github.com/teh-hippo/ha-suno/commit/b03387ecc9ae7b6c7f0ff724cfa75e9f3cb590c3))
+
+### Features
+
+- Harden multi-account support
+  ([`1e44e95`](https://github.com/teh-hippo/ha-suno/commit/1e44e958400d45c6f2ec5bca2c5af2eb33a23f34))
+
+
 ## v6.3.7 (2026-05-31)
 
 ### Refactoring
